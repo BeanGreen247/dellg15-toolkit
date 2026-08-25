@@ -1,9 +1,10 @@
 # Dell G15 Toolkit (Nobara Linux)
 
 A checkbox-driven GUI + tray monitor for Dell gaming laptops on Nobara Linux
-(dnf), built the same way as `~/windows11ultimateperformancetool/UltimateToolkit`:
-data-driven JSON config, live status detection per item, reversible tweaks,
-one-directional app installs, and one-click presets.
+(dnf), built the same way as [WinUtil](https://winutil.christitus.com/)-style
+Windows tweak tools: data-driven JSON config, live status detection per
+item, reversible tweaks, one-directional app installs, and one-click
+presets.
 
 **Inspired by [Div-Acer-Manager-Max](https://github.com/PXDiv/Div-Acer-Manager-Max)**
 (DAMX) — the Acer NitroSense/PredatorSense replacement for Linux this was
@@ -13,7 +14,8 @@ side of the same problem. One useful difference from DAMX's situation: Acer's
 EC interface isn't in mainline Linux at all, so DAMX depends on an
 out-of-tree driver (Linuwu Sense) just to get a `platform_profile`-style
 interface to exist; Dell's `dell-wmi` driver is already in-tree and shows up
-automatically (see the "Dell WMI hotkeys" input device in the hwinfo dump),
+automatically (confirmed via `cat /proc/bus/input/devices` on the actual
+laptop, showing a "Dell WMI hotkeys" entry with no extra driver installed),
 so this tool doesn't need an equivalent custom kernel module — just the
 right keycode mapping for the dedicated key, the same way DAMX captures its
 Nitro/PredatorSense button's scancode from an actual press rather than
@@ -24,11 +26,13 @@ Dell G15 5515 Ryzen Edition (Ryzen 7 5800H + RTX 3050 Ti Mobile) — that's the
 hardware every check/apply command in `config/*.json` was written against.
 Like DAMX's own compatibility note, other Dell/Alienware laptops with
 similar AMD+NVIDIA hybrid graphics and a `dell-wmi`-exposed hotkey may work
-too, but nothing here has been verified on them.
+too, but nothing here has been verified on them. The dedicated key's
+capture (evdev keycode `KEY_PERFORMANCE`) was confirmed via live
+`evtest`/`dmesg`/`acpi_listen` capture on the actual laptop, not assumed.
 
-This is the GUI counterpart to the CLI in `../dellg15-linux-setup/` — same
-underlying logic, exposed as checkboxes with live "Applied"/"Installed"
-status instead of an interactive terminal menu.
+This GUI superseded an earlier bash CLI prototype with the same tweak
+catalog but an interactive terminal menu instead of checkboxes/live status —
+same underlying idea, this repo is the maintained one.
 
 **Package-name check**: every `dnf` package name referenced in `config/*.json`
 was cross-checked against Fedora's dist-git (`src.fedoraproject.org`) to
@@ -39,7 +43,10 @@ fixed in `dellg15_toolkit.py`'s own error message. `akmod-nvidia` lives in
 RPM Fusion's separate dist-git (unreachable from this check, but its name
 is standard/well-documented) rather than Fedora's own.
 
-**Status: local prototype only.** Not committed to git, not published anywhere.
+**Status: not yet run against real hardware.** Everything here has been
+syntax-checked and GUI-smoke-tested on a different dev machine, but never
+against actual Nobara or this laptop's real `dnf`/`grubby`/sysfs — see
+"Known limitations" at the bottom.
 
 ## Running it
 
