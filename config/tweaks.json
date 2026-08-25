@@ -1,0 +1,214 @@
+{
+  "CstateFix": {
+    "Content": "Fix Random Freezes (C-State workaround)",
+    "Description": "Adds processor.max_cstate=1 to the kernel boot params. The 5800H's deep C-states (C6) are unstable on this board and cause random full-system freezes. Requires reboot to take effect.",
+    "category": "Stability",
+    "risk": "safe",
+    "check": "grep -q 'processor.max_cstate=1' /proc/cmdline",
+    "apply": ["grubby --update-kernel=ALL --args=\"processor.max_cstate=1\""],
+    "undo": ["grubby --update-kernel=ALL --remove-args=\"processor.max_cstate=1\""]
+  },
+  "IdleNomwait": {
+    "Content": "Alt Freeze Fix (idle=nomwait)",
+    "Description": "Alternative to the C-state fix above — skips the mwait idle driver entirely. Try this INSTEAD of the C-state fix if that one doesn't resolve freezes, not in addition to it. Requires reboot.",
+    "category": "Stability",
+    "risk": "advanced",
+    "check": "grep -q 'idle=nomwait' /proc/cmdline",
+    "apply": ["grubby --update-kernel=ALL --args=\"idle=nomwait\""],
+    "undo": ["grubby --update-kernel=ALL --remove-args=\"idle=nomwait\""]
+  },
+  "ClocksourceTsc": {
+    "Content": "Use TSC Clocksource (skip HPET)",
+    "Description": "Forces the CPU's own timestamp counter instead of the motherboard's HPET as the system timer. Helps timing jitter on some boards, does nothing on others. Requires reboot.",
+    "category": "Stability",
+    "risk": "advanced",
+    "check": "grep -q 'clocksource=tsc' /proc/cmdline",
+    "apply": ["grubby --update-kernel=ALL --args=\"clocksource=tsc tsc=reliable\""],
+    "undo": ["grubby --update-kernel=ALL --remove-args=\"clocksource=tsc tsc=reliable\""]
+  },
+  "UsbAutosuspend": {
+    "Content": "Disable USB Autosuspend",
+    "Description": "Stops Linux from power-suspending USB ports, fixing wireless mouse/controller dongles or headsets that lag or briefly disconnect.",
+    "category": "Performance",
+    "risk": "safe",
+    "check": "test -f /etc/udev/rules.d/50-usb-no-autosuspend.rules",
+    "apply": [
+      "printf 'ACTION==\"add\", SUBSYSTEM==\"usb\", TEST==\"power/control\", ATTR{power/control}=\"on\"\\n' > /etc/udev/rules.d/50-usb-no-autosuspend.rules",
+      "udevadm control --reload-rules"
+    ],
+    "undo": [
+      "rm -f /etc/udev/rules.d/50-usb-no-autosuspend.rules",
+      "udevadm control --reload-rules"
+    ]
+  },
+  "MouseAccelFlat": {
+    "Content": "Flat Mouse Pointer Acceleration",
+    "Description": "1:1 mouse movement, no acceleration curve — applies under X11. Under Wayland/KDE Plasma (Nobara's default) also set System Settings > Mouse > Acceleration Profile to Flat.",
+    "category": "Performance",
+    "risk": "safe",
+    "check": "test -f /etc/X11/xorg.conf.d/50-mouse-accel.conf",
+    "apply": [
+      "mkdir -p /etc/X11/xorg.conf.d",
+      "printf 'Section \"InputClass\"\\n    Identifier \"Flat pointer accel\"\\n    MatchIsPointer \"on\"\\n    Driver \"libinput\"\\n    Option \"AccelProfile\" \"flat\"\\n    Option \"AccelSpeed\" \"0\"\\nEndSection\\n' > /etc/X11/xorg.conf.d/50-mouse-accel.conf"
+    ],
+    "undo": ["rm -f /etc/X11/xorg.conf.d/50-mouse-accel.conf"]
+  },
+  "Swappiness": {
+    "Content": "Lower Swappiness (vm.swappiness=10)",
+    "Description": "Keeps RAM from being swapped out while games/mods are open. Pairs well with the zram tweak below.",
+    "category": "Performance",
+    "risk": "safe",
+    "check": "grep -q 'vm.swappiness=10' /etc/sysctl.d/99-gaming-swappiness.conf 2>/dev/null",
+    "apply": [
+      "printf 'vm.swappiness=10\\n' > /etc/sysctl.d/99-gaming-swappiness.conf",
+      "sysctl --system"
+    ],
+    "undo": [
+      "rm -f /etc/sysctl.d/99-gaming-swappiness.conf",
+      "sysctl --system"
+    ]
+  },
+  "ZramTune": {
+    "Content": "Tune zram Size (RAM / 2, zstd)",
+    "Description": "Fedora/Nobara already runs zram-generator by default — this bumps its size fraction for heavier gaming loads.",
+    "category": "Performance",
+    "risk": "safe",
+    "check": "test -f /etc/systemd/zram-generator.conf.d/gaming.conf",
+    "apply": [
+      "mkdir -p /etc/systemd/zram-generator.conf.d",
+      "printf '[zram0]\\nzram-size = ram / 2\\ncompression-algorithm = zstd\\n' > /etc/systemd/zram-generator.conf.d/gaming.conf",
+      "systemctl daemon-reload",
+      "systemctl restart systemd-zram-setup@zram0.service || true"
+    ],
+    "undo": [
+      "rm -f /etc/systemd/zram-generator.conf.d/gaming.conf",
+      "systemctl daemon-reload"
+    ]
+  },
+  "BalooDisable": {
+    "Content": "Disable KDE Baloo File Indexer",
+    "Description": "Stops background file content indexing — the single biggest idle CPU/disk drain on stock Plasma. Applied for your user account.",
+    "category": "Performance",
+    "risk": "safe",
+    "check": "su - {USER} -c 'balooctl6 status 2>/dev/null || balooctl status 2>/dev/null' | grep -qi 'disabled\\|not running'",
+    "apply": ["su - {USER} -c 'balooctl6 disable 2>/dev/null || balooctl disable 2>/dev/null'"],
+    "undo": ["su - {USER} -c 'balooctl6 enable 2>/dev/null || balooctl enable 2>/dev/null'"]
+  },
+  "PowerProfileScripts": {
+    "Content": "Install gaming-performance / gaming-balanced Scripts",
+    "Description": "Two one-word commands to flip power-profiles-daemon between 'performance' (before gaming) and 'balanced' (after, saves battery/thermals).",
+    "category": "Power",
+    "risk": "safe",
+    "check": "test -x /usr/local/bin/gaming-performance",
+    "apply": [
+      "printf '#!/usr/bin/env bash\\npowerprofilesctl set performance\\n' > /usr/local/bin/gaming-performance",
+      "printf '#!/usr/bin/env bash\\npowerprofilesctl set balanced\\n' > /usr/local/bin/gaming-balanced",
+      "chmod +x /usr/local/bin/gaming-performance /usr/local/bin/gaming-balanced"
+    ],
+    "undo": ["rm -f /usr/local/bin/gaming-performance /usr/local/bin/gaming-balanced"]
+  },
+  "TlpEnable": {
+    "Content": "Enable TLP Power Management",
+    "Description": "Mature laptop power/thermal tuning for the 5800H. Disables power-profiles-daemon to avoid the two fighting over the CPU governor. Pick this OR the auto-cpufreq app below, not both.",
+    "category": "Power",
+    "risk": "safe",
+    "check": "systemctl is-enabled tlp 2>/dev/null | grep -q enabled",
+    "apply": [
+      "dnf install -y tlp tlp-rdw",
+      "systemctl disable --now power-profiles-daemon || true",
+      "systemctl enable --now tlp"
+    ],
+    "undo": [
+      "systemctl disable --now tlp || true",
+      "systemctl enable --now power-profiles-daemon || true"
+    ]
+  },
+  "AmdgpuPerfScripts": {
+    "Content": "Install amdgpu-perf-high / amdgpu-perf-auto Scripts",
+    "Description": "Forces the AMD Vega iGPU to its highest DPM performance level on demand (Linux equivalent of disabling AMD ULPS on Windows). Only matters if you're rendering on the iGPU.",
+    "category": "GPU",
+    "risk": "advanced",
+    "requires_vendor": "amd",
+    "check": "test -x /usr/local/bin/amdgpu-perf-high",
+    "apply": [
+      "printf '#!/usr/bin/env bash\\necho high | tee /sys/class/drm/card*/device/power_dpm_force_performance_level >/dev/null 2>&1\\n' > /usr/local/bin/amdgpu-perf-high",
+      "printf '#!/usr/bin/env bash\\necho auto | tee /sys/class/drm/card*/device/power_dpm_force_performance_level >/dev/null 2>&1\\n' > /usr/local/bin/amdgpu-perf-auto",
+      "chmod +x /usr/local/bin/amdgpu-perf-high /usr/local/bin/amdgpu-perf-auto"
+    ],
+    "undo": ["rm -f /usr/local/bin/amdgpu-perf-high /usr/local/bin/amdgpu-perf-auto"]
+  },
+  "NvidiaMaxPerf": {
+    "Content": "Install nvidia-max-perf Script",
+    "Description": "Enables NVIDIA persistence mode + prefers max PowerMizer performance, avoiding clock-transition stutter at the cost of power/heat. Run it before a session.",
+    "category": "GPU",
+    "risk": "advanced",
+    "requires_vendor": "nvidia",
+    "check": "test -x /usr/local/bin/nvidia-max-perf",
+    "apply": [
+      "printf '#!/usr/bin/env bash\\nnvidia-smi -pm 1\\nif [[ -n \"${DISPLAY:-}\" ]] && command -v nvidia-settings >/dev/null; then nvidia-settings -a \"[gpu:0]/GpuPowerMizerMode=1\" >/dev/null 2>&1; fi\\n' > /usr/local/bin/nvidia-max-perf",
+      "chmod +x /usr/local/bin/nvidia-max-perf"
+    ],
+    "undo": ["rm -f /usr/local/bin/nvidia-max-perf"]
+  },
+  "ControllerUdev": {
+    "Content": "Game Controller udev Rules",
+    "Description": "Non-root access to Xbox/PlayStation/generic HID pads. Usually already covered by the Steam package — this is a fallback.",
+    "category": "Gaming",
+    "risk": "safe",
+    "check": "test -f /etc/udev/rules.d/99-gamepads.rules",
+    "apply": [
+      "printf 'SUBSYSTEM==\"usb\", ATTRS{idVendor}==\"045e\", MODE=\"0666\"\\nSUBSYSTEM==\"usb\", ATTRS{idVendor}==\"054c\", MODE=\"0666\"\\nSUBSYSTEM==\"hidraw\", MODE=\"0666\"\\n' > /etc/udev/rules.d/99-gamepads.rules",
+      "udevadm control --reload-rules"
+    ],
+    "undo": [
+      "rm -f /etc/udev/rules.d/99-gamepads.rules",
+      "udevadm control --reload-rules"
+    ]
+  },
+  "HotkeyListener": {
+    "Content": "Dedicated G-Key Game Mode Toggle",
+    "Description": "Installs a systemd user service that listens for the dedicated G-key (confirmed on the G15 5515 to send KEY_PERFORMANCE when Fn Lock is OFF) and toggles Game Mode on press — same effect as clicking the tray icon. Requires PowerProfileScripts/AmdgpuPerfScripts/NvidiaMaxPerf above to be installed first, and python3-evdev.",
+    "category": "Gaming",
+    "risk": "advanced",
+    "check": "systemctl --user -M {USER}@ is-enabled dellg15-hotkey.service 2>/dev/null | grep -q enabled",
+    "apply": [
+      "dnf install -y python3-evdev",
+      "mkdir -p /home/{USER}/.config/systemd/user",
+      "ln -sf {TOOLKIT_DIR}/hotkey_listener.py /usr/local/bin/dellg15-hotkey-listener.py",
+      "chmod +x {TOOLKIT_DIR}/hotkey_listener.py",
+      "printf '[Unit]\\nDescription=Dell G15 G-key Game Mode toggle\\n\\n[Service]\\nExecStart=/usr/bin/python3 /usr/local/bin/dellg15-hotkey-listener.py\\nRestart=on-failure\\n\\n[Install]\\nWantedBy=default.target\\n' > /home/{USER}/.config/systemd/user/dellg15-hotkey.service",
+      "chown -R {USER}:{USER} /home/{USER}/.config/systemd/user/dellg15-hotkey.service",
+      "systemctl --user -M {USER}@ daemon-reload",
+      "systemctl --user -M {USER}@ enable --now dellg15-hotkey.service"
+    ],
+    "undo": [
+      "systemctl --user -M {USER}@ disable --now dellg15-hotkey.service",
+      "rm -f /home/{USER}/.config/systemd/user/dellg15-hotkey.service",
+      "rm -f /usr/local/bin/dellg15-hotkey-listener.py"
+    ]
+  },
+  "PasswordlessGameModeToggle": {
+    "Content": "Passwordless Game Mode Toggle (sudoers rule)",
+    "Description": "Lets the tray icon and the G-key listener flip Game Mode without a password prompt every single press. Scoped ONLY to the five specific toggle scripts, not general root access. Skip this if you'd rather approve each toggle via a GUI polkit prompt.",
+    "category": "Gaming",
+    "risk": "advanced",
+    "check": "test -f /etc/sudoers.d/dellg15-gamemode-toggle",
+    "apply": [
+      "printf '{USER} ALL=(root) NOPASSWD: /usr/local/bin/gaming-performance, /usr/local/bin/gaming-balanced, /usr/local/bin/amdgpu-perf-high, /usr/local/bin/amdgpu-perf-auto, /usr/local/bin/nvidia-max-perf\\n' > /etc/sudoers.d/dellg15-gamemode-toggle",
+      "chmod 0440 /etc/sudoers.d/dellg15-gamemode-toggle",
+      "visudo -c -f /etc/sudoers.d/dellg15-gamemode-toggle"
+    ],
+    "undo": ["rm -f /etc/sudoers.d/dellg15-gamemode-toggle"]
+  },
+  "KeyboardBacklightTimeout": {
+    "Content": "Keyboard Backlight: Disable Auto-Off Timeout",
+    "Description": "DAMX exposes an explicit keyboard backlight timeout control on Acer; Dell keyboards don't have a dedicated WMI knob for this, so this uses the generic Linux LED class instead — sets max_brightness once, no auto-timeout to fight since one isn't kernel-exposed here. Best-effort: only does something if a *::kbd_backlight LED exists.",
+    "category": "RGB",
+    "risk": "advanced",
+    "check": "for d in /sys/class/leds/*kbd_backlight*; do [ -e \"$d\" ] && exit 0; done; exit 1",
+    "apply": [
+      "for d in /sys/class/leds/*kbd_backlight*; do [ -e \"$d\" ] && cat \"$d/max_brightness\" > \"$d/brightness\"; done"
+    ],
+    "undo": []
+  }
+}

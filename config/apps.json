@@ -1,0 +1,187 @@
+{
+  "NvidiaDriver": {
+    "Content": "NVIDIA Driver (akmod-nvidia)",
+    "Description": "Proprietary driver for the RTX 3050 Ti Mobile (GA107). Skip if you're on a Nobara -NV image, it's already there. Needs a reboot after first install for the akmod to build.",
+    "category": "GPU",
+    "manager": "dnf",
+    "requires_vendor": "nvidia",
+    "check": "rpm -q akmod-nvidia >/dev/null 2>&1 || lsmod | grep -q '^nvidia '",
+    "install": ["dnf install -y akmod-nvidia xorg-x11-drv-nvidia-cuda"]
+  },
+  "EnvyControl": {
+    "Content": "EnvyControl (GPU mode switching)",
+    "Description": "Switches between integrated/nvidia/hybrid GPU modes. Used instead of prime-select since this is AMD iGPU + NVIDIA dGPU, which prime-select's on-demand mode doesn't handle. Use: sudo envycontrol -s hybrid",
+    "category": "GPU",
+    "manager": "shell",
+    "requires_vendor": "nvidia",
+    "check": "command -v envycontrol >/dev/null",
+    "install": ["dnf install -y python3-pip", "pip3 install --break-system-packages envycontrol"]
+  },
+  "CoreCtrl": {
+    "Content": "CoreCtrl",
+    "Description": "GUI for AMD iGPU power profiles / fan curves.",
+    "category": "GPU",
+    "manager": "dnf",
+    "package": "corectrl",
+    "requires_vendor": "amd",
+    "check": "rpm -q corectrl >/dev/null 2>&1"
+  },
+  "I8kutils": {
+    "Content": "i8kutils (fan control)",
+    "Description": "DAMX's fan-control-tab equivalent — Dell's dell-smm-hwmon kernel driver plus i8kutils/i8kmon for manual or auto fan speed. Not confirmed supported on the G15 5515 specifically (dell-smm-hwmon uses a per-model whitelist, may need the 'force=1' module option) — best-effort like the RGB item.",
+    "category": "Power",
+    "manager": "shell",
+    "check": "test -f /etc/modprobe.d/dellg15-fan.conf",
+    "install": [
+      "dnf install -y i8kutils",
+      "printf 'options dell-smm-hwmon force=1\\n' > /etc/modprobe.d/dellg15-fan.conf",
+      "modprobe -r dell-smm-hwmon 2>/dev/null || true",
+      "modprobe dell-smm-hwmon force=1 || true"
+    ]
+  },
+  "AutoCpufreq": {
+    "Content": "auto-cpufreq",
+    "Description": "Dynamic CPU governor switching for the 5800H. Pick this OR the TLP tweak, not both — they fight over the governor.",
+    "category": "Power",
+    "manager": "shell",
+    "check": "command -v auto-cpufreq >/dev/null",
+    "install": [
+      "dnf install -y git",
+      "rm -rf /tmp/auto-cpufreq && git clone --depth 1 https://github.com/AdnanHodzic/auto-cpufreq /tmp/auto-cpufreq",
+      "cd /tmp/auto-cpufreq && ./auto-cpufreq-installer"
+    ]
+  },
+  "RyzenAdj": {
+    "Content": "ryzenadj",
+    "Description": "CPU undervolt tool for the 5800H — worth trying against the freeze issue as an alternative to the C-state fix. Needs manual per-boot tuning afterward; start conservative.",
+    "category": "GPU",
+    "manager": "shell",
+    "check": "command -v ryzenadj >/dev/null",
+    "install": [
+      "dnf install -y cmake pciutils-devel git gcc-c++ make",
+      "rm -rf /tmp/ryzenadj && git clone --depth 1 https://github.com/FlyGoat/RyzenAdj /tmp/ryzenadj",
+      "cd /tmp/ryzenadj && mkdir -p build && cd build && cmake .. && make -j$(nproc) && make install"
+    ]
+  },
+  "Steam": {
+    "Content": "Steam",
+    "Description": "Valve's PC game store and launcher.",
+    "category": "Software",
+    "manager": "dnf",
+    "package": "steam",
+    "check": "rpm -q steam >/dev/null 2>&1"
+  },
+  "Lutris": {
+    "Content": "Lutris",
+    "Description": "Battle.net, GOG, emulators, non-Steam installers.",
+    "category": "Software",
+    "manager": "dnf",
+    "package": "lutris",
+    "check": "rpm -q lutris >/dev/null 2>&1"
+  },
+  "Heroic": {
+    "Content": "Heroic Games Launcher",
+    "Description": "Epic Games Store / GOG launcher.",
+    "category": "Software",
+    "manager": "flatpak",
+    "package": "com.heroicgameslauncher.hgl",
+    "check": "flatpak list 2>/dev/null | grep -q com.heroicgameslauncher.hgl"
+  },
+  "GameModeMangoHud": {
+    "Content": "GameMode + MangoHud",
+    "Description": "Per-game CPU/GPU perf profile + FPS/frametime overlay. Launch with: gamemoderun mangohud %command%",
+    "category": "Software",
+    "manager": "dnf",
+    "package": "gamemode mangohud",
+    "check": "rpm -q gamemode mangohud >/dev/null 2>&1",
+    "install": ["dnf install -y gamemode mangohud", "usermod -aG gamemode {USER}"]
+  },
+  "GOverlay": {
+    "Content": "GOverlay",
+    "Description": "GUI config editor for MangoHud.",
+    "category": "Software",
+    "manager": "dnf",
+    "package": "goverlay",
+    "check": "rpm -q goverlay >/dev/null 2>&1"
+  },
+  "Gamescope": {
+    "Content": "gamescope",
+    "Description": "Valve's micro-compositor — resolution scaling / HDR / borderless-fullscreen fixes.",
+    "category": "Software",
+    "manager": "dnf",
+    "package": "gamescope",
+    "check": "rpm -q gamescope >/dev/null 2>&1"
+  },
+  "OpenRGB": {
+    "Content": "OpenRGB",
+    "Description": "Vendor-agnostic RGB control. Best-effort for the AW-ELC per-key keyboard controller — not guaranteed to work on this model.",
+    "category": "RGB",
+    "manager": "dnf",
+    "package": "openrgb",
+    "check": "rpm -q openrgb >/dev/null 2>&1"
+  },
+  "Btop": {
+    "Content": "btop",
+    "Description": "Terminal system resource monitor.",
+    "category": "Monitoring",
+    "manager": "dnf",
+    "package": "btop",
+    "check": "rpm -q btop >/dev/null 2>&1"
+  },
+  "Nvtop": {
+    "Content": "nvtop",
+    "Description": "Terminal GPU monitor (works for both the NVIDIA dGPU and AMD iGPU).",
+    "category": "Monitoring",
+    "manager": "dnf",
+    "package": "nvtop",
+    "check": "rpm -q nvtop >/dev/null 2>&1"
+  },
+  "LmSensors": {
+    "Content": "lm_sensors",
+    "Description": "Fan/thermal sensor readout, needed by btop/GOverlay for real data.",
+    "category": "Monitoring",
+    "manager": "shell",
+    "check": "rpm -q lm_sensors >/dev/null 2>&1",
+    "install": ["dnf install -y lm_sensors", "yes | sensors-detect --auto >/dev/null 2>&1 || true"]
+  },
+  "Fastfetch": {
+    "Content": "fastfetch",
+    "Description": "Quick system/hardware summary on terminal open.",
+    "category": "Monitoring",
+    "manager": "dnf",
+    "package": "fastfetch",
+    "check": "rpm -q fastfetch >/dev/null 2>&1"
+  },
+  "Discord": {
+    "Content": "Discord",
+    "Description": "Voice/text chat.",
+    "category": "Streaming",
+    "manager": "flatpak",
+    "package": "com.discordapp.Discord",
+    "check": "flatpak list 2>/dev/null | grep -q com.discordapp.Discord"
+  },
+  "OBSStudio": {
+    "Content": "OBS Studio",
+    "Description": "Recording/streaming gameplay.",
+    "category": "Streaming",
+    "manager": "dnf",
+    "package": "obs-studio",
+    "check": "rpm -q obs-studio >/dev/null 2>&1"
+  },
+  "Sunshine": {
+    "Content": "Sunshine",
+    "Description": "Self-hosted game-streaming host, pairs with Moonlight on a Steam Deck/tablet/other PC.",
+    "category": "Streaming",
+    "manager": "flatpak",
+    "package": "dev.lizardbyte.sunshine",
+    "check": "flatpak list 2>/dev/null | grep -q dev.lizardbyte.sunshine"
+  },
+  "Moonlight": {
+    "Content": "Moonlight",
+    "Description": "Game-streaming client — stream FROM another PC/host TO this laptop.",
+    "category": "Streaming",
+    "manager": "flatpak",
+    "package": "com.moonlight_stream.Moonlight",
+    "check": "flatpak list 2>/dev/null | grep -q com.moonlight_stream.Moonlight"
+  }
+}
