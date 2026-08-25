@@ -52,6 +52,8 @@ class TrayMonitor:
         self.cpu_action = self._info_action("CPU: …")
         self.igpu_action = self._info_action("iGPU: …")
         self.dgpu_action = self._info_action("dGPU: …")
+        self.rapl_warning_action = self._info_action("")
+        self.rapl_warning_action.setVisible(False)
         self.menu.addSeparator()
 
         self.gamemode_action = QAction("Game Mode", checkable=True)
@@ -86,9 +88,16 @@ class TrayMonitor:
         return a
 
     def _refresh(self):
-        self.cpu_action.setText(f"CPU: {sensors.read_cpu_freq_ghz()}, {sensors.read_cpu_temp_c()}")
+        cpu_power = sensors.read_cpu_power_watts()
+        power_txt = f", {cpu_power:.1f} W" if cpu_power is not None else ""
+        self.cpu_action.setText(f"CPU: {sensors.read_cpu_freq_ghz()}, {sensors.read_cpu_temp_c()}{power_txt}")
         self.igpu_action.setText(f"iGPU: {sensors.read_igpu_clock_temp()}")
         self.dgpu_action.setText(f"dGPU: {sensors.read_dgpu_clock_temp_util()}")
+        if sensors.rapl_permissions_ok():
+            self.rapl_warning_action.setVisible(False)
+        else:
+            self.rapl_warning_action.setText("⚠ CPU power locked — install RaplPowerPermissions tweak")
+            self.rapl_warning_action.setVisible(True)
         self.tray.setToolTip(
             f"CPU {sensors.read_cpu_temp_c()} | dGPU {sensors.read_dgpu_clock_temp_util()}"
         )

@@ -30,6 +30,15 @@ This is the GUI counterpart to the CLI in `../dellg15-linux-setup/` — same
 underlying logic, exposed as checkboxes with live "Applied"/"Installed"
 status instead of an interactive terminal menu.
 
+**Package-name check**: every `dnf` package name referenced in `config/*.json`
+was cross-checked against Fedora's dist-git (`src.fedoraproject.org`) to
+confirm it actually exists before being trusted — this caught one real
+error: `ttkbootstrap` is **not** packaged in Fedora/Nobara at all (404 on
+dist-git), `pip install --user ttkbootstrap` is the only install path,
+fixed in `dellg15_toolkit.py`'s own error message. `akmod-nvidia` lives in
+RPM Fusion's separate dist-git (unreachable from this check, but its name
+is standard/well-documented) rather than Fedora's own.
+
 **Status: local prototype only.** Not committed to git, not published anywhere.
 
 ## Running it
@@ -122,7 +131,7 @@ Install via the Toolkit GUI (Gaming tab):
 - **Power** — TLP or auto-cpufreq (pick one), `gaming-performance`/
   `gaming-balanced` toggle scripts, i8kutils fan control (DAMX's fan-tab
   equivalent — best-effort, `dell-smm-hwmon` isn't confirmed to whitelist
-  this model).
+  this model), **RaplPowerPermissions** (see "Power reporting" below).
 - **Performance** — USB autosuspend off, flat mouse accel, swappiness, zram
   tuning, KDE Baloo indexer off.
 - **Software / Monitoring / Streaming / RGB / Gaming** — Steam, Lutris,
@@ -130,7 +139,57 @@ Install via the Toolkit GUI (Gaming tab):
   Discord/OBS/Sunshine/Moonlight, OpenRGB, keyboard backlight brightness
   (DAMX's backlight-timeout equivalent — Dell has no WMI timeout knob, so
   this just sets max brightness), controller udev rules, the G-key hotkey
-  listener + its passwordless-sudo rule.
+  listener + its passwordless-sudo rule, **MangoHudGlobalToggle** (see
+  "Global MangoHud" below).
+
+## Global MangoHud (works on any game, not just per-title launch options)
+
+The normal MangoHud workflow is pasting `mangohud %command%` into every
+single Steam game's launch options one at a time. The `MangoHudGlobalToggle`
+tweak installs `mangohud-global-on`/`mangohud-global-off` instead — they
+write/remove `~/.config/environment.d/mangohud.conf` containing:
+
+```
+MANGOHUD=1
+LD_PRELOAD=/usr/$LIB/mangohud/libMangoHud.so
+```
+
+`MANGOHUD=1` alone is enough for Vulkan games — the Vulkan loader has a
+built-in "enable this implicit layer only if this env var is set" mechanism
+that MangoHud's own layer manifest uses, so no per-game opt-in needed. The
+`LD_PRELOAD` line (using the dynamic linker's own `$LIB` token, resolved by
+`ld.so` at process-launch time — deliberately NOT shell-expanded when this
+file is written) additionally catches the rare pure-OpenGL title Vulkan's
+mechanism wouldn't reach.
+
+**This is systemd `environment.d`, not a live shell variable** — it applies
+to processes launched by your graphical session going forward, which takes
+effect after your next login (or at minimum, restarting Steam so it and
+everything it launches picks up the new session environment). Once active,
+MangoHud's own in-game keybind (`Shift_R+F12` by default) shows/hides the
+overlay display without touching this global on/off state — that's the
+"pause the HUD for one round" control; `mangohud-global-off` is the "stop
+hooking every process" control.
+
+## Power reporting — a real permissions gotcha
+
+Both the Dashboard tab and the tray icon read CPU package power from Linux's
+RAPL energy counters (`/sys/class/powercap/*/energy_uj`, delta-measured over
+a short window since RAPL only exposes cumulative energy, not instantaneous
+watts). **Since 2020, the kernel locks these to root-only by default** as a
+side-channel mitigation — since the tray icon and hotkey listener
+deliberately run unprivileged (only the Game Mode toggle itself elevates),
+CPU power reads as blank/zero for them out of the box. The `RaplPowerPermissions`
+tweak adds a udev rule (`chmod -R a+r /sys/class/powercap`) — the same fix
+MangoHud's own documentation recommends for its power display — making
+these readable by any local user. Trade-off: this is a known, low-severity
+timing side-channel exposure, not "safe" by risk tag, since it affects
+every user of the machine, not just this tool. GPU power (NVIDIA via
+`nvidia-smi`, no permission issue there) and all clock/temp reads need no
+such fix — they're readable unprivileged by default.
+
+Both the Dashboard and the tray icon show a warning inline when this isn't
+fixed, rather than silently displaying wrong/blank numbers.
 
 ## How status/apply works
 

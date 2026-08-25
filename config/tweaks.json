@@ -210,5 +210,40 @@
       "for d in /sys/class/leds/*kbd_backlight*; do [ -e \"$d\" ] && cat \"$d/max_brightness\" > \"$d/brightness\"; done"
     ],
     "undo": []
+  },
+  "RaplPowerPermissions": {
+    "Content": "Fix CPU Power-Reading Permissions (RAPL)",
+    "Description": "Linux locks CPU package power counters (RAPL, under /sys/class/powercap) to root-only by default since 2020 (a side-channel security mitigation) — without this, the Dashboard tab and the tray icon (which deliberately run unprivileged) can never show real CPU wattage, always 'n/a'. Adds a udev rule making them world-readable, the same fix MangoHud's own docs recommend for its power display. Trade-off: makes RAPL energy counters readable by any local user/process, a known but low-severity timing side-channel — standard practice on gaming-focused distros/tools, not enabled by default here.",
+    "category": "Power",
+    "risk": "advanced",
+    "check": "test -f /etc/udev/rules.d/90-dellg15-powercap-perms.rules",
+    "apply": [
+      "printf 'SUBSYSTEM==\"powercap\", RUN+=\"/bin/chmod -R a+r /sys/class/powercap\"\\n' > /etc/udev/rules.d/90-dellg15-powercap-perms.rules",
+      "udevadm control --reload-rules",
+      "chmod -R a+r /sys/class/powercap 2>/dev/null || true"
+    ],
+    "undo": [
+      "rm -f /etc/udev/rules.d/90-dellg15-powercap-perms.rules",
+      "udevadm control --reload-rules"
+    ]
+  },
+  "MangoHudGlobalToggle": {
+    "Content": "Install MangoHud Global On/Off Scripts",
+    "Description": "Turns MangoHud into a system-wide overlay instead of something you paste into each game's Steam launch options one at a time. Installs 'mangohud-global-on'/'mangohud-global-off', which write/remove ~/.config/environment.d/mangohud.conf (MANGOHUD=1 + LD_PRELOAD for the rare pure-OpenGL title — Vulkan games pick it up via the implicit-layer 'enable_environment' mechanism from MANGOHUD=1 alone, no LD_PRELOAD needed there). Takes effect on next login (or next Steam/game launch after restarting your session) since it's a systemd environment.d file, not a live env var. Once active, MangoHud's own in-game keybind (Shift_R+F12 by default) shows/hides the overlay display without disabling the underlying hook. Requires the GameModeMangoHud app installed first.",
+    "category": "Gaming",
+    "risk": "safe",
+    "check": "test -f /home/{USER}/.config/environment.d/mangohud.conf",
+    "apply": [
+      "mkdir -p /home/{USER}/.config/environment.d",
+      "printf 'MANGOHUD=1\\nLD_PRELOAD=/usr/$LIB/mangohud/libMangoHud.so\\n' > /home/{USER}/.config/environment.d/mangohud.conf",
+      "chown {USER}:{USER} /home/{USER}/.config/environment.d/mangohud.conf",
+      "cat > /usr/local/bin/mangohud-global-on <<'SCRIPT'\n#!/usr/bin/env bash\nmkdir -p ~/.config/environment.d\ncat > ~/.config/environment.d/mangohud.conf <<'CONF'\nMANGOHUD=1\nLD_PRELOAD=/usr/$LIB/mangohud/libMangoHud.so\nCONF\necho 'MangoHud enabled globally - log out/in (or relaunch Steam) for it to apply to new games.'\nSCRIPT",
+      "cat > /usr/local/bin/mangohud-global-off <<'SCRIPT'\n#!/usr/bin/env bash\nrm -f ~/.config/environment.d/mangohud.conf\necho 'MangoHud global toggle removed - log out/in (or relaunch Steam) for it to fully clear.'\nSCRIPT",
+      "chmod +x /usr/local/bin/mangohud-global-on /usr/local/bin/mangohud-global-off"
+    ],
+    "undo": [
+      "rm -f /home/{USER}/.config/environment.d/mangohud.conf",
+      "rm -f /usr/local/bin/mangohud-global-on /usr/local/bin/mangohud-global-off"
+    ]
   }
 }

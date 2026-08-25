@@ -8,9 +8,9 @@ Inspired by Div-Acer-Manager-Max (DAMX): https://github.com/PXDiv/Div-Acer-Manag
 
 Not a general-purpose distro tool — targets this one laptop's hardware only.
 
-Requires: ttkbootstrap (dnf install python3-ttkbootstrap, or:
-pip install --user ttkbootstrap) for the themed dark UI + round-toggle
-switches + gauge widgets on the Dashboard tab.
+Requires: ttkbootstrap (pip install --user ttkbootstrap — confirmed NOT
+packaged in Fedora/Nobara's repos, pip is the only install path) for the
+themed dark UI + round-toggle switches + gauge widgets on the Dashboard tab.
 """
 import json
 import os
@@ -33,7 +33,7 @@ try:
     from ttkbootstrap.constants import SUCCESS, SECONDARY, WARNING, INFO, DANGER
 except ImportError:
     print("ttkbootstrap not found. Install with: pip install --user ttkbootstrap")
-    print("(or, if packaged: dnf install python3-ttkbootstrap)")
+    print("(not packaged in Fedora/Nobara's repos — pip is the only path)")
     sys.exit(1)
 
 import sensors  # noqa: E402  (local module, no GUI deps)
@@ -268,6 +268,26 @@ class ToolkitApp:
         )
         self.meter_dgpu_util.grid(row=0, column=3, padx=14)
 
+        gauges2 = tb.Frame(frame)
+        gauges2.pack(fill="x", pady=(0, 8))
+
+        self.meter_cpu_power = tb.Meter(
+            gauges2, amounttotal=65, amountused=0, metersize=170,
+            subtext="CPU Package W", bootstyle=INFO, interactive=False, textright="W",
+        )
+        self.meter_cpu_power.grid(row=0, column=0, padx=14)
+
+        self.meter_dgpu_power = tb.Meter(
+            gauges2, amounttotal=80, amountused=0, metersize=170,
+            subtext="dGPU W", bootstyle=WARNING, interactive=False, textright="W",
+        )
+        self.meter_dgpu_power.grid(row=0, column=1, padx=14)
+
+        self.rapl_warning = tb.Label(
+            frame, text="", bootstyle=WARNING, wraplength=900,
+        )
+        self.rapl_warning.pack(anchor="w", pady=(0, 12))
+
         details = tb.Labelframe(frame, text="Details", padding=12)
         details.pack(fill="x", pady=(0, 20))
         self.dash_cpu_label = tb.Label(details, text="CPU: …", font=("Monospace", 10))
@@ -352,11 +372,14 @@ class ToolkitApp:
         while self.dash_running:
             cpu_temp = sensors.read_cpu_temp_c_value()
             cpu_freq = sensors.read_cpu_freq_ghz_value()
+            cpu_power = sensors.read_cpu_power_watts()  # blocks ~0.1s, fine on this bg thread
             igpu_clock, igpu_temp = sensors.read_igpu_clock_temp_values()
-            dgpu_clock, dgpu_temp, dgpu_util = sensors.read_dgpu_values()
+            dgpu_clock, dgpu_temp, dgpu_util, dgpu_power = sensors.read_dgpu_values()
+            rapl_ok = sensors.rapl_permissions_ok()
             gamemode = sensors.get_game_mode_state()
-            self.dash_queue.put((cpu_temp, cpu_freq, igpu_clock, igpu_temp, dgpu_clock, dgpu_temp, dgpu_util, gamemode))
-            for _ in range(20):  # ~2s poll, but checkable every 100ms for shutdown
+            self.dash_queue.put((cpu_temp, cpu_freq, cpu_power, igpu_clock, igpu_temp,
+                                  dgpu_clock, dgpu_temp, dgpu_util, dgpu_power, rapl_ok, gamemode))
+            for _ in range(19):  # ~2s poll total (0.1s already spent above), checkable for shutdown
                 if not self.dash_running:
                     return
                 threading.Event().wait(0.1)
@@ -364,20 +387,32 @@ class ToolkitApp:
     def _poll_dash_queue(self):
         try:
             while True:
-                cpu_temp, cpu_freq, igpu_clock, igpu_temp, dgpu_clock, dgpu_temp, dgpu_util, gamemode = self.dash_queue.get_nowait()
+                (cpu_temp, cpu_freq, cpu_power, igpu_clock, igpu_temp,
+                 dgpu_clock, dgpu_temp, dgpu_util, dgpu_power, rapl_ok, gamemode) = self.dash_queue.get_nowait()
                 self.meter_cpu_temp.configure(amountused=cpu_temp or 0)
                 self.meter_cpu_freq.configure(amountused=(cpu_freq or 0) * 10)
+                self.meter_cpu_power.configure(amountused=cpu_power or 0)
                 self.meter_dgpu_temp.configure(amountused=dgpu_temp or 0)
                 self.meter_dgpu_util.configure(amountused=dgpu_util or 0)
-                self.dash_cpu_label.configure(text=f"CPU: {cpu_freq:.2f} GHz, {cpu_temp:.0f} C" if cpu_temp else "CPU: n/a")
+                self.meter_dgpu_power.configure(amountused=dgpu_power or 0)
+                cpu_power_txt = f", {cpu_power:.1f} W" if cpu_power is not None else ""
+                self.dash_cpu_label.configure(text=f"CPU: {cpu_freq:.2f} GHz, {cpu_temp:.0f} C{cpu_power_txt}" if cpu_temp else "CPU: n/a")
                 if igpu_clock is not None:
                     self.dash_igpu_label.configure(text=f"iGPU: {igpu_clock} MHz, {igpu_temp:.0f} C" if igpu_temp else f"iGPU: {igpu_clock} MHz")
                 else:
                     self.dash_igpu_label.configure(text="iGPU: n/a")
                 if dgpu_clock is not None:
-                    self.dash_dgpu_label.configure(text=f"dGPU: {dgpu_clock} MHz, {dgpu_temp} C, {dgpu_util}% util")
+                    dgpu_power_txt = f", {dgpu_power:.0f} W" if dgpu_power is not None else ""
+                    self.dash_dgpu_label.configure(text=f"dGPU: {dgpu_clock} MHz, {dgpu_temp} C, {dgpu_util}% util{dgpu_power_txt}")
                 else:
                     self.dash_dgpu_label.configure(text="dGPU: n/a (asleep or no nvidia-smi)")
+                if not rapl_ok:
+                    self.rapl_warning.configure(
+                        text="⚠ CPU power reads 0/blank — Linux locks RAPL power counters to root by default. "
+                             "Install the 'RaplPowerPermissions' tweak (Power tab) to fix this."
+                    )
+                else:
+                    self.rapl_warning.configure(text="")
                 self._suppress_gamemode_signal = True
                 self.gamemode_var.set(gamemode)
                 self._suppress_gamemode_signal = False
