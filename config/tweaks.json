@@ -1,4 +1,19 @@
 {
+  "AutoMountDrives": {
+    "Content": "Auto-mount internal data drives at /mnt (fstab)",
+    "Description": "Finds every fixed internal partition with a mountable filesystem (ext4/btrfs/xfs/f2fs/ntfs/exfat/vfat) that isn't already handled, and adds a permanent /etc/fstab entry mounting it at a stable /mnt/<label> path with 'nofail' — the right place for a second games/data NVMe, so Steam libraries and symlinks never move. Skips the OS/boot/swap disks, anything already in fstab, LUKS, and removable media. NTFS uses the in-kernel ntfs3 driver with your uid/gid so games are writable. Reversible: undo unmounts and strips exactly the block it added (and migrates off any older /run/media setup a previous version made).",
+    "category": "Performance",
+    "risk": "advanced",
+    "check": "grep -q 'dellg15-toolkit AutoMountDrives' /etc/fstab",
+    "apply": [
+      "install -m 0755 {TOOLKIT_DIR}/dellg15_automount.py /usr/local/bin/dellg15-automount",
+      "/usr/local/bin/dellg15-automount --user {USER} enable-all"
+    ],
+    "undo": [
+      "/usr/local/bin/dellg15-automount --user {USER} disable-all 2>/dev/null || true",
+      "rm -f /usr/local/bin/dellg15-automount"
+    ]
+  },
   "CstateFix": {
     "Content": "Fix Random Freezes (C-State workaround)",
     "Description": "Adds processor.max_cstate=1 to the kernel boot params. The 5800H's deep C-states (C6) are unstable on this board and cause random full-system freezes. Requires reboot to take effect.",

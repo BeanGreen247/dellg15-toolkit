@@ -209,6 +209,12 @@ class ToolkitApp:
         self.gamemode_var = tk.BooleanVar(value=False)
         self._suppress_gamemode_signal = False
 
+        self._scroll_canvases: list = []   # every scrollable tab body (for the wheel)
+        self._log_lines: list[str] = []    # full log buffer, mirrored to any popped-out window
+        self._pop_win = None               # detached log Toplevel, when open
+        self._pop_text = None
+        self._log_collapsed = False
+
         self._build_ui()
         self.root.after(100, self._poll_log_queue)
         self.root.after(100, self._poll_dash_queue)
@@ -221,7 +227,42 @@ class ToolkitApp:
 
     def _on_close(self):
         self.dash_running = False
+        if self._pop_win is not None:
+            try:
+                self._pop_win.destroy()
+            except tk.TclError:
+                pass
         self.root.destroy()
+
+    # ---------- scrolling ----------
+
+    def _scroll_body(self, parent, pad: int = 0):
+        """A vertically-scrollable frame. Returns the inner frame to fill.
+        Mouse-wheel is handled globally by _global_wheel via _scroll_canvases."""
+        canvas = tk.Canvas(parent, highlightthickness=0, bg=self.root.style.colors.bg)
+        vsb = tb.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        inner = tb.Frame(canvas, padding=pad)
+        win = canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=vsb.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+        inner.bind("<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(win, width=e.width))
+        self._scroll_canvases.append(canvas)
+        return inner
+
+    def _global_wheel(self, event):
+        w = self.root.winfo_containing(event.x_root, event.y_root)
+        if w is None:
+            return
+        wp = str(w)
+        for cv in self._scroll_canvases:
+            cp = str(cv)
+            if wp == cp or wp.startswith(cp + "."):
+                num, delta = getattr(event, "num", 0), getattr(event, "delta", 0)
+                step = -1 if (num == 4 or delta > 0) else 1
+                cv.yview_scroll(step, "units")
+                return
 
     def _set_window_icon(self, root):
         for name in ("icon-256.png", "icon-128.png", "icon.png"):
@@ -258,18 +299,29 @@ class ToolkitApp:
     # ---------- UI construction ----------
 
     def _build_ui(self):
-        header = tb.Frame(self.root, padding=10)
+        # global mouse-wheel dispatch for every scrollable tab body
+        for seq in ("<Button-4>", "<Button-5>", "<MouseWheel>"):
+            self.root.bind_all(seq, self._global_wheel, add="+")
+
+        header = tb.Frame(self.root, padding=(16, 12, 16, 8))
         header.pack(fill="x")
-        tb.Label(
-            header,
-            text="Dell G15 5515 Toolkit",
-            font=("Sans", 15, "bold"),
-        ).pack(side="left")
-        tb.Label(
-            header, text="  — Nobara Linux · targets the Dell G15 5515 (Ryzen 7 5800H + RTX 3050 Ti) only",
-            font=("Sans", 10), bootstyle=SECONDARY,
-        ).pack(side="left")
-        tb.Label(header, text=f"running as {self.user} (elevated)", bootstyle=SECONDARY).pack(side="right")
+        if getattr(self, "_icon_img", None) is not None:
+            try:
+                small = self._icon_img.subsample(max(1, self._icon_img.width() // 40))
+                tb.Label(header, image=small).pack(side="left", padx=(0, 12))
+                self._icon_small = small  # keep a ref
+            except tk.TclError:
+                pass
+        titlebox = tb.Frame(header)
+        titlebox.pack(side="left")
+        tb.Label(titlebox, text="Dell G15 5515 Toolkit",
+                 font=("Sans", 16, "bold")).pack(anchor="w")
+        tb.Label(titlebox,
+                 text="Nobara Linux · Ryzen 7 5800H + RTX 3050 Ti — this board only",
+                 font=("Sans", 9), bootstyle=SECONDARY).pack(anchor="w")
+        tb.Label(header, text=f"elevated · {self.user}",
+                 bootstyle=(SECONDARY, "inverse"), font=("Sans", 8, "bold"),
+                 padding=(8, 3)).pack(side="right")
 
         # actual DMI identity of the machine this is running on
         m = sensors.detect_model()
@@ -285,11 +337,13 @@ class ToolkitApp:
             txt = (f"⚠  Detected: {m['vendor']} {m['product']} — this is NOT a Dell G15 5515. "
                    f"The Toolkit's checks and tweaks are written for that board; expect breakage.")
             style = DANGER
-        tb.Label(self.root, text=txt, bootstyle=style, padding=(12, 0, 12, 6),
-                 wraplength=1400, justify="left").pack(fill="x")
+        tb.Label(self.root, text=txt, bootstyle=style, padding=(16, 2, 16, 8),
+                 wraplength=1600, justify="left").pack(fill="x")
+
+        tb.Separator(self.root).pack(fill="x", padx=16)
 
         self.notebook = tb.Notebook(self.root)
-        self.notebook.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self.notebook.pack(fill="both", expand=True, padx=16, pady=12)
 
         self._build_dashboard_tab()
         self._build_keyboard_tab()
@@ -302,24 +356,84 @@ class ToolkitApp:
         for cat in categories:
             self._build_category_tab(cat)
 
-        btn_bar = tb.Frame(self.root, padding=10)
+        # ---- footer: actions + status ----
+        tb.Separator(self.root).pack(fill="x", padx=16)
+        btn_bar = tb.Frame(self.root, padding=(16, 10))
         btn_bar.pack(fill="x")
-        tb.Button(btn_bar, text="Refresh Status", bootstyle=INFO, command=self._on_refresh_click).pack(side="left", padx=4)
-        tb.Button(btn_bar, text="Apply Selected", bootstyle=SUCCESS, command=self._on_apply_click).pack(side="left", padx=4)
+        tb.Button(btn_bar, text="↻  Refresh Status", bootstyle=(INFO, "outline"),
+                  command=self._on_refresh_click).pack(side="left")
+        tb.Button(btn_bar, text="✓  Apply Selected", bootstyle=SUCCESS,
+                  command=self._on_apply_click).pack(side="left", padx=8)
         self.status_var = tk.StringVar(value="Ready.")
-        tb.Label(btn_bar, textvariable=self.status_var, bootstyle=SECONDARY).pack(side="right", padx=4)
+        tb.Label(btn_bar, textvariable=self.status_var, bootstyle=SECONDARY,
+                 font=("Sans", 9)).pack(side="right")
 
-        log_frame = tb.Frame(self.root, padding=(10, 0, 10, 10))
-        log_frame.pack(fill="both", expand=False)
-        tb.Label(log_frame, text="Log", bootstyle=SECONDARY).pack(anchor="w")
-        self.log_text = tk.Text(log_frame, height=9, font=("Monospace", 9), bg="#111417", fg="#d0d5da",
-                                 insertbackground="#d0d5da", relief="flat", wrap="word")
+        # ---- log console (collapsible / detachable) ----
+        self.log_frame = tb.Frame(self.root, padding=(16, 0, 16, 12))
+        self.log_frame.pack(fill="both", expand=False)
+        bar = tb.Frame(self.log_frame)
+        bar.pack(fill="x", pady=(0, 4))
+        tb.Label(bar, text="LOG", font=("Sans", 8, "bold"), bootstyle=SECONDARY).pack(side="left")
+        self.log_popout_btn = tb.Button(bar, text="⇱ pop out", bootstyle=(SECONDARY, "link"),
+                                        command=self._toggle_log_popout)
+        self.log_popout_btn.pack(side="right")
+        self.log_collapse_btn = tb.Button(bar, text="▾ hide", bootstyle=(SECONDARY, "link"),
+                                          command=self._toggle_log_collapse)
+        self.log_collapse_btn.pack(side="right")
+        self.log_text = self._make_log_text(self.log_frame)
         self.log_text.pack(fill="both", expand=True)
-        self.log_text.configure(state="disabled")
+
+    @staticmethod
+    def _make_log_text(parent) -> tk.Text:
+        t = tk.Text(parent, height=9, font=("Monospace", 9), bg="#0e1116", fg="#c9d1d9",
+                    insertbackground="#c9d1d9", relief="flat", wrap="word",
+                    padx=10, pady=8, borderwidth=0)
+        t.configure(state="disabled")
+        return t
+
+    def _toggle_log_collapse(self):
+        self._log_collapsed = not self._log_collapsed
+        if self._log_collapsed:
+            self.log_text.pack_forget()
+            self.log_collapse_btn.configure(text="▸ show")
+        else:
+            self.log_text.pack(fill="both", expand=True)
+            self.log_collapse_btn.configure(text="▾ hide")
+
+    def _toggle_log_popout(self):
+        if self._pop_win is None:
+            self._pop_win = tk.Toplevel(self.root)
+            self._pop_win.title("Dell G15 5515 Toolkit — Log")
+            self._pop_win.geometry("900x480")
+            if getattr(self, "_icon_img", None) is not None:
+                try:
+                    self._pop_win.iconphoto(True, self._icon_img)
+                except tk.TclError:
+                    pass
+            self._pop_text = self._make_log_text(self._pop_win)
+            self._pop_text.pack(fill="both", expand=True, padx=8, pady=8)
+            self._pop_text.configure(state="normal")
+            self._pop_text.insert("end", "\n".join(self._log_lines[-2000:]) + ("\n" if self._log_lines else ""))
+            self._pop_text.configure(state="disabled")
+            self._pop_text.see("end")
+            self._pop_win.protocol("WM_DELETE_WINDOW", self._toggle_log_popout)
+            if not self._log_collapsed:
+                self._toggle_log_collapse()
+            self.log_popout_btn.configure(text="⇲ dock")
+        else:
+            try:
+                self._pop_win.destroy()
+            except tk.TclError:
+                pass
+            self._pop_win = self._pop_text = None
+            self.log_popout_btn.configure(text="⇱ pop out")
+            if self._log_collapsed:
+                self._toggle_log_collapse()
 
     def _build_dashboard_tab(self):
-        frame = tb.Frame(self.notebook, padding=16)
-        self.notebook.add(frame, text="⌂ Dashboard")
+        outer = tb.Frame(self.notebook)
+        self.notebook.add(outer, text="⌂ Dashboard")
+        frame = self._scroll_body(outer, pad=16)
 
         gauges = tb.Frame(frame)
         gauges.pack(fill="x", pady=(0, 20))
@@ -402,8 +516,9 @@ class ToolkitApp:
     ]
 
     def _build_keyboard_tab(self):
-        frame = tb.Frame(self.notebook, padding=16)
-        self.notebook.add(frame, text="⌨ Keyboard")
+        outer = tb.Frame(self.notebook)
+        self.notebook.add(outer, text="⌨ Keyboard")
+        frame = self._scroll_body(outer, pad=16)
 
         detected = dellg15_kbd is not None and dellg15_kbd.Keyboard._find() is not None
         if not detected:
@@ -555,45 +670,42 @@ class ToolkitApp:
     def _build_category_tab(self, category: str):
         outer = tb.Frame(self.notebook)
         self.notebook.add(outer, text=category)
-
-        canvas = tk.Canvas(outer, highlightthickness=0, bg=self.root.style.colors.bg)
-        scrollbar = tb.Scrollbar(outer, orient="vertical", command=canvas.yview)
-        inner = tb.Frame(canvas)
-        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=inner, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        inner = self._scroll_body(outer)
 
         for item in self.items.values():
             if item.category != category:
                 continue
-            row = tb.Frame(inner, padding=10, bootstyle="secondary")
-            row.pack(fill="x", padx=8, pady=4)
+            row = tb.Frame(inner, padding=16, bootstyle="dark")
+            row.pack(fill="x", padx=2, pady=4)
 
             item.var = tk.BooleanVar(value=False)
             cb = tb.Checkbutton(row, variable=item.var, bootstyle="round-toggle")
-            cb.pack(side="left", anchor="n", padx=(0, 10))
+            cb.pack(side="left", anchor="n", padx=(0, 14))
             item.checkbutton = cb
             if not item.hw_supported:
                 item.var.set(False)
                 cb.configure(state="disabled")
 
-            text_frame = tb.Frame(row)
-            text_frame.pack(side="left", fill="x", expand=True)
-            title_row = tb.Frame(text_frame)
-            title_row.pack(anchor="w", fill="x")
-            tb.Label(title_row, text=item.content, font=("Sans", 10, "bold")).pack(side="left")
-            if item.risk == "advanced":
-                tb.Label(title_row, text=" ADVANCED", bootstyle=(WARNING, "inverse"), font=("Sans", 7, "bold")).pack(side="left", padx=6)
-            tb.Label(text_frame, text=item.description, wraplength=760, bootstyle=SECONDARY, justify="left").pack(anchor="w")
+            item.status_label = tb.Label(row, text="checking…", width=15, anchor="e",
+                                         font=("Sans", 9, "bold"), bootstyle=SECONDARY)
+            item.status_label.pack(side="right", anchor="n", padx=(14, 0))
 
-            item.status_label = tb.Label(row, text="checking…", width=16, bootstyle=SECONDARY, anchor="e")
-            item.status_label.pack(side="right", anchor="n")
+            text_frame = tb.Frame(row, bootstyle="dark")
+            text_frame.pack(side="left", fill="both", expand=True)
+            title_row = tb.Frame(text_frame, bootstyle="dark")
+            title_row.pack(anchor="w", fill="x")
+            tb.Label(title_row, text=item.content, font=("Sans", 11, "bold"),
+                     bootstyle="inverse-dark").pack(side="left")
+            if item.risk == "advanced":
+                tb.Label(title_row, text="ADVANCED", bootstyle=(WARNING, "inverse"),
+                         font=("Sans", 7, "bold"), padding=(5, 1)).pack(side="left", padx=8)
+            tb.Label(text_frame, text=item.description, wraplength=1250,
+                     bootstyle="inverse-dark", justify="left").pack(anchor="w", pady=(4, 0))
 
     def _build_presets_tab(self):
-        frame = tb.Frame(self.notebook, padding=14)
-        self.notebook.add(frame, text="Presets")
+        outer = tb.Frame(self.notebook)
+        self.notebook.add(outer, text="Presets")
+        frame = self._scroll_body(outer, pad=14)
         tb.Label(frame, text="One click applies a curated bundle of tweaks + installs apps.", bootstyle=SECONDARY).pack(anchor="w", pady=(0, 12))
         for preset_id, data in self.presets.items():
             box = tb.Frame(frame, padding=14, bootstyle="secondary")
@@ -678,15 +790,23 @@ class ToolkitApp:
         self.log_queue.put(line)
 
     def _poll_log_queue(self):
+        new = []
         try:
             while True:
-                line = self.log_queue.get_nowait()
-                self.log_text.configure(state="normal")
-                self.log_text.insert("end", line + "\n")
-                self.log_text.see("end")
-                self.log_text.configure(state="disabled")
+                new.append(self.log_queue.get_nowait())
         except queue.Empty:
             pass
+        if new:
+            self._log_lines.extend(new)
+            del self._log_lines[:-4000]
+            chunk = "\n".join(new) + "\n"
+            for widget in (self.log_text, self._pop_text):
+                if widget is None:
+                    continue
+                widget.configure(state="normal")
+                widget.insert("end", chunk)
+                widget.see("end")
+                widget.configure(state="disabled")
         self.root.after(150, self._poll_log_queue)
 
     def _refresh_all_status(self):
