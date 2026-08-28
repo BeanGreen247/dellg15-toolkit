@@ -261,7 +261,10 @@ Install via the Toolkit GUI (Gaming tab):
   **BtrfsNoatime**, **NvmeIoTune**, **WifiPowersaveOff**,
   **NetLatencySysctl** (BBR + fq + TCP Fast Open), **DnfSpeed** (parallel
   downloads + fastestmirror), **GamingResourceLimits** (nofile / map-count /
-  inotify for Wine + Proton).
+  inotify for Wine + Proton), **AutoMountDrives** (permanent `/etc/fstab`
+  entries mounting every fixed internal data partition — a second games/data
+  NVMe, NTFS via `ntfs3` included — at a stable `/mnt/<label>` with `nofail`;
+  skips OS/boot/swap/fstab/LUKS/removable).
 - **Software / Monitoring / Streaming / RGB / Gaming** — Steam, Lutris,
   Heroic, GameMode/MangoHud, gamescope, vkBasalt, btop/nvtop/GOverlay/
   fastfetch, Discord/OBS/Sunshine/Moonlight, OpenRGB, controller udev rules,
