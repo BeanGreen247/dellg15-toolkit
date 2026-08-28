@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Dell G15 Toolkit
+GenericName=Hardware & Gaming Tweaks
+Comment=Tweaks, drivers, RGB keyboard and gaming setup for the Dell G15 5515 on Nobara
+Exec=python3 __TOOLKIT_DIR__/dellg15_toolkit.py
+Icon=__TOOLKIT_DIR__/assets/icon-256.png
+Terminal=false
+Categories=Settings;HardwareSettings;
+Keywords=dell;g15;rgb;gamemode;performance;nvidia;tweak;
+StartupNotify=true
