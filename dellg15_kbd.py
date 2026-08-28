@@ -76,6 +76,8 @@ DURATION_2000 = 2000
 ZONE_NAMES = ["Left", "Middle", "Right", "Numpad"]
 ZONE_COUNT = 4
 GKEY_ZONE = 0  # the G-key sits in the leftmost zone
+MIN_BRIGHTNESS = 1  # never send a full dim(=100): on this firmware the
+                    # backlight then can't be brought back without a reboot
 
 
 def _ioc(direction: int, nr: int, size: int) -> int:
@@ -216,10 +218,12 @@ class Keyboard:
         self._recv()
 
     def set_brightness(self, percent: int, zones: list[int] | None = None) -> None:
-        """percent: 0 = off, 100 = full. Converts to the controller's
-        inverted DIM scale."""
+        """percent: MIN_BRIGHTNESS (1) .. 100. Converts to the controller's
+        inverted DIM scale. Deliberately floored at 1% — a true off (dim=100)
+        can leave this firmware's backlight stuck dark until a reboot."""
         z = zones if zones is not None else list(range(ZONE_COUNT))
-        self._dim(100 - max(0, min(100, percent)), z)
+        percent = max(MIN_BRIGHTNESS, min(100, percent))
+        self._dim(100 - percent, z)
 
     def set_zones(self, colors: dict[int, tuple[int, int, int]], brightness: int = 100) -> None:
         """colors: {zone_index: (r, g, b)}. brightness: 0 (off) .. 100 (full)."""
@@ -234,7 +238,8 @@ class Keyboard:
         self.set_zones({z: rgb for z in range(ZONE_COUNT)}, brightness)
 
     def off(self) -> None:
-        self.set_brightness(0)
+        """Dims to the 1% floor rather than truly off — see set_brightness."""
+        self.set_brightness(MIN_BRIGHTNESS)
 
 
 # --------------------------------------------------------------------------- #

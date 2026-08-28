@@ -561,7 +561,7 @@ class ToolkitApp:
         # ---- brightness ----
         br_box = tb.Labelframe(frame, text="Brightness", padding=12)
         br_box.pack(fill="x", pady=(0, 12))
-        scale = tb.Scale(br_box, from_=0, to=100, variable=self.kbd_brightness, orient="horizontal")
+        scale = tb.Scale(br_box, from_=1, to=100, variable=self.kbd_brightness, orient="horizontal")
         scale.pack(side="left", fill="x", expand=True, padx=(0, 10))
         scale.bind("<ButtonRelease-1>", lambda _e: self._kbd_apply_brightness())
         tb.Label(br_box, textvariable=self.kbd_brightness, width=4).pack(side="left")
@@ -599,8 +599,10 @@ class ToolkitApp:
 
         bottom = tb.Frame(frame)
         bottom.pack(fill="x", pady=(4, 0))
-        tb.Button(bottom, text="Turn backlight OFF", bootstyle=DANGER,
+        tb.Button(bottom, text="Dim to minimum (1%)", bootstyle=(SECONDARY, "outline"),
                   command=self._kbd_off).pack(side="left")
+        tb.Label(bottom, text="  (no true-off — dim=0 can leave this firmware's backlight "
+                              "stuck dark until a reboot)", bootstyle=SECONDARY).pack(side="left")
         tb.Label(
             frame,
             text="The controller keeps this in a non-persistent slot — it resets on reboot/replug. "
@@ -679,7 +681,8 @@ class ToolkitApp:
                       f"zone {z} ({dellg15_kbd.ZONE_NAMES[z]}) -> {self._safe_hex(self.kbd_zone_vars[z].get())}")
 
     def _kbd_off(self):
-        self._kbd_run(lambda kb: kb.off(), "backlight off")
+        self.kbd_brightness.set(dellg15_kbd.MIN_BRIGHTNESS)
+        self._kbd_run(lambda kb: kb.off(), "dimmed to minimum")
 
     def _build_category_tab(self, category: str):
         outer = tb.Frame(self.notebook)
