@@ -163,33 +163,41 @@ Reading clocks/temps needs no privileges at all. Every toggle (tray, G-key,
 or the Dashboard switch) also raises a 10-second desktop notification —
 *Game Mode: ON* / *Game Mode: OFF*.
 
-## Keyboard tab (`dellg15_kbd.py`)
+## Keyboard tab (`dellg15_kbd.py`) — doesn't work on the 5515 (yet)
 
-The 5515's 4-zone RGB keyboard is the Alienware **AW-ELC** controller (USB
-`187c:0550`) — bound to `hid-generic`, no kernel driver, so no
-`kbd_backlight` LED and no KDE control. OpenRGB detects it but has the wrong
-zone count for this exact model (`platform 0x0E05` isn't in its quirk table,
-so it drives 16 zones when there are 4) and its default brightness is 0 — net
-result, nothing lights.
+> **Known limitation.** Verified on a real G15 5515 (BIOS 1.31.0): the
+> keyboard backlight **cannot be driven from Linux**. This BIOS ships no
+> SMBIOS keyboard-illumination tokens, so `dell-laptop` creates no
+> `kbd_backlight` LED and the Fn backlight key is dead; mainline
+> `alienware-wmi` has no RGB; and the raw AW-ELC HID controller (USB
+> `187c:0550`, platform `0x0E05`) **ACKs colour/brightness writes but never
+> lights up** — OpenRGB has this same controller unmapped. Reads work, writes
+> don't. It lights during BIOS/POST because the firmware drives it there;
+> once Linux boots, nothing does.
+>
+> **If you want the backlight on:** check BIOS setup (F2) for a *Keyboard
+> Backlight / Illumination* option — brightness `Bright`, timeout `Never` /
+> longest, and any "keyboard backlight while OS running" toggle. On some G15
+> units the EC will then hold it on regardless of the OS. Otherwise it's an
+> upstream gap — a future kernel with `alienware-wmi-wmax` RGB (in active
+> development) should fix it.
 
-`dellg15_kbd.py` talks the AW-ELC feature-report protocol directly (stdlib
-only) with the right 4 zones — **Left / Middle / Right / Numpad** — and an
-un-inverted brightness. The Toolkit's **Keyboard tab** wraps it: a brightness
-slider, whole-keyboard colour + presets, and a per-zone colour picker (the
-G-key lives in the Left zone). CLI too:
+`dellg15_kbd.py` is a faithful stdlib implementation of the AW-ELC
+feature-report protocol (4 zones — **Left / Middle / Right / Numpad**), kept
+in the tree as best-effort / forward-compatible: it'll start working if the
+kernel or a BIOS change makes the controller respond. The **Keyboard tab**
+wraps it (brightness slider, whole-keyboard + per-zone colour) behind a
+warning banner. CLI:
 
 ```bash
-python3 dellg15_kbd.py on --color 00aaff --brightness 80
-python3 dellg15_kbd.py zone 0 --color ff2200
-python3 dellg15_kbd.py off
-python3 dellg15_kbd.py info          # platform id / firmware / zone count
+python3 dellg15_kbd.py info          # platform id / firmware / zones (this works)
+python3 dellg15_kbd.py on --color 00aaff --brightness 80   # ACK'd, no visible effect
 ```
 
-The controller forgets its state on reboot/replug/resume, so the
-**KbdBacklightFix** tweak (Power tab) installs a systemd service + a
-`systemd-sleep` hook that re-apply whatever you last set (saved to
-`~/.config/dellg15-toolkit/kbd.json`) at boot and after every wake — this is
-also the fix for the backlight being stuck off after boot.
+The **KbdBacklightFix** tweak (Power tab) installs a `systemd` service + a
+`systemd-sleep` hook that re-apply `~/.config/dellg15-toolkit/kbd.json` at
+boot and after resume — harmless and forward-compatible, but a no-op on this
+unit today.
 
 ### Dedicated key binding — confirmed working
 
@@ -216,9 +224,9 @@ when selecting the performance profile."* So one press → `performance`
 (G-Mode on), press again → `balanced` (off). The `gaming-performance` /
 `gaming-balanced` scripts do exactly that, and additionally slam the
 `alienware-wmi` fan boost (`fanN_boost` → max / back to 0) for the AWCC-style
-100 % fan on top of the profile's own ramp. The listener also lights the
-**Left keyboard zone red** while G-Mode is active (like AWCC's red G-key),
-if the RGB keyboard + a base colour from the Keyboard tab are set up.
+100 % fan on top of the profile's own ramp. (It also *tries* to tint the
+Left keyboard zone red while G-Mode is active, like AWCC's red G-key — but
+see the Keyboard-tab note: RGB writes don't currently take on the 5515.)
 
 Default trigger is **one press** (matches Windows). `KEY_PERFORMANCE` fires
 as an instant down+up so a long-press can't be used; if a bare tap is too
@@ -272,12 +280,10 @@ Install via the Toolkit GUI (Gaming tab):
   **MangoHudGlobalToggle** (see "Global MangoHud" below). For Wine/Proton:
   **ProtonUp-Qt**, **Protontricks**, **Bottles**, and the Steam **Proton
   BattlEye / EasyAntiCheat Runtime** installers — see "GTA V Online" below.
-- **Keyboard backlight** — `dellg15_kbd.py`, a standalone stdlib driver for
-  the AW-ELC RGB controller (USB `187c:0550`). The 5515's `platform 0x0E05`
-  is missing from OpenRGB's zone-quirk table, so OpenRGB drives it as 16
-  zones when it's really 4 and nothing lights; this talks the AW-ELC
-  feature-report protocol directly with the correct 4 zones + explicit
-  brightness. `dellg15_kbd.py on|off|zone N|info`.
+- **Keyboard backlight** — `dellg15_kbd.py` + the Keyboard tab. **Not
+  functional on the 5515** (no SMBIOS tokens, no `alienware-wmi` RGB, AW-ELC
+  HID writes are ACK'd but don't light) — kept as a forward-compatible
+  best-effort. See "Keyboard tab" above.
 - **Game Mode notifications** — pressing the G-key (or toggling from the
   tray/Dashboard) raises a 10-second desktop notification, *Game Mode: ON*
   / *Game Mode: OFF*.

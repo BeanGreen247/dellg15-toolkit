@@ -531,6 +531,20 @@ class ToolkitApp:
             ).pack(anchor="w")
             return
 
+        warn = tb.Labelframe(frame, text="⚠  Known limitation — likely does nothing on this unit",
+                             bootstyle=WARNING, padding=12)
+        warn.pack(fill="x", pady=(0, 14))
+        tb.Label(
+            warn, wraplength=1100, justify="left", bootstyle="inverse-warning",
+            text="On the tested G15 5515 the keyboard backlight can't be driven from Linux: "
+                 "this BIOS ships no SMBIOS keyboard-illumination tokens (no kernel LED, the Fn "
+                 "backlight key is dead), mainline alienware-wmi has no RGB, and the AW-ELC HID "
+                 "controller accepts these commands but doesn't light up (OpenRGB has it unmapped "
+                 "too). The controls below still send the packets — harmless, and they'll start "
+                 "working if a future kernel adds support or you enable a keyboard-backlight "
+                 "option in BIOS setup — but expect no visible change right now.",
+        ).pack(anchor="w")
+
         self._kbd_busy = False
         self.kbd_brightness = tk.IntVar(value=100)
         self.kbd_all_hex = tk.StringVar(value="#ffffff")

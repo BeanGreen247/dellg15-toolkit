@@ -219,17 +219,6 @@
     ],
     "undo": ["rm -f /etc/sudoers.d/dellg15-gamemode-toggle"]
   },
-  "KeyboardBacklightTimeout": {
-    "Content": "Keyboard Backlight: Disable Auto-Off Timeout",
-    "Description": "DAMX exposes an explicit keyboard backlight timeout control on Acer; Dell keyboards don't have a dedicated WMI knob for this, so this uses the generic Linux LED class instead — sets max_brightness once, no auto-timeout to fight since one isn't kernel-exposed here. Best-effort: only does something if a *::kbd_backlight LED exists.",
-    "category": "RGB",
-    "risk": "advanced",
-    "check": "for d in /sys/class/leds/*kbd_backlight*; do [ -e \"$d\" ] && exit 0; done; exit 1",
-    "apply": [
-      "for d in /sys/class/leds/*kbd_backlight*; do [ -e \"$d\" ] && cat \"$d/max_brightness\" > \"$d/brightness\"; done"
-    ],
-    "undo": []
-  },
   "RaplPowerPermissions": {
     "Content": "Fix CPU Power-Reading Permissions (RAPL)",
     "Description": "Linux locks CPU package power counters (RAPL, under /sys/class/powercap) to root-only by default since 2020 (a side-channel security mitigation) — without this, the Dashboard tab and the tray icon (which deliberately run unprivileged) can never show real CPU wattage, always 'n/a'. Adds a udev rule making them world-readable, the same fix MangoHud's own docs recommend for its power display. Note: Nobara 43 already ships these files world-readable, so this is usually a no-op there — apply it only if the Dashboard actually shows 'n/a' for CPU wattage. Trade-off: makes RAPL energy counters readable by any local user/process, a known but low-severity timing side-channel — standard practice on gaming-focused distros/tools, not enabled by default here.",
@@ -396,8 +385,8 @@
     ]
   },
   "KbdBacklightFix": {
-    "Content": "Keyboard Backlight: fix stuck-off + persist",
-    "Description": "The 5515's AW-ELC RGB keyboard has no kernel driver — it lights in BIOS but goes dark once Linux boots, and its controller forgets any colour on reboot/replug/resume. This installs dellg15_kbd.py to /usr/local/bin plus a systemd service and a systemd-sleep hook that re-apply the lighting you last set in the Keyboard tab (from ~/.config/dellg15-toolkit/kbd.json) at boot and after every resume. Set a colour in the Keyboard tab first, or it has nothing to restore. Reversible.",
+    "Content": "Keyboard Backlight: re-apply saved colour at boot/resume (best-effort — see note)",
+    "Description": "KNOWN LIMITATION on the tested Dell G15 5515: the keyboard backlight cannot currently be driven from Linux at all. This BIOS exposes no SMBIOS keyboard-illumination tokens (so no kernel kbd_backlight LED, and the Fn backlight key does nothing), mainline alienware-wmi has no RGB, and the raw AW-ELC HID controller accepts colour/brightness writes but produces no visible light (OpenRGB has this controller — platform 0x0E05 — unmapped too). Reads work; writes don't. This tweak still installs dellg15_kbd.py + a systemd service + a systemd-sleep hook that re-apply ~/.config/dellg15-toolkit/kbd.json (set in the Keyboard tab) at boot and after resume — it's harmless and will start working automatically IF a future kernel adds support or your BIOS has a keyboard-backlight option you can enable, but right now it very likely does nothing visible. Reversible.",
     "category": "Power",
     "risk": "advanced",
     "check": "test -x /usr/local/bin/dellg15-kbd && systemctl is-enabled dellg15-kbd.service 2>/dev/null | grep -q enabled",

@@ -50,11 +50,18 @@ ssh g15 'cd ~/DellG15Toolkit && sudo ./install.sh'    # system-install to /opt
   `alienware-wmi`). Kernel docs: performance profile toggles firmware G-Mode.
   `gaming-performance`/`gaming-balanced` also slam `alienware_wmi` `fanN_boost`
   (hwmon) to 255/0 for the AWCC-style fan.
-- **RGB keyboard** = Alienware **AW-ELC** (USB `187c:0550`), `hid-generic`, no
-  kernel driver. Its platform id is **`0x0E05`** — *missing from OpenRGB's
-  quirk table*, so OpenRGB drives 16 zones when it has **4**
-  (Left/Middle/Right/Numpad), and its "dim" value is **inverted** (0 = full,
-  100 = off). `dellg15_kbd.py` speaks the feature-report protocol directly.
+- **RGB keyboard = NOT controllable from Linux on this unit.** It's the
+  Alienware **AW-ELC** (USB `187c:0550`) on `hid-generic`. This BIOS exposes
+  **no SMBIOS keyboard-illumination tokens** (all `location=0xffff`) → no
+  `dell-laptop` `kbd_backlight` LED, dead Fn key, `smbios-keyboard-ctl` gets
+  `Invalid call 4/11`. Mainline `alienware-wmi` has no RGB. The AW-ELC HID
+  device: **reads work** (`dellg15_kbd.py info`), **writes are ACK'd but
+  produce no light** — OpenRGB has platform `0x0E05` unmapped too.
+  `dellg15_kbd.py` + Keyboard tab + `KbdBacklightFix` are kept as
+  forward-compatible best-effort only, gated behind honest warnings. Real
+  fix path: a BIOS keyboard-backlight option, or a future kernel with
+  `alienware-wmi-wmax` RGB. The `KeyboardBacklightTimeout` tweak was removed
+  (needed a `*kbd_backlight*` LED that doesn't exist here).
 - **`dnf` GPG**: Nobara serves some rawhide-based (`.fc44`) packages signed
   with the **Fedora 44** key, which ships on disk un-imported. Fix once with
   `sudo rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-44-primary`.

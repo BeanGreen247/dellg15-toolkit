@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """Alienware AW-ELC keyboard-backlight control for the Dell G15 5515.
 
+STATUS (tested on a real 5515, BIOS 1.31.0): the read path works — `info`
+returns a valid platform id / firmware / zone count — but colour and
+brightness **writes have no visible effect**. This BIOS exposes no SMBIOS
+keyboard-illumination tokens, mainline `alienware-wmi` has no RGB, and the
+AW-ELC controller ACKs every packet without lighting the keys. OpenRGB has
+this same controller (platform 0x0E05) unmapped. Treat this module as a
+best-effort / forward-compatible protocol implementation, not a working
+feature on this hardware.
+
 Why this exists
 ---------------
 The 5515's per-zone RGB keyboard is the "AW-ELC" controller (USB 187c:0550),
