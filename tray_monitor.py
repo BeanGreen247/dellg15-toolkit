@@ -42,7 +42,10 @@ class TrayMonitor:
         self.app = QApplication(sys.argv)
         self.app.setQuitOnLastWindowClosed(False)
 
-        icon = QIcon.fromTheme("utilities-system-monitor")
+        icon_file = Path(__file__).resolve().parent / "assets" / "icon-256.png"
+        icon = QIcon(str(icon_file)) if icon_file.is_file() else QIcon()
+        if icon.isNull():
+            icon = QIcon.fromTheme("utilities-system-monitor")
         if icon.isNull():
             icon = QIcon.fromTheme("computer")
         self.tray = QSystemTrayIcon(icon)

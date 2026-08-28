@@ -5,7 +5,7 @@
     "category": "GPU",
     "manager": "dnf",
     "requires_vendor": "nvidia",
-    "check": "rpm -q akmod-nvidia >/dev/null 2>&1 || lsmod | grep -q '^nvidia '",
+    "check": "rpm -qa 2>/dev/null | grep -qE '^(akmod-nvidia|nvidia-driver)-' || lsmod | grep -q '^nvidia '",
     "install": ["dnf install -y akmod-nvidia xorg-x11-drv-nvidia-cuda"]
   },
   "EnvyControl": {
@@ -183,5 +183,61 @@
     "manager": "flatpak",
     "package": "com.moonlight_stream.Moonlight",
     "check": "flatpak list 2>/dev/null | grep -q com.moonlight_stream.Moonlight"
+  },
+  "ProtonUpQt": {
+    "Content": "ProtonUp-Qt",
+    "Description": "One-click installer/manager for GE-Proton, Wine-GE and Luxtorpeda into Steam and Lutris. The easy way to get a current custom Proton for GTA V. See the 'GTA V Online' section of the README for the full recipe.",
+    "category": "Software",
+    "manager": "flatpak",
+    "package": "net.davidotek.pupgui2",
+    "check": "flatpak list 2>/dev/null | grep -q net.davidotek.pupgui2"
+  },
+  "Protontricks": {
+    "Content": "Protontricks",
+    "Description": "winetricks for Steam/Proton prefixes — install DLLs/fonts (vcrun2019, d3dcompiler_47, corefonts…) into a specific game's Proton prefix. Needed for the Rockstar launcher / Social Club under Proton.",
+    "category": "Software",
+    "manager": "flatpak",
+    "package": "com.github.Matoking.protontricks",
+    "check": "flatpak list 2>/dev/null | grep -q com.github.Matoking.protontricks"
+  },
+  "Bottles": {
+    "Content": "Bottles",
+    "Description": "Isolated Wine-prefix manager with bundled Wine-GE/Soda runners and a dependency installer — the non-Steam path for the Rockstar Games Launcher + GTA V. See the README's 'GTA V Online' section.",
+    "category": "Software",
+    "manager": "flatpak",
+    "package": "com.usebottles.bottles",
+    "check": "flatpak list 2>/dev/null | grep -q com.usebottles.bottles"
+  },
+  "ProtonBattlEyeRuntime": {
+    "Content": "Steam: Proton BattlEye Runtime",
+    "Description": "GTA Online uses BattlEye anti-cheat; Proton needs this runtime tool (Steam app 1161040) for it to load. Triggers a Steam install of it — Steam must be installed and will open. If it doesn't take, install 'Proton BattlEye Runtime' from your Steam library's Tools section manually.",
+    "category": "Software",
+    "manager": "shell",
+    "check": "test -d /home/{USER}/.steam/steam/steamapps/common/'Proton BattlEye Runtime' -o -d /home/{USER}/.local/share/Steam/steamapps/common/'Proton BattlEye Runtime'",
+    "install": ["su - {USER} -c 'timeout 30 steam steam://install/1161040 >/dev/null 2>&1 || true'"]
+  },
+  "ProtonEacRuntime": {
+    "Content": "Steam: Proton EasyAntiCheat Runtime",
+    "Description": "Some Rockstar/other titles use EasyAntiCheat; this is the Proton runtime tool for it (Steam app 1826330). Same behaviour as the BattlEye runtime entry — opens Steam to install it.",
+    "category": "Software",
+    "manager": "shell",
+    "check": "test -d /home/{USER}/.steam/steam/steamapps/common/'Proton EasyAntiCheat Runtime' -o -d /home/{USER}/.local/share/Steam/steamapps/common/'Proton EasyAntiCheat Runtime'",
+    "install": ["su - {USER} -c 'timeout 30 steam steam://install/1826330 >/dev/null 2>&1 || true'"]
+  },
+  "VkBasalt": {
+    "Content": "vkBasalt",
+    "Description": "Vulkan post-processing layer (CAS sharpening, FXAA, SMAA) — cheap image-quality boost for games, toggle in-game with a hotkey.",
+    "category": "Software",
+    "manager": "dnf",
+    "package": "vkBasalt",
+    "check": "rpm -q vkBasalt >/dev/null 2>&1"
+  },
+  "NtfsSupport": {
+    "Content": "NTFS read/write support",
+    "Description": "Windows/dual-boot drives: the in-kernel ntfs3 driver (read/write) plus ntfs-3g (FUSE fallback) and ntfsprogs (mkfs.ntfs / ntfsfix). Nobara normally ships all of this already — this entry just confirms it and reinstalls if something's missing.",
+    "category": "Software",
+    "manager": "shell",
+    "check": "rpm -q ntfs-3g ntfsprogs >/dev/null 2>&1 && command -v mkfs.ntfs mount.ntfs-3g >/dev/null 2>&1",
+    "install": ["dnf install -y ntfs-3g ntfsprogs"]
   }
 }

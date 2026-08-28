@@ -17,6 +17,7 @@ import os
 import pwd
 import queue
 import shutil
+import site
 import subprocess
 import sys
 import threading
@@ -26,6 +27,7 @@ from tkinter import messagebox
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_DIR = BASE_DIR / "config"
+ASSETS_DIR = BASE_DIR / "assets"
 sys.path.insert(0, str(BASE_DIR))
 
 try:
@@ -37,6 +39,11 @@ except ImportError:
     sys.exit(1)
 
 import sensors  # noqa: E402  (local module, no GUI deps)
+
+try:
+    import dellg15_kbd  # noqa: E402  (AW-ELC RGB keyboard, stdlib-only)
+except Exception:  # noqa: BLE001
+    dellg15_kbd = None
 
 CATEGORY_ORDER = ["GPU", "Power", "Performance", "Software", "Monitoring", "Streaming", "RGB", "Gaming"]
 THEME = "darkly"
@@ -69,6 +76,16 @@ def self_elevate():
     # can't reach the X/Wayland session at all ("no display name" crash).
     present = {v: os.environ[v] for v in DISPLAY_VARS if v in os.environ}
 
+    # pkexec/sudo re-exec as root, which no longer sees the invoking user's
+    # ~/.local/lib/pythonX.Y/site-packages — where `pip install --user
+    # ttkbootstrap` (the documented install path, since it isn't packaged for
+    # Fedora/Nobara) lands. Carry that dir forward on PYTHONPATH so the import
+    # at the top of this file still resolves after elevation.
+    user_site = site.getusersitepackages()
+    if os.path.isdir(user_site):
+        existing = os.environ.get("PYTHONPATH", "")
+        present["PYTHONPATH"] = f"{user_site}:{existing}" if existing else user_site
+
     if shutil.which("pkexec"):
         env_pairs = [f"{k}={v}" for k, v in present.items()]
         os.execvp("pkexec", ["pkexec", "env", *env_pairs, sys.executable, script])
@@ -80,6 +97,24 @@ def self_elevate():
         os.execvp("sudo", args)
     print("Need root. Run: sudo python3 dellg15_toolkit.py")
     sys.exit(1)
+
+
+def _maximize(root: "tb.Window") -> None:
+    """Start maximised. '-zoomed' is the reliable path on X11/XWayland (KDE);
+    fall back to sizing the window to the screen if the WM rejects it."""
+    try:
+        root.attributes("-zoomed", True)
+        root.update_idletasks()
+        if root.winfo_width() > 100:  # WM honoured it
+            return
+    except tk.TclError:
+        pass
+    try:
+        root.state("zoomed")  # works on some builds/WMs
+        return
+    except tk.TclError:
+        pass
+    root.geometry(f"{root.winfo_screenwidth()}x{root.winfo_screenheight()}+0+0")
 
 
 def load_json(name: str) -> dict:
@@ -105,6 +140,11 @@ class Item:
             return cmd.replace("{USER}", user).replace("{TOOLKIT_DIR}", str(BASE_DIR))
 
         self.check_cmd = sub(data.get("check", ""))
+        # Optional: a tweak whose real effect only lands after a reboot (kernel
+        # cmdline) can declare `check_pending` — true once the change is staged
+        # in the bootloader but not yet live. The UI shows "Pending reboot" and
+        # Apply/Presets skip it, so the user doesn't re-select and re-run it.
+        self.check_pending_cmd = sub(data.get("check_pending", ""))
         if kind == "tweak":
             self.apply_cmds = [sub(c) for c in data.get("apply", [])]
             self.undo_cmds = [sub(c) for c in data.get("undo", [])]
@@ -125,9 +165,15 @@ class Item:
                 self.apply_cmds = []
             self.undo_cmds = []
         self.applied = False
+        self.pending = False  # staged (bootloader) but needs a reboot to be live
         self.var = None  # tk.BooleanVar, set when widget built
         self.status_label = None
         self.checkbutton = None
+
+    @property
+    def done(self) -> bool:
+        """Already in the desired state — nothing to (re-)apply."""
+        return self.applied or self.pending
 
 
 def run_cmd(cmd: str) -> tuple[bool, str]:
@@ -144,8 +190,10 @@ class ToolkitApp:
     def __init__(self, root: "tb.Window"):
         self.root = root
         self.user = resolve_real_user()
-        root.title("Dell G15 Toolkit — Nobara Linux")
-        root.geometry("1080x760")
+        root.title("Dell G15 5515 Toolkit — Nobara Linux")
+        root.geometry("1080x760")  # fallback size if the WM ignores maximise
+        _maximize(root)
+        self._set_window_icon(root)
 
         self.has_nvidia = sensors.has_nvidia_gpu()
         self.has_amd = sensors.has_amd_gpu()
@@ -156,6 +204,7 @@ class ToolkitApp:
 
         self.log_queue: queue.Queue = queue.Queue()
         self.dash_queue: queue.Queue = queue.Queue()
+        self.status_queue: queue.Queue = queue.Queue()
         self.worker_running = False
         self.gamemode_var = tk.BooleanVar(value=False)
         self._suppress_gamemode_signal = False
@@ -163,6 +212,7 @@ class ToolkitApp:
         self._build_ui()
         self.root.after(100, self._poll_log_queue)
         self.root.after(100, self._poll_dash_queue)
+        self.root.after(100, self._poll_status_queue)
         threading.Thread(target=self._refresh_all_status, daemon=True).start()
 
         self.dash_running = True
@@ -172,6 +222,18 @@ class ToolkitApp:
     def _on_close(self):
         self.dash_running = False
         self.root.destroy()
+
+    def _set_window_icon(self, root):
+        for name in ("icon-256.png", "icon-128.png", "icon.png"):
+            path = ASSETS_DIR / name
+            if not path.is_file():
+                continue
+            try:
+                self._icon_img = tk.PhotoImage(file=str(path))  # keep a reference
+                root.iconphoto(True, self._icon_img)
+            except tk.TclError:
+                pass
+            return
 
     def _load_items(self):
         tweaks = load_json("tweaks.json")
@@ -200,19 +262,37 @@ class ToolkitApp:
         header.pack(fill="x")
         tb.Label(
             header,
-            text="Dell G15 5515 Ryzen Edition",
+            text="Dell G15 5515 Toolkit",
             font=("Sans", 15, "bold"),
         ).pack(side="left")
         tb.Label(
-            header, text="  — Nobara Linux, this laptop's hardware only",
+            header, text="  — Nobara Linux · targets the Dell G15 5515 (Ryzen 7 5800H + RTX 3050 Ti) only",
             font=("Sans", 10), bootstyle=SECONDARY,
         ).pack(side="left")
         tb.Label(header, text=f"running as {self.user} (elevated)", bootstyle=SECONDARY).pack(side="right")
+
+        # actual DMI identity of the machine this is running on
+        m = sensors.detect_model()
+        if m["is_target"]:
+            txt = f"✓  Detected: {m['vendor']} {m['product']}" + (f" (board {m['board']})" if m['board'] else "") + \
+                  f", BIOS {m['bios']} — matches the target platform."
+            style = SUCCESS
+        elif m["is_close"]:
+            txt = (f"⚠  Detected: {m['vendor']} {m['product']} — a G15 5515 variant, but not the exact "
+                   f"unit this was built against. Most things should work; some sysfs paths may differ.")
+            style = WARNING
+        else:
+            txt = (f"⚠  Detected: {m['vendor']} {m['product']} — this is NOT a Dell G15 5515. "
+                   f"The Toolkit's checks and tweaks are written for that board; expect breakage.")
+            style = DANGER
+        tb.Label(self.root, text=txt, bootstyle=style, padding=(12, 0, 12, 6),
+                 wraplength=1400, justify="left").pack(fill="x")
 
         self.notebook = tb.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
         self._build_dashboard_tab()
+        self._build_keyboard_tab()
         self._build_presets_tab()
 
         categories = sorted(
@@ -312,6 +392,165 @@ class ToolkitApp:
                  "Needs the Power/GPU tweaks below installed first.",
             bootstyle=SECONDARY, wraplength=900,
         ).pack(anchor="w", pady=(6, 0))
+
+    # ---------- keyboard RGB tab ----------
+
+    _KBD_PRESETS = [
+        ("White", "#ffffff"), ("Red", "#ff0000"), ("Green", "#00ff00"),
+        ("Blue", "#0000ff"), ("Cyan", "#00ffff"), ("Magenta", "#ff00ff"),
+        ("Amber", "#ff6a00"),
+    ]
+
+    def _build_keyboard_tab(self):
+        frame = tb.Frame(self.notebook, padding=16)
+        self.notebook.add(frame, text="⌨ Keyboard")
+
+        detected = dellg15_kbd is not None and dellg15_kbd.Keyboard._find() is not None
+        if not detected:
+            tb.Label(
+                frame,
+                text="No Alienware AW-ELC RGB keyboard (USB 187c:0550) detected.\n"
+                     "This tab controls the 4-zone RGB backlight on the Dell G15 5515; "
+                     "if your unit has the single-colour keyboard there's nothing here to drive.",
+                bootstyle=SECONDARY, justify="left",
+            ).pack(anchor="w")
+            return
+
+        self._kbd_busy = False
+        self.kbd_brightness = tk.IntVar(value=100)
+        self.kbd_all_hex = tk.StringVar(value="#ffffff")
+        self.kbd_zone_vars: dict[int, tk.StringVar] = {}
+
+        # pre-fill from saved state if present
+        saved = dellg15_kbd.load_state()
+        if saved:
+            zc, br = saved
+            self.kbd_brightness.set(br)
+            for z, rgb in zc.items():
+                self.kbd_zone_vars.setdefault(z, tk.StringVar()).set("#%02x%02x%02x" % tuple(rgb))
+
+        # ---- brightness ----
+        br_box = tb.Labelframe(frame, text="Brightness", padding=12)
+        br_box.pack(fill="x", pady=(0, 12))
+        scale = tb.Scale(br_box, from_=0, to=100, variable=self.kbd_brightness, orient="horizontal")
+        scale.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        scale.bind("<ButtonRelease-1>", lambda _e: self._kbd_apply_brightness())
+        tb.Label(br_box, textvariable=self.kbd_brightness, width=4).pack(side="left")
+
+        # ---- whole keyboard ----
+        whole = tb.Labelframe(frame, text="Whole keyboard", padding=12)
+        whole.pack(fill="x", pady=(0, 12))
+        r1 = tb.Frame(whole)
+        r1.pack(fill="x")
+        self._kbd_swatch(r1, self.kbd_all_hex).pack(side="left", padx=(0, 8))
+        tb.Button(r1, text="Pick colour…", bootstyle=SECONDARY,
+                  command=lambda: self._kbd_pick(self.kbd_all_hex)).pack(side="left", padx=4)
+        tb.Button(r1, text="Apply to all zones", bootstyle=SUCCESS,
+                  command=self._kbd_apply_all).pack(side="left", padx=4)
+        r2 = tb.Frame(whole)
+        r2.pack(fill="x", pady=(8, 0))
+        for name, hexv in self._KBD_PRESETS:
+            tb.Button(r2, text=name, bootstyle=SECONDARY, width=8,
+                      command=lambda h=hexv: (self.kbd_all_hex.set(h), self._kbd_apply_all())
+                      ).pack(side="left", padx=2)
+
+        # ---- per-zone ----
+        pz = tb.Labelframe(frame, text="Per-zone  (Left = where the G-key is)", padding=12)
+        pz.pack(fill="x", pady=(0, 12))
+        for zi, zname in enumerate(dellg15_kbd.ZONE_NAMES):
+            row = tb.Frame(pz)
+            row.pack(fill="x", pady=3)
+            tb.Label(row, text=zname, width=10).pack(side="left")
+            hv = self.kbd_zone_vars.setdefault(zi, tk.StringVar(value="#ffffff"))
+            self._kbd_swatch(row, hv).pack(side="left", padx=(0, 8))
+            tb.Button(row, text="Pick…", bootstyle=SECONDARY,
+                      command=lambda v=hv: self._kbd_pick(v)).pack(side="left", padx=4)
+            tb.Button(row, text="Apply", bootstyle=SUCCESS,
+                      command=lambda z=zi: self._kbd_apply_zone(z)).pack(side="left", padx=4)
+
+        bottom = tb.Frame(frame)
+        bottom.pack(fill="x", pady=(4, 0))
+        tb.Button(bottom, text="Turn backlight OFF", bootstyle=DANGER,
+                  command=self._kbd_off).pack(side="left")
+        tb.Label(
+            frame,
+            text="The controller keeps this in a non-persistent slot — it resets on reboot/replug. "
+                 "Apply the KbdBacklightFix tweak (Power tab) for a service that re-asserts your "
+                 "last setting at login and after resume.",
+            bootstyle=SECONDARY, wraplength=880, justify="left",
+        ).pack(anchor="w", pady=(10, 0))
+
+    def _kbd_swatch(self, parent, hexvar: tk.StringVar):
+        lbl = tk.Label(parent, width=4, relief="solid", bd=1, bg=self._safe_hex(hexvar.get()))
+        hexvar.trace_add("write", lambda *_: lbl.configure(bg=self._safe_hex(hexvar.get())))
+        return lbl
+
+    @staticmethod
+    def _safe_hex(s: str) -> str:
+        s = s if s.startswith("#") else "#" + s
+        return s if len(s) == 7 else "#ffffff"
+
+    def _kbd_pick(self, hexvar: tk.StringVar):
+        from tkinter import colorchooser
+        _rgb, hx = colorchooser.askcolor(color=self._safe_hex(hexvar.get()),
+                                         parent=self.root, title="Keyboard colour")
+        if hx:
+            hexvar.set(hx)
+
+    @staticmethod
+    def _hex_to_rgb(hx: str) -> tuple[int, int, int]:
+        hx = hx.lstrip("#")
+        return (int(hx[0:2], 16), int(hx[2:4], 16), int(hx[4:6], 16))
+
+    def _kbd_run(self, fn, desc: str):
+        if self._kbd_busy:
+            self._log("[Keyboard] busy — try again in a moment")
+            return
+        self._kbd_busy = True
+
+        def work():
+            try:
+                kb = dellg15_kbd.Keyboard()
+                try:
+                    fn(kb)
+                finally:
+                    kb.close()
+                self._log(f"[Keyboard] {desc}")
+            except Exception as exc:  # noqa: BLE001
+                self._log(f"[Keyboard FAILED] {exc}")
+            finally:
+                self._kbd_busy = False
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _kbd_all_colors(self) -> dict[int, tuple[int, int, int]]:
+        return {z: self._hex_to_rgb(self._safe_hex(v.get())) for z, v in self.kbd_zone_vars.items()}
+
+    def _kbd_apply_brightness(self):
+        b = self.kbd_brightness.get()
+        self._kbd_run(lambda kb: (kb.set_brightness(b),
+                                  dellg15_kbd.save_state(self._kbd_all_colors(), b)),
+                      f"brightness {b}%")
+
+    def _kbd_apply_all(self):
+        hx = self._safe_hex(self.kbd_all_hex.get())
+        for v in self.kbd_zone_vars.values():
+            v.set(hx)
+        b = self.kbd_brightness.get()
+        colors = self._kbd_all_colors()
+        self._kbd_run(lambda kb: (kb.set_zones(colors, b),
+                                  dellg15_kbd.save_state(colors, b)),
+                      f"all zones {hx} @ {b}%")
+
+    def _kbd_apply_zone(self, z: int):
+        b = self.kbd_brightness.get()
+        colors = self._kbd_all_colors()
+        self._kbd_run(lambda kb: (kb.set_zones(colors, b),
+                                  dellg15_kbd.save_state(colors, b)),
+                      f"zone {z} ({dellg15_kbd.ZONE_NAMES[z]}) -> {self._safe_hex(self.kbd_zone_vars[z].get())}")
+
+    def _kbd_off(self):
+        self._kbd_run(lambda kb: kb.off(), "backlight off")
 
     def _build_category_tab(self, category: str):
         outer = tb.Frame(self.notebook)
@@ -452,6 +691,7 @@ class ToolkitApp:
 
     def _refresh_all_status(self):
         for item in self.items.values():
+            item.pending = False
             if not item.hw_supported:
                 item.applied = False
                 continue
@@ -460,23 +700,51 @@ class ToolkitApp:
                 continue
             ok, _ = run_cmd(item.check_cmd)
             item.applied = ok
-        self.root.after(0, self._apply_status_to_widgets)
+            if not ok and item.check_pending_cmd:
+                item.pending = run_cmd(item.check_pending_cmd)[0]
+        # Hand back to the main thread via a queue — Tk is not thread-safe and
+        # calling root.after() from here races the interpreter (crashes as
+        # "main thread is not in main loop"). Mirrors the log/dash queues.
+        self.status_queue.put(True)
+
+    def _poll_status_queue(self):
+        drained = False
+        try:
+            while True:
+                self.status_queue.get_nowait()
+                drained = True
+        except queue.Empty:
+            pass
+        if drained:
+            self._apply_status_to_widgets()
+        self.root.after(200, self._poll_status_queue)
 
     def _apply_status_to_widgets(self):
+        n_done = n_total = 0
         for item in self.items.values():
             if item.status_label is None:
                 continue
             if not item.hw_supported:
                 item.status_label.configure(text="unsupported", bootstyle=SECONDARY)
                 continue
-            label = "Applied" if item.applied else "Not applied"
-            style = SUCCESS if item.applied else SECONDARY
-            if item.kind == "app":
-                label = "Installed" if item.applied else "Not installed"
+            n_total += 1
+            if item.pending:
+                label, style = "Pending reboot", INFO
+            elif item.applied:
+                label = "Installed" if item.kind == "app" else "Applied"
+                style = SUCCESS
+            else:
+                label = "Not installed" if item.kind == "app" else "Not applied"
+                style = SECONDARY
+            if item.done:
+                n_done += 1
             item.status_label.configure(text=label, bootstyle=style)
             if item.var is not None:
-                item.var.set(item.applied)
-        self.status_var.set("Status refreshed.")
+                item.var.set(item.done)
+        self.status_var.set(
+            f"{n_done} of {n_total} already applied/installed — "
+            f"{n_total - n_done} available. Ticked = already done; Apply skips those."
+        )
 
     def _on_refresh_click(self):
         self.status_var.set("Refreshing status…")
@@ -518,17 +786,24 @@ class ToolkitApp:
     def _apply_worker(self, item_ids: list[str]):
         self.worker_running = True
         self.status_var.set("Applying…")
+        n_skipped = 0
         for item_id in item_ids:
             item = self.items[item_id]
             checked = item.var.get() if item.var else False
             if item.kind == "tweak":
-                if checked and not item.applied:
+                if checked and not item.done:
                     self._run_item_apply(item)
+                elif checked and item.done:
+                    n_skipped += 1
                 elif not checked and item.applied and item.undo_cmds:
                     self._run_item_undo(item)
             else:  # app: one-directional install only
-                if checked and not item.applied:
+                if checked and not item.done:
                     self._run_item_apply(item)
+                elif checked and item.done:
+                    n_skipped += 1
+        if n_skipped:
+            self._log(f"[skipped {n_skipped} already-applied/installed item(s)]")
         self._log("=== Done. Click Refresh Status to confirm. ===")
         self.status_var.set("Done — refresh to confirm.")
         self.worker_running = False
@@ -555,10 +830,11 @@ class ToolkitApp:
             item = self.items.get(item_id)
             if not item or not item.hw_supported:
                 continue
-            if not item.applied:
+            if not item.done:
                 self._run_item_apply(item)
             else:
-                self._log(f"[skip, already applied] {item.content}")
+                state = "pending reboot" if item.pending else ("installed" if item.kind == "app" else "applied")
+                self._log(f"[skip, already {state}] {item.content}")
         self._log("=== Preset done. Click Refresh Status to confirm. ===")
         self.status_var.set("Preset done — refresh to confirm.")
         self.worker_running = False

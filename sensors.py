@@ -22,6 +22,39 @@ def which(cmd: str):
     return shutil.which(cmd)
 
 
+TARGET_MODEL = "Dell G15 5515"
+TARGET_BOARD = "0R3CDX"
+
+
+def _dmi(name: str) -> str:
+    try:
+        with open(f"/sys/class/dmi/id/{name}") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def detect_model() -> dict:
+    """Read this machine's DMI identity and say whether it's the platform the
+    Toolkit was written for (Dell G15 5515). Every model-specific path here —
+    the alienware-wmi fan boost, the AW-ELC keyboard, the 5800H C-state fix,
+    k10temp, … — assumes that board."""
+    vendor = _dmi("sys_vendor")
+    product = _dmi("product_name")
+    board = _dmi("board_name")
+    bios = _dmi("bios_version")
+    is_target = (product == TARGET_MODEL) or (board == TARGET_BOARD)
+    close = (not is_target) and ("G15 5515" in product or product.startswith("Dell G15"))
+    return {
+        "vendor": vendor,
+        "product": product or "unknown",
+        "board": board,
+        "bios": bios,
+        "is_target": is_target,
+        "is_close": close,
+    }
+
+
 def read_cpu_freq_ghz() -> str:
     try:
         freqs = []
@@ -234,37 +267,90 @@ def get_game_mode_state() -> bool:
         return False
 
 
-def set_game_mode(enable: bool) -> tuple[bool, str]:
-    cmds = []
-    if enable:
-        if which("gaming-performance"):
-            cmds.append("gaming-performance")
-        if which("amdgpu-perf-high"):
-            cmds.append("amdgpu-perf-high")
-        if which("nvidia-max-perf"):
-            cmds.append("nvidia-max-perf")
-    else:
-        if which("gaming-balanced"):
-            cmds.append("gaming-balanced")
-        if which("amdgpu-perf-auto"):
-            cmds.append("amdgpu-perf-auto")
-    if not cmds:
-        return False, "None of the Game Mode helper scripts are installed — run the Toolkit's Presets first."
-    shell = " ; ".join(cmds)
+def notify(summary: str, body: str = "") -> None:
+    """Best-effort desktop notification. No-op if notify-send is missing or
+    there's no session bus to reach (e.g. the fully-elevated GUI process)."""
+    exe = which("notify-send")
+    if not exe:
+        return
     try:
-        # Try passwordless sudo first (needed for the hotkey path, which has
-        # no way to answer a GUI prompt) — only succeeds if the
-        # PasswordlessGameModeToggle tweak's sudoers rule is installed.
-        result = subprocess.run(["sudo", "-n", "sh", "-c", shell], capture_output=True, text=True, timeout=30)
-        if result.returncode == 0:
-            return True, ""
-        # Fall back to an interactive GUI prompt (fine for tray-icon clicks,
-        # will just sit there unanswered if triggered from the hotkey
-        # listener with no sudoers rule installed).
-        result = subprocess.run(["pkexec", "sh", "-c", shell], capture_output=True, text=True, timeout=30)
-        if result.returncode != 0:
-            return False, (result.stderr or result.stdout or "pkexec failed").strip()
-        return True, ""
+        subprocess.run(
+            [exe, "-a", "Dell G15 Toolkit", "-i", "input-keyboard", "-t", "10000",
+             summary, body],
+            capture_output=True, timeout=5,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _notify_game_mode(enable: bool) -> None:
+    if enable:
+        notify("Game Mode: ON", "G-Mode / performance profile — fans + power limits up")
+    else:
+        notify("Game Mode: OFF", "Back to balanced profile")
+
+
+def _gmode_kbd_indicator(enable: bool) -> None:
+    """Best-effort: tint the left keyboard zone (where the G-key sits) red
+    while G-Mode is active, the way AWCC does on Windows; restore the user's
+    colour when it turns off. No-op if the AW-ELC RGB keyboard, its helper
+    module, or a saved base colour isn't present."""
+    try:
+        import dellg15_kbd
+    except Exception:  # noqa: BLE001
+        return
+    try:
+        state = dellg15_kbd.load_state()
+        if not state:
+            return  # no base colour set in the Keyboard tab — nothing to tint/restore
+        colors, brightness = state
+        colors = dict(colors)
+        if enable:
+            colors[dellg15_kbd.GKEY_ZONE] = (255, 0, 0)
+        with dellg15_kbd.Keyboard() as kb:
+            kb.set_zones(colors, brightness)  # not persisted; KbdBacklightFix keeps the base
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def set_game_mode(enable: bool) -> tuple[bool, str]:
+    names = (("gaming-performance", "amdgpu-perf-high", "nvidia-max-perf") if enable
+             else ("gaming-balanced", "amdgpu-perf-auto"))
+    paths = [p for p in (which(n) for n in names) if p]
+    if not paths:
+        return False, "None of the Game Mode helper scripts are installed — run the Toolkit's Presets first."
+
+    def _ok_now() -> bool:
+        _notify_game_mode(enable)
+        _gmode_kbd_indicator(enable)
+        return True
+
+    try:
+        # Passwordless sudo, one script at a time — this is what the narrow
+        # PasswordlessGameModeToggle sudoers rule whitelists (exact script
+        # paths, not an `sh -c` wrapper). Needed for the hotkey path, which
+        # has no way to answer a GUI prompt.
+        last_err = ""
+        any_fail = False
+        for p in paths:
+            r = subprocess.run(["sudo", "-n", p], capture_output=True, text=True, timeout=30)
+            if r.returncode != 0:
+                any_fail = True
+                last_err = (r.stderr or r.stdout or f"{p} failed").strip()
+        # A helper can exit non-zero on harmless noise (e.g. nvidia-settings
+        # over a headless display) while still doing the real work — trust
+        # the end state.
+        if not any_fail or get_game_mode_state() == enable:
+            return _ok_now(), ""
+
+        # Fall back to a single interactive GUI prompt for the whole batch
+        # (fine for tray/Dashboard clicks; a hotkey press with no sudoers
+        # rule just gets an unanswered prompt).
+        r = subprocess.run(["pkexec", "sh", "-c", " ; ".join(paths)],
+                           capture_output=True, text=True, timeout=60)
+        if r.returncode != 0 and get_game_mode_state() != enable:
+            return False, (r.stderr or r.stdout or last_err or "pkexec failed").strip()
+        return _ok_now(), ""
     except Exception as exc:  # noqa: BLE001
         return False, str(exc)
 
