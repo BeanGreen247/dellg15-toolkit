@@ -321,12 +321,12 @@
   },
   "NvmeIoTune": {
     "Content": "NVMe I/O queue tuning (udev)",
-    "Description": "The NVMe scheduler is already 'none' on this system (correct for NVMe), so this only nudges the queue: read_ahead_kb=128 (lower latency for random reads typical of games) and nr_requests=1023 (deeper queue). Small effect; fully reversible by removing the rule.",
+    "Description": "The NVMe scheduler is already 'none' on this system (correct for NVMe), so this only lowers read_ahead_kb to 128 (from 256) — less wasted prefetch on the small random reads typical of game assets. Tiny effect, fully reversible. (nr_requests is left alone: its max is per-device and some queues here reject a bump, which just logs a harmless udev error at boot.)",
     "category": "Performance",
     "risk": "advanced",
     "check": "test -f /etc/udev/rules.d/60-dellg15-nvme.rules",
     "apply": [
-      "printf 'ACTION==\"add|change\", KERNEL==\"nvme[0-9]n[0-9]\", ATTR{queue/read_ahead_kb}=\"128\", ATTR{queue/nr_requests}=\"1023\"\\n' > /etc/udev/rules.d/60-dellg15-nvme.rules",
+      "printf 'ACTION==\"add|change\", KERNEL==\"nvme[0-9]n[0-9]\", ATTR{queue/read_ahead_kb}=\"128\"\\n' > /etc/udev/rules.d/60-dellg15-nvme.rules",
       "udevadm control --reload-rules",
       "udevadm trigger --subsystem-match=block --action=change"
     ],
