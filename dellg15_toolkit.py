@@ -520,29 +520,36 @@ class ToolkitApp:
         self.notebook.add(outer, text="⌨ Keyboard")
         frame = self._scroll_body(outer, pad=16)
 
+        import shutil as _sh
+        have_openrgb = _sh.which("openrgb") is not None
         detected = dellg15_kbd is not None and dellg15_kbd.Keyboard._find() is not None
+        if not have_openrgb:
+            tb.Label(
+                frame, bootstyle=WARNING, justify="left", wraplength=1000,
+                text="Install the OpenRGB app (Software tab) to use this.\n\n"
+                     "The G15 5515's AW-ELC keyboard has no kernel driver and ignores raw HID "
+                     "writes — OpenRGB's 16-zone protocol is the only thing that drives it. "
+                     "The backlight must also be enabled in BIOS setup (F2 -> Keyboard "
+                     "Backlight) or nothing lights.",
+            ).pack(anchor="w")
+            return
         if not detected:
             tb.Label(
-                frame,
-                text="No Alienware AW-ELC RGB keyboard (USB 187c:0550) detected.\n"
-                     "This tab controls the 4-zone RGB backlight on the Dell G15 5515; "
-                     "if your unit has the single-colour keyboard there's nothing here to drive.",
-                bootstyle=SECONDARY, justify="left",
+                frame, bootstyle=SECONDARY, justify="left",
+                text="No Alienware AW-ELC RGB keyboard (USB 187c:0550) found.\n"
+                     "This tab drives the 4-zone RGB backlight on the Dell G15 5515.",
             ).pack(anchor="w")
             return
 
-        warn = tb.Labelframe(frame, text="⚠  Known limitation — likely does nothing on this unit",
-                             bootstyle=WARNING, padding=12)
-        warn.pack(fill="x", pady=(0, 14))
+        note = tb.Labelframe(frame, text="How this works", bootstyle=INFO, padding=12)
+        note.pack(fill="x", pady=(0, 14))
         tb.Label(
-            warn, wraplength=1100, justify="left", bootstyle="inverse-warning",
-            text="On the tested G15 5515 the keyboard backlight can't be driven from Linux: "
-                 "this BIOS ships no SMBIOS keyboard-illumination tokens (no kernel LED, the Fn "
-                 "backlight key is dead), mainline alienware-wmi has no RGB, and the AW-ELC HID "
-                 "controller accepts these commands but doesn't light up (OpenRGB has it unmapped "
-                 "too). The controls below still send the packets — harmless, and they'll start "
-                 "working if a future kernel adds support or you enable a keyboard-backlight "
-                 "option in BIOS setup — but expect no visible change right now.",
+            note, wraplength=1100, justify="left", bootstyle="inverse-info",
+            text="Driven through OpenRGB (the AW-ELC has no kernel driver and ignores raw HID). "
+                 "The backlight must be enabled in BIOS setup (F2 -> Keyboard Backlight) first — "
+                 "if the keys stay dark, that's why. It's a 4-zone board (Left / Middle / Right / "
+                 "Numpad), not per-key. Colours don't persist a reboot on their own — apply the "
+                 "KbdBacklightFix tweak (Power tab) to re-assert them at login and after resume.",
         ).pack(anchor="w")
 
         self._kbd_busy = False
@@ -561,7 +568,7 @@ class ToolkitApp:
         # ---- brightness ----
         br_box = tb.Labelframe(frame, text="Brightness", padding=12)
         br_box.pack(fill="x", pady=(0, 12))
-        scale = tb.Scale(br_box, from_=1, to=100, variable=self.kbd_brightness, orient="horizontal")
+        scale = tb.Scale(br_box, from_=0, to=100, variable=self.kbd_brightness, orient="horizontal")
         scale.pack(side="left", fill="x", expand=True, padx=(0, 10))
         scale.bind("<ButtonRelease-1>", lambda _e: self._kbd_apply_brightness())
         tb.Label(br_box, textvariable=self.kbd_brightness, width=4).pack(side="left")
@@ -599,17 +606,8 @@ class ToolkitApp:
 
         bottom = tb.Frame(frame)
         bottom.pack(fill="x", pady=(4, 0))
-        tb.Button(bottom, text="Dim to minimum (1%)", bootstyle=(SECONDARY, "outline"),
+        tb.Button(bottom, text="Turn backlight off", bootstyle=(SECONDARY, "outline"),
                   command=self._kbd_off).pack(side="left")
-        tb.Label(bottom, text="  (no true-off — dim=0 can leave this firmware's backlight "
-                              "stuck dark until a reboot)", bootstyle=SECONDARY).pack(side="left")
-        tb.Label(
-            frame,
-            text="The controller keeps this in a non-persistent slot — it resets on reboot/replug. "
-                 "Apply the KbdBacklightFix tweak (Power tab) for a service that re-asserts your "
-                 "last setting at login and after resume.",
-            bootstyle=SECONDARY, wraplength=880, justify="left",
-        ).pack(anchor="w", pady=(10, 0))
 
     def _kbd_swatch(self, parent, hexvar: tk.StringVar):
         lbl = tk.Label(parent, width=4, relief="solid", bd=1, bg=self._safe_hex(hexvar.get()))
@@ -681,8 +679,8 @@ class ToolkitApp:
                       f"zone {z} ({dellg15_kbd.ZONE_NAMES[z]}) -> {self._safe_hex(self.kbd_zone_vars[z].get())}")
 
     def _kbd_off(self):
-        self.kbd_brightness.set(dellg15_kbd.MIN_BRIGHTNESS)
-        self._kbd_run(lambda kb: kb.off(), "dimmed to minimum")
+        self.kbd_brightness.set(0)
+        self._kbd_run(lambda kb: kb.off(), "backlight off")
 
     def _build_category_tab(self, category: str):
         outer = tb.Frame(self.notebook)

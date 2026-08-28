@@ -385,8 +385,8 @@
     ]
   },
   "KbdBacklightFix": {
-    "Content": "Keyboard Backlight: re-apply saved colour at boot/resume (best-effort — see note)",
-    "Description": "KNOWN LIMITATION on the tested Dell G15 5515: the keyboard backlight cannot currently be driven from Linux at all. This BIOS exposes no SMBIOS keyboard-illumination tokens (so no kernel kbd_backlight LED, and the Fn backlight key does nothing), mainline alienware-wmi has no RGB, and the raw AW-ELC HID controller accepts colour/brightness writes but produces no visible light (OpenRGB has this controller — platform 0x0E05 — unmapped too). Reads work; writes don't. This tweak still installs dellg15_kbd.py + a systemd service + a systemd-sleep hook that re-apply ~/.config/dellg15-toolkit/kbd.json (set in the Keyboard tab) at boot and after resume — it's harmless and will start working automatically IF a future kernel adds support or your BIOS has a keyboard-backlight option you can enable, but right now it very likely does nothing visible. Reversible.",
+    "Content": "Keyboard Backlight: re-apply saved colour at boot/resume",
+    "Description": "On the G15 5515 the keyboard backlight is driven through OpenRGB (the AW-ELC has no kernel driver and ignores raw HID writes); the backlight must also be enabled in BIOS setup. This installs dellg15_kbd.py (an openrgb wrapper) to /usr/local/bin plus a systemd service + a systemd-sleep hook that re-apply ~/.config/dellg15-toolkit/kbd.json (set in the Keyboard tab) at boot and after resume, since the colour does not persist a power cycle on its own. Requires the OpenRGB app. Reversible.",
     "category": "Power",
     "risk": "advanced",
     "check": "test -x /usr/local/bin/dellg15-kbd && systemctl is-enabled dellg15-kbd.service 2>/dev/null | grep -q enabled",

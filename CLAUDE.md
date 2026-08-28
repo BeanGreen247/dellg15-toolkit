@@ -50,18 +50,21 @@ ssh g15 'cd ~/DellG15Toolkit && sudo ./install.sh'    # system-install to /opt
   `alienware-wmi`). Kernel docs: performance profile toggles firmware G-Mode.
   `gaming-performance`/`gaming-balanced` also slam `alienware_wmi` `fanN_boost`
   (hwmon) to 255/0 for the AWCC-style fan.
-- **RGB keyboard = NOT controllable from Linux on this unit.** It's the
-  Alienware **AW-ELC** (USB `187c:0550`) on `hid-generic`. This BIOS exposes
-  **no SMBIOS keyboard-illumination tokens** (all `location=0xffff`) → no
-  `dell-laptop` `kbd_backlight` LED, dead Fn key, `smbios-keyboard-ctl` gets
-  `Invalid call 4/11`. Mainline `alienware-wmi` has no RGB. The AW-ELC HID
-  device: **reads work** (`dellg15_kbd.py info`), **writes are ACK'd but
-  produce no light** — OpenRGB has platform `0x0E05` unmapped too.
-  `dellg15_kbd.py` + Keyboard tab + `KbdBacklightFix` are kept as
-  forward-compatible best-effort only, gated behind honest warnings. Real
-  fix path: a BIOS keyboard-backlight option, or a future kernel with
-  `alienware-wmi-wmax` RGB. The `KeyboardBacklightTimeout` tweak was removed
-  (needed a `*kbd_backlight*` LED that doesn't exist here).
+- **RGB keyboard = OpenRGB only.** Alienware **AW-ELC** (USB `187c:0550`),
+  `hid-generic`, no kernel driver, no SMBIOS keyboard tokens (`location=0xffff`
+  → no `kbd_backlight` LED, dead Fn key, `smbios-keyboard-ctl` → `Invalid
+  call 4/11`), mainline `alienware-wmi` has no RGB. Hand-rolled HID writes
+  (feature **and** interrupt reports) are ACK'd but never light up. What
+  works — verified live — is **OpenRGB** (`openrgb --noautoconnect -d "Dell G
+  Series LED Controller" -m Static -c RRGGBB -b 0-100`), which drives it as
+  16 logical zones. So `dellg15_kbd.py` is now a thin `openrgb` CLI wrapper
+  (keeps the old `Keyboard`/`_find`/`set_*` API as a shim). **Two
+  prerequisites:** OpenRGB installed, and the backlight **enabled in BIOS
+  setup** (it's off by default → firmware won't hand a disabled backlight to
+  the OS). 4-zone board (Left/Middle/Right/Numpad), not per-key; the 4
+  physical zones map to blocks of the 16 logical ones (even split; refine if
+  wrong). `KeyboardBacklightTimeout` tweak was removed (needed a
+  non-existent `kbd_backlight` LED).
 - **`dnf` GPG**: Nobara serves some rawhide-based (`.fc44`) packages signed
   with the **Fedora 44** key, which ships on disk un-imported. Fix once with
   `sudo rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-44-primary`.
