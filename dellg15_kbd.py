@@ -55,9 +55,12 @@ class Keyboard:
         if not shutil.which("openrgb"):
             return None
         import glob
-        for ue in glob.glob("/sys/class/hidraw/*/device/uevent"):
+        for vp in glob.glob("/sys/bus/usb/devices/*/idVendor"):
             try:
-                if "187C:0550" in open(ue).read().upper():
+                if open(vp).read().strip().lower() != "187c":
+                    continue
+                pid = open(vp.rsplit("/", 1)[0] + "/idProduct").read().strip().lower()
+                if pid in ("0550", "0551"):
                     return "openrgb:" + DEVICE
             except OSError:
                 pass
