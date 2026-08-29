@@ -13,12 +13,19 @@ Prerequisites:
   * The keyboard backlight **enabled in BIOS setup** (F2 -> Keyboard
     Backlight). Nothing lights until that's on.
 
-CLI (unchanged from before, so the Keyboard tab / KbdBacklightFix keep working):
+CLI:
     dellg15_kbd.py on  [--color RRGGBB] [--brightness 0-100]
     dellg15_kbd.py off
     dellg15_kbd.py zone <0-3> --color RRGGBB [--brightness 0-100]
+    dellg15_kbd.py effect <rainbow|spectrum|breathing|flashing> [--speed 0-100] [--brightness 0-100]
+    dellg15_kbd.py gradient <RRGGBB> <RRGGBB> [--brightness 0-100]
     dellg15_kbd.py apply-saved
     dellg15_kbd.py info
+
+Hardware effect modes come from the controller firmware (OpenRGB: Static,
+Flashing, Morph, Spectrum Cycle, Rainbow Wave, Breathing). Effect *speed* is
+a 0-100 percentage; effect *direction* is not exposed by the OpenRGB CLI
+(GUI / SDK only), so it isn't offered.
 """
 from __future__ import annotations
 
@@ -81,6 +88,12 @@ class Keyboard:
 
     def set_all(self, color, brightness: int = 100) -> None:
         set_all(_hexify(color), brightness)
+
+    def set_effect(self, name, speed=None, color=None, brightness: int = 100) -> None:
+        set_effect(name, speed, color, brightness)
+
+    def set_gradient(self, color_a, color_b, brightness: int = 100) -> None:
+        set_gradient(color_a, color_b, brightness)
 
     def set_brightness(self, percent: int, zones=None) -> None:
         st = load_state()
@@ -184,6 +197,49 @@ def off() -> None:
     _run(["-b", "0"])
 
 
+# Hardware effect modes the AW-ELC / "Dell G Series LED Controller" exposes
+# through OpenRGB (from `openrgb -l`): Static Flashing Morph 'Spectrum Cycle'
+# 'Rainbow Wave' Breathing. Speed is a 0-100 percentage where the mode
+# supports it. DIRECTION IS NOT SETTABLE VIA THE OpenRGB CLI — only via the
+# GUI or the SDK network protocol — so it isn't offered here.
+EFFECT_MODES = {
+    "rainbow": "Rainbow Wave",
+    "spectrum": "Spectrum Cycle",
+    "breathing": "Breathing",
+    "flashing": "Flashing",
+}
+
+
+def set_effect(name: str, speed: int | None = None, color=None,
+               brightness: int = 100) -> None:
+    mode = EFFECT_MODES.get(name, name)
+    args = ["-m", mode, "-b", str(max(0, min(100, brightness)))]
+    if color is not None:
+        args += ["-c", _hexify(color)]
+    if speed is not None:
+        args += ["-s", str(max(0, min(100, int(speed))))]
+    _run(args)
+
+
+def _to_rgb(c) -> tuple[int, int, int]:
+    if isinstance(c, str):
+        c = c.lstrip("#")
+        return (int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16))
+    return tuple(c)
+
+
+def set_gradient(color_a, color_b, brightness: int = 100) -> None:
+    """Static colour gradient from A (left) to B (right/numpad), interpolated
+    across the 16 logical zones."""
+    a, b = _to_rgb(color_a), _to_rgb(color_b)
+    args = ["-m", "Static", "-b", str(max(0, min(100, brightness)))]
+    for lz in range(LOGICAL_ZONES):
+        t = lz / (LOGICAL_ZONES - 1)
+        mix = tuple(round(a[i] + (b[i] - a[i]) * t) for i in range(3))
+        args += ["-z", str(lz), "-c", _hexify(mix)]
+    _run(args)
+
+
 def info() -> dict:
     txt = subprocess.run([_openrgb(), "--noautoconnect", "-l"],
                          capture_output=True, text=True, timeout=40).stdout
@@ -207,12 +263,20 @@ def _state_path() -> str:
     return os.path.join(home, ".config", "dellg15-toolkit", "kbd.json")
 
 
-def save_state(zone_colors: dict, brightness: int) -> None:
+def save_state(zone_colors: dict, brightness: int, mode: str = "zones",
+               speed: int = 50, gradient: tuple | None = None) -> None:
+    """Persist the current lighting so the boot/resume service can re-assert
+    it. `mode` is one of: zones, rainbow, spectrum, breathing, flashing,
+    gradient. `gradient` is (hexA, hexB) when mode == 'gradient'."""
     path = _state_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    json.dump({"brightness": int(brightness),
-               "zones": {str(z): _hexify(c) for z, c in zone_colors.items()}},
-              open(path, "w"), indent=2)
+    doc = {"brightness": int(brightness),
+           "mode": mode,
+           "speed": int(speed),
+           "zones": {str(z): _hexify(c) for z, c in zone_colors.items()}}
+    if gradient:
+        doc["gradient"] = [_hexify(gradient[0]), _hexify(gradient[1])]
+    json.dump(doc, open(path, "w"), indent=2)
     user = os.environ.get("SUDO_USER") or os.environ.get("PKEXEC_USER")
     if user and os.geteuid() == 0:
         pw = __import__("pwd").getpwnam(user)
@@ -236,6 +300,18 @@ def load_state() -> tuple[dict[int, tuple[int, int, int]], int] | None:
     return (zones, int(d.get("brightness", 100))) if zones else None
 
 
+def load_meta() -> dict:
+    """Returns {'mode', 'speed', 'gradient'} from the saved state (defaults if
+    absent). Separate from load_state() so its 2-tuple callers don't change."""
+    try:
+        d = json.load(open(_state_path()))
+    except (OSError, ValueError):
+        return {"mode": "zones", "speed": 50, "gradient": None}
+    return {"mode": d.get("mode", "zones"),
+            "speed": int(d.get("speed", 50)),
+            "gradient": tuple(d["gradient"]) if d.get("gradient") else None}
+
+
 # ---- CLI ---------------------------------------------------------------- #
 
 def main(argv: list[str] | None = None) -> int:
@@ -253,6 +329,16 @@ def main(argv: list[str] | None = None) -> int:
     p_z.add_argument("index", type=int, choices=range(ZONE_COUNT))
     p_z.add_argument("--color", type=_hexval, required=True)
     p_z.add_argument("--brightness", type=int, default=None)
+
+    p_e = sub.add_parser("effect")
+    p_e.add_argument("name", choices=sorted(EFFECT_MODES))
+    p_e.add_argument("--speed", type=int, default=50)
+    p_e.add_argument("--brightness", type=int, default=100)
+
+    p_g = sub.add_parser("gradient")
+    p_g.add_argument("color_a", type=_hexval)
+    p_g.add_argument("color_b", type=_hexval)
+    p_g.add_argument("--brightness", type=int, default=100)
 
     sub.add_parser("apply-saved")
     sub.add_parser("info")
@@ -277,11 +363,35 @@ def main(argv: list[str] | None = None) -> int:
             set_zones(colors, br)
             save_state(colors, br)
             print(f"zone {a.index} ({ZONE_NAMES[a.index]}) -> #{a.color.lower()} @ {br}%")
+        elif a.cmd == "effect":
+            set_effect(a.name, a.speed, brightness=a.brightness)
+            st = load_state()
+            colors = st[0] if st else {z: "FFFFFF" for z in range(ZONE_COUNT)}
+            save_state(colors, a.brightness, mode=a.name, speed=a.speed)
+            print(f"effect {a.name} @ speed {a.speed}, {a.brightness}%")
+        elif a.cmd == "gradient":
+            set_gradient(a.color_a, a.color_b, a.brightness)
+            st = load_state()
+            colors = st[0] if st else {z: "FFFFFF" for z in range(ZONE_COUNT)}
+            save_state(colors, a.brightness, mode="gradient",
+                       gradient=(a.color_a, a.color_b))
+            print(f"gradient #{a.color_a.lower()} -> #{a.color_b.lower()} @ {a.brightness}%")
         elif a.cmd == "apply-saved":
             st = load_state()
             if not st:
                 print("no saved lighting state")
                 return 0
+            meta = load_meta()
+            zones, br = st
+
+            def _assert_saved():
+                if meta["mode"] in EFFECT_MODES:
+                    set_effect(meta["mode"], meta["speed"], brightness=br)
+                elif meta["mode"] == "gradient" and meta["gradient"]:
+                    set_gradient(meta["gradient"][0], meta["gradient"][1], br)
+                else:
+                    set_zones(zones, br)
+
             # Boot/resume: the controller may still be settling. Re-assert a
             # few times spaced out; _run already double-writes each call.
             last = None
@@ -289,13 +399,13 @@ def main(argv: list[str] | None = None) -> int:
                 if i:
                     time.sleep(1.5)
                 try:
-                    set_zones(*st)
+                    _assert_saved()
                     last = None
                 except ElcError as exc:
                     last = exc
             if last:
                 raise last
-            print(f"re-applied saved lighting @ {st[1]}%")
+            print(f"re-applied saved lighting ({meta['mode']}) @ {br}%")
     except ElcError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
