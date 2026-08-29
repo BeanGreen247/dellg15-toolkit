@@ -133,12 +133,17 @@ def load_json(name: str) -> dict:
 # --------------------------------------------------------------------------- #
 
 ACCENT_FALLBACK = "#3daee9"   # Breeze blue, if the desktop accent can't be read
-BIOS_BG = "#0b0e12"           # window ground (near-black)
-BIOS_PANEL = "#141a21"        # raised panels / labelframes / nav rail
-BIOS_PANEL_HI = "#1c2530"     # hover / selected row
+# One flat surface for every widget background (frames, labels, labelframes,
+# scales, nav rail) — a per-widget mismatch here is what showed up as "black
+# boxes" behind labels/sliders. BIOS_SUNKEN is only used for scale/progress
+# troughs and the window ground behind everything.
+BIOS_PANEL = "#141a21"        # the surface — all widget backgrounds
+BIOS_SUNKEN = "#0b0e12"       # troughs / window ground (darker, so troughs read)
+BIOS_BG = BIOS_SUNKEN         # back-compat alias (busy overlay etc.)
+BIOS_PANEL_HI = "#1e2731"     # hover / selected nav row
 BIOS_FG = "#e6edf3"
-BIOS_MUTED = "#8b949e"
-BIOS_BORDER = "#232c37"
+BIOS_MUTED = "#93a1b1"
+BIOS_BORDER = "#2a3340"
 
 
 def _rgb_str_to_hex(s: str) -> str | None:
@@ -216,30 +221,38 @@ def apply_bios_style(style: "tb.Style", accent: str) -> None:
         c.primary = accent
         c.info = accent
         c.selectbg = accent
-        c.bg = BIOS_BG
+        c.bg = BIOS_PANEL
         c.dark = BIOS_PANEL
+        c.light = BIOS_PANEL
         c.border = BIOS_BORDER
         c.active = BIOS_PANEL_HI
-        c.inputbg = BIOS_PANEL
+        c.inputbg = BIOS_SUNKEN
     except Exception:  # noqa: BLE001
         pass
 
     specs = {
-        ".": {"background": BIOS_BG, "foreground": BIOS_FG},
-        "TFrame": {"background": BIOS_BG},
-        "TLabel": {"background": BIOS_BG, "foreground": BIOS_FG},
+        ".": {"background": BIOS_PANEL, "foreground": BIOS_FG,
+              "fieldbackground": BIOS_SUNKEN, "troughcolor": BIOS_SUNKEN,
+              "bordercolor": BIOS_BORDER, "lightcolor": BIOS_PANEL,
+              "darkcolor": BIOS_PANEL},
+        "TFrame": {"background": BIOS_PANEL},
+        "TLabel": {"background": BIOS_PANEL, "foreground": BIOS_FG},
         "TLabelframe": {"background": BIOS_PANEL, "bordercolor": BIOS_BORDER,
                         "darkcolor": BIOS_PANEL, "lightcolor": BIOS_PANEL,
                         "relief": "flat"},
         "TLabelframe.Label": {"background": BIOS_PANEL, "foreground": accent_txt,
                               "font": ("Sans", 10, "bold")},
+        "TCheckbutton": {"background": BIOS_PANEL, "foreground": BIOS_FG},
+        "TRadiobutton": {"background": BIOS_PANEL, "foreground": BIOS_FG},
         "TSeparator": {"background": BIOS_BORDER},
         "Nav.TFrame": {"background": BIOS_PANEL},
-        "Header.TLabel": {"background": BIOS_BG, "foreground": BIOS_FG,
+        "Header.TLabel": {"background": BIOS_PANEL, "foreground": BIOS_FG,
                           "font": ("Sans", 18, "bold")},
-        "Horizontal.TProgressbar": {"background": accent, "troughcolor": BIOS_PANEL,
-                                    "bordercolor": BIOS_PANEL},
-        "TScale": {"background": BIOS_BG, "troughcolor": BIOS_PANEL},
+        "Horizontal.TProgressbar": {"background": accent, "troughcolor": BIOS_SUNKEN,
+                                    "bordercolor": BIOS_SUNKEN, "lightcolor": accent,
+                                    "darkcolor": accent},
+        "Horizontal.TScale": {"background": BIOS_PANEL, "troughcolor": BIOS_SUNKEN},
+        "TScale": {"background": BIOS_PANEL, "troughcolor": BIOS_SUNKEN},
         "Nav.TButton": {"background": BIOS_PANEL, "foreground": BIOS_MUTED,
                         "bordercolor": BIOS_PANEL, "focuscolor": "",
                         "font": ("Sans", 10, "bold"), "anchor": "w",
@@ -539,7 +552,7 @@ class ToolkitApp:
         self.accent = read_desktop_accent()
         try:
             apply_bios_style(root.style, self.accent)
-            root.configure(background=BIOS_BG)
+            root.configure(background=BIOS_PANEL)
         except Exception:  # noqa: BLE001
             self.accent = ACCENT_FALLBACK
 

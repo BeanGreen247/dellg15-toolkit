@@ -926,8 +926,23 @@ def _physical_to_logical(zone: int) -> list[int]:
 
 # ---- operations ----------------------------------------------------------- #
 
+def _leave_effect_kick() -> None:
+    """The AW-ELC will NOT switch out of a firmware effect (Spectrum Cycle,
+    etc.) on a plain `-m Static` write — the keys flash the new colour for an
+    instant, then the MCU effect just carries on. Verified live: the only
+    thing that reliably clears it is restarting the OpenRGB SDK server (its
+    HID connection state is what's stuck). So when the saved mode is an
+    effect, kick the server before writing static colour."""
+    try:
+        if load_meta().get("mode") in ALL_EFFECTS:
+            restart_server()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def set_all(color, brightness: int = 100) -> None:
-    stop_fx()   # leave the rainbow wave if it's running
+    stop_fx()             # leave any running software wave
+    _leave_effect_kick()  # ...and any firmware effect
     _run(["-m", "Static", "-c", _hexify(color), "-b", str(max(0, min(100, brightness)))])
 
 
@@ -946,8 +961,9 @@ def set_zones(colors: dict, brightness: int = 100) -> None:
     stop_fx()
     hexes = {_hexify(c) for c in colors.values()}
     if len(hexes) == 1:
-        set_all(next(iter(hexes)), brightness)
+        set_all(next(iter(hexes)), brightness)   # kicks the effect inside
         return
+    _leave_effect_kick()
     args = ["-m", "Static", "-b", str(max(0, min(100, brightness)))]
     for pz, col in sorted(colors.items()):
         for lz in _physical_to_logical(pz):
@@ -957,6 +973,7 @@ def set_zones(colors: dict, brightness: int = 100) -> None:
 
 def off() -> None:
     stop_fx()
+    _leave_effect_kick()
     _run(["-b", "0"])
 
 
