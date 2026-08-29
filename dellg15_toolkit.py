@@ -12,15 +12,20 @@ Requires: ttkbootstrap (pip install --user ttkbootstrap — confirmed NOT
 packaged in Fedora/Nobara's repos, pip is the only install path) for the
 themed dark UI + round-toggle switches + gauge widgets on the Dashboard tab.
 """
+import configparser
 import json
 import os
 import pwd
 import queue
+import re
+import shlex
 import shutil
 import site
 import subprocess
 import sys
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox
@@ -45,7 +50,7 @@ try:
 except Exception:  # noqa: BLE001
     dellg15_kbd = None
 
-CATEGORY_ORDER = ["GPU", "Power", "Performance", "Software", "Monitoring", "Streaming", "RGB", "Gaming"]
+CATEGORY_ORDER = ["Gaming", "GPU", "Power", "Performance", "Software", "Monitoring", "Streaming", "RGB"]
 THEME = "darkly"
 
 
@@ -123,6 +128,206 @@ def load_json(name: str) -> dict:
         return json.load(f)
 
 
+# --------------------------------------------------------------------------- #
+#  Look & feel — a "gaming BIOS" dark shell with the KDE accent colour.
+# --------------------------------------------------------------------------- #
+
+ACCENT_FALLBACK = "#3daee9"   # Breeze blue, if the desktop accent can't be read
+BIOS_BG = "#0b0e12"           # window ground (near-black)
+BIOS_PANEL = "#141a21"        # raised panels / labelframes / nav rail
+BIOS_PANEL_HI = "#1c2530"     # hover / selected row
+BIOS_FG = "#e6edf3"
+BIOS_MUTED = "#8b949e"
+BIOS_BORDER = "#232c37"
+
+
+def _rgb_str_to_hex(s: str) -> str | None:
+    nums = [int(n) for n in re.findall(r"\d+", s)][:3]
+    return "#%02x%02x%02x" % tuple(nums) if len(nums) == 3 else None
+
+
+def read_desktop_accent(default: str = ACCENT_FALLBACK) -> str:
+    """Best-effort read of the Plasma accent colour from ~/.config/kdeglobals
+    (of the *invoking* user, since we run elevated). Falls back to a preset."""
+    user = resolve_real_user()
+    try:
+        home = pwd.getpwnam(user).pw_dir
+    except KeyError:
+        home = os.path.expanduser("~")
+    cp = configparser.ConfigParser(strict=False, interpolation=None)
+    try:
+        cp.read(os.path.join(home, ".config", "kdeglobals"))
+    except (configparser.Error, OSError):
+        return default
+    for sec, key in (("General", "AccentColor"),
+                     ("Colors:Selection", "DecorationFocus"),
+                     ("Colors:Selection", "BackgroundNormal")):
+        if cp.has_option(sec, key):
+            hexv = _rgb_str_to_hex(cp.get(sec, key))
+            if hexv:
+                return hexv
+    return default
+
+
+def _mix(hex_a: str, hex_b: str, t: float) -> str:
+    a = [int(hex_a[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(hex_b[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#%02x%02x%02x" % tuple(round(x + (y - x) * t) for x, y in zip(a, b))
+
+
+def _rel_luminance(hex_c: str) -> float:
+    def ch(v):
+        v /= 255.0
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+    r, g, b = (ch(int(hex_c[i:i + 2], 16)) for i in (1, 3, 5))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _contrast_ratio(fg: str, bg: str) -> float:
+    a, b = _rel_luminance(fg), _rel_luminance(bg)
+    hi, lo = max(a, b), min(a, b)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def readable_on(fg: str, bg: str, target: float = 4.5) -> str:
+    """Return `fg`, or a lightened/darkened version of it, so it clears the
+    WCAG contrast `target` against `bg`. Used so a dark desktop accent colour
+    doesn't become unreadable text on the dark panels."""
+    if _contrast_ratio(fg, bg) >= target:
+        return fg
+    toward = "#ffffff" if _rel_luminance(bg) < 0.4 else "#000000"
+    cand = fg
+    for i in range(1, 21):
+        cand = _mix(fg, toward, i / 20.0)
+        if _contrast_ratio(cand, bg) >= target:
+            return cand
+    return cand
+
+
+def apply_bios_style(style: "tb.Style", accent: str) -> None:
+    """Re-skin the ttkbootstrap 'darkly' base into the BIOS look. All wrapped
+    defensively — a theming quirk must never take the app down."""
+    # accent as *text* on the dark panels must stay legible whatever the
+    # desktop accent is
+    accent_txt = readable_on(accent, BIOS_PANEL, 4.5)
+    accent_txt_hi = readable_on(accent, BIOS_PANEL_HI, 4.5)
+    try:
+        c = style.colors
+        c.primary = accent
+        c.info = accent
+        c.selectbg = accent
+        c.bg = BIOS_BG
+        c.dark = BIOS_PANEL
+        c.border = BIOS_BORDER
+        c.active = BIOS_PANEL_HI
+        c.inputbg = BIOS_PANEL
+    except Exception:  # noqa: BLE001
+        pass
+
+    specs = {
+        ".": {"background": BIOS_BG, "foreground": BIOS_FG},
+        "TFrame": {"background": BIOS_BG},
+        "TLabel": {"background": BIOS_BG, "foreground": BIOS_FG},
+        "TLabelframe": {"background": BIOS_PANEL, "bordercolor": BIOS_BORDER,
+                        "darkcolor": BIOS_PANEL, "lightcolor": BIOS_PANEL,
+                        "relief": "flat"},
+        "TLabelframe.Label": {"background": BIOS_PANEL, "foreground": accent_txt,
+                              "font": ("Sans", 10, "bold")},
+        "TSeparator": {"background": BIOS_BORDER},
+        "Nav.TFrame": {"background": BIOS_PANEL},
+        "Header.TLabel": {"background": BIOS_BG, "foreground": BIOS_FG,
+                          "font": ("Sans", 18, "bold")},
+        "Horizontal.TProgressbar": {"background": accent, "troughcolor": BIOS_PANEL,
+                                    "bordercolor": BIOS_PANEL},
+        "TScale": {"background": BIOS_BG, "troughcolor": BIOS_PANEL},
+        "Nav.TButton": {"background": BIOS_PANEL, "foreground": BIOS_MUTED,
+                        "bordercolor": BIOS_PANEL, "focuscolor": "",
+                        "font": ("Sans", 10, "bold"), "anchor": "w",
+                        "padding": (16, 11), "relief": "flat"},
+        "NavActive.TButton": {"background": BIOS_PANEL_HI, "foreground": accent_txt_hi,
+                              "bordercolor": accent, "focuscolor": "",
+                              "font": ("Sans", 10, "bold"), "anchor": "w",
+                              "padding": (16, 11), "relief": "flat"},
+    }
+    for name, opts in specs.items():
+        try:
+            style.configure(name, **opts)
+        except Exception:  # noqa: BLE001
+            pass
+    hover = readable_on(_mix(accent, "#ffffff", 0.18), BIOS_PANEL_HI, 4.0)
+    for name in ("Nav.TButton", "NavActive.TButton"):
+        try:
+            style.map(name, background=[("active", BIOS_PANEL_HI)],
+                      foreground=[("active", hover)])
+        except Exception:  # noqa: BLE001
+            pass
+
+
+class SidebarNav(tb.Frame):
+    """Minimal drop-in for tb.Notebook that renders a left nav rail + a single
+    swapped content pane and a big page header (gaming-BIOS layout).
+
+    Pages are still created as `tb.Frame(self)` and registered with
+    `.add(frame, text=...)`; `.tabs()` / `.tab()` / `.select()` keep the few
+    Notebook call-sites (and the smoke tests) working."""
+
+    def __init__(self, master):
+        super().__init__(master)
+        self.rail = tb.Frame(self, width=212, style="Nav.TFrame")
+        self.rail.pack(side="left", fill="y")
+        self.rail.pack_propagate(False)
+        tb.Separator(self, orient="vertical").pack(side="left", fill="y")
+
+        right = tb.Frame(self)
+        right.pack(side="left", fill="both", expand=True)
+        self._header = tb.Label(right, text="", style="Header.TLabel",
+                                anchor="w", padding=(24, 18, 24, 14))
+        self._header.pack(fill="x")
+        tb.Separator(right).pack(fill="x")
+        self._stack = tb.Frame(right)
+        self._stack.pack(fill="both", expand=True)
+
+        self._pages: list = []      # (text, frame, button)
+        self._current = None
+
+    def add(self, frame, text: str = ""):
+        frame.master  # noqa: B018  (frame was created as tb.Frame(self); fine)
+        btn = tb.Button(self.rail, text=text, style="Nav.TButton",
+                        takefocus=False, command=lambda f=frame: self.select(f))
+        btn.pack(fill="x", padx=0, pady=1)
+        self._pages.append((text, frame, btn))
+        if self._current is None:
+            self.select(frame)
+
+    def select(self, frame=None):
+        if frame is None:
+            return self._current
+        for text, f, b in self._pages:
+            on = f is frame
+            try:
+                b.configure(style="NavActive.TButton" if on else "Nav.TButton")
+            except tk.TclError:
+                pass
+            if on:
+                f.pack(in_=self._stack, fill="both", expand=True)
+                self._header.configure(text=text)
+            else:
+                f.pack_forget()
+        self._current = frame
+
+    # ---- tb.Notebook compatibility ----
+    def tabs(self):
+        return [str(f) for _, f, _ in self._pages]
+
+    def tab(self, ref, option="text"):
+        if isinstance(ref, int):
+            return self._pages[ref][0]
+        for text, f, _ in self._pages:
+            if f is ref or str(f) == str(ref):
+                return text
+        return ""
+
+
 class Item:
     """A tweak or app entry, normalized for the GUI."""
 
@@ -195,6 +400,13 @@ class ToolkitApp:
         _maximize(root)
         self._set_window_icon(root)
 
+        self.accent = read_desktop_accent()
+        try:
+            apply_bios_style(root.style, self.accent)
+            root.configure(background=BIOS_BG)
+        except Exception:  # noqa: BLE001
+            self.accent = ACCENT_FALLBACK
+
         self.has_nvidia = sensors.has_nvidia_gpu()
         self.has_amd = sensors.has_amd_gpu()
 
@@ -209,6 +421,19 @@ class ToolkitApp:
         self.gamemode_var = tk.BooleanVar(value=False)
         self._suppress_gamemode_signal = False
 
+        # App-wide "a long task is running" lock: every tab's long operation
+        # (Apply Selected, presets, system updates) calls _begin_busy() on the
+        # main thread and hands _end_busy() back via _busy_queue when done.
+        # While busy, a click-eating overlay covers the whole notebook and the
+        # footer buttons disable, so nothing else can be launched mid-run.
+        self._busy = False
+        self._busy_queue: queue.Queue = queue.Queue()
+        self._prog_q: queue.Queue = queue.Queue()   # (overall:int|None, step:str|None, phase:str|None)
+        self._busy_overlay = None
+        self._busy_steps = 0
+        self._cur_step = ""
+        self._footer_btns: list = []
+
         self._scroll_canvases: list = []   # every scrollable tab body (for the wheel)
         self._log_lines: list[str] = []    # full log buffer, mirrored to any popped-out window
         self._pop_win = None               # detached log Toplevel, when open
@@ -219,6 +444,7 @@ class ToolkitApp:
         self.root.after(100, self._poll_log_queue)
         self.root.after(100, self._poll_dash_queue)
         self.root.after(100, self._poll_status_queue)
+        self.root.after(120, self._poll_busy_queue)
         threading.Thread(target=self._refresh_all_status, daemon=True).start()
 
         self.dash_running = True
@@ -227,6 +453,7 @@ class ToolkitApp:
 
     def _on_close(self):
         self.dash_running = False
+        self._fan_live = False
         if self._pop_win is not None:
             try:
                 self._pop_win.destroy()
@@ -340,14 +567,17 @@ class ToolkitApp:
         tb.Label(self.root, text=txt, bootstyle=style, padding=(16, 2, 16, 8),
                  wraplength=1600, justify="left").pack(fill="x")
 
-        tb.Separator(self.root).pack(fill="x", padx=16)
+        tb.Separator(self.root).pack(fill="x")
 
-        self.notebook = tb.Notebook(self.root)
-        self.notebook.pack(fill="both", expand=True, padx=16, pady=12)
+        self.notebook = SidebarNav(self.root)
+        self.notebook.pack(fill="both", expand=True)
+        self._content = self.notebook   # overlay target for _begin_busy
 
         self._build_dashboard_tab()
         self._build_keyboard_tab()
+        self._build_fan_tab()
         self._build_presets_tab()
+        self._build_updates_tab()
 
         categories = sorted(
             {item.category for item in self.items.values()},
@@ -360,13 +590,19 @@ class ToolkitApp:
         tb.Separator(self.root).pack(fill="x", padx=16)
         btn_bar = tb.Frame(self.root, padding=(16, 10))
         btn_bar.pack(fill="x")
-        tb.Button(btn_bar, text="↻  Refresh Status", bootstyle=(INFO, "outline"),
-                  command=self._on_refresh_click).pack(side="left")
-        tb.Button(btn_bar, text="✓  Apply Selected", bootstyle=SUCCESS,
-                  command=self._on_apply_click).pack(side="left", padx=8)
+        btn_refresh = tb.Button(btn_bar, text="↻  Refresh Status", bootstyle=(INFO, "outline"),
+                                command=self._on_refresh_click)
+        btn_refresh.pack(side="left")
+        btn_apply = tb.Button(btn_bar, text="✓  Apply Selected", bootstyle=SUCCESS,
+                              command=self._on_apply_click)
+        btn_apply.pack(side="left", padx=8)
+        self._footer_btns = [btn_refresh, btn_apply]
         self.status_var = tk.StringVar(value="Ready.")
         tb.Label(btn_bar, textvariable=self.status_var, bootstyle=SECONDARY,
                  font=("Sans", 9)).pack(side="right")
+        self._busy_bar = tb.Progressbar(btn_bar, mode="indeterminate", length=160,
+                                        bootstyle=(INFO, "striped"))
+        # packed only while busy (see _begin_busy / _end_busy)
 
         # ---- log console (collapsible / detachable) ----
         self.log_frame = tb.Frame(self.root, padding=(16, 0, 16, 12))
@@ -433,7 +669,7 @@ class ToolkitApp:
 
     def _build_dashboard_tab(self):
         outer = tb.Frame(self.notebook)
-        self.notebook.add(outer, text="⌂ Dashboard")
+        self.notebook.add(outer, text="Dashboard")
         frame = self._scroll_body(outer, pad=16)
 
         gauges = tb.Frame(frame)
@@ -518,7 +754,7 @@ class ToolkitApp:
 
     def _build_keyboard_tab(self):
         outer = tb.Frame(self.notebook)
-        self.notebook.add(outer, text="⌨ Keyboard")
+        self.notebook.add(outer, text="Keyboard")
         frame = self._scroll_body(outer, pad=16)
 
         import shutil as _sh
@@ -572,7 +808,12 @@ class ToolkitApp:
                 self.kbd_all_hex.set("#%02x%02x%02x" % (r, g, b))
                 for z, rgb in zc.items():
                     self.kbd_zone_vars.setdefault(z, tk.StringVar()).set("#%02x%02x%02x" % tuple(rgb))
-        self.kbd_speed.set(dellg15_kbd.load_meta().get("speed", 50))
+        _meta = dellg15_kbd.load_meta()
+        self.kbd_speed.set(_meta.get("speed", 50))
+        # if the saved mode is a gradient, restore its anchors into the swatches
+        _g = _meta.get("gradient") or {}
+        for i, hexc in enumerate((_g.get("colors") or [])[:dellg15_kbd.ZONE_COUNT]):
+            self.kbd_zone_vars.setdefault(i, tk.StringVar()).set("#" + hexc.lower())
 
         # ---- brightness ----
         br_box = tb.Labelframe(frame, text="Brightness", padding=12)
@@ -622,17 +863,33 @@ class ToolkitApp:
         sp = tb.Scale(srow, from_=0, to=100, variable=self.kbd_speed, orient="horizontal")
         sp.pack(side="left", fill="x", expand=True, padx=(0, 10))
         tb.Label(srow, textvariable=self.kbd_speed, width=4).pack(side="left")
+        # Firmware effects run on the controller itself — smooth and fast.
+        # (The AW-ELC only repaints a few times/sec over USB, so a software
+        # per-LED wave can't move fast without visibly stepping; the software
+        # gradient below is a slow ambient option.)
         frow = tb.Frame(fx)
         frow.pack(fill="x")
-        for label, key in (("Rainbow Wave", "rainbow"), ("Spectrum Cycle", "spectrum"),
-                           ("Breathing", "breathing"), ("Flashing", "flashing")):
+        for label, key in (("Rainbow Cycle", "spectrum"), ("Breathing", "breathing"),
+                           ("Flashing", "flashing")):
             tb.Button(frow, text=label, bootstyle=SECONDARY,
                       command=lambda k=key: self._kbd_apply_effect(k)).pack(side="left", padx=3)
+
+        frow2 = tb.Frame(fx)
+        frow2.pack(fill="x", pady=(8, 0))
+        tb.Button(frow2, text="Gradient wave  (slow ambient drift through the per-zone colours)",
+                  bootstyle=INFO, command=self._kbd_apply_gradient).pack(side="left", padx=3)
+
+        frow3 = tb.Frame(fx)
+        frow3.pack(fill="x", pady=(8, 0))
+        tb.Button(frow3, text="Solid colour  (leave effects, apply the colours above)",
+                  bootstyle=SUCCESS, command=self._kbd_apply_solid).pack(side="left", padx=3)
 
         bottom = tb.Frame(frame)
         bottom.pack(fill="x", pady=(4, 0))
         tb.Button(bottom, text="Turn backlight off", bootstyle=(SECONDARY, "outline"),
                   command=self._kbd_off).pack(side="left")
+        tb.Button(bottom, text="↻ Reset backlight  (unfreeze)", bootstyle=(WARNING, "outline"),
+                  command=self._kbd_reset).pack(side="left", padx=8)
 
     def _kbd_swatch(self, parent, hexvar: tk.StringVar):
         lbl = tk.Label(parent, width=4, relief="solid", bd=1, bg=self._safe_hex(hexvar.get()))
@@ -719,9 +976,213 @@ class ToolkitApp:
                                   dellg15_kbd.save_state(colors, b, mode=key, speed=sp)),
                       f"effect {key} @ speed {sp}, {b}%")
 
+    def _kbd_apply_gradient(self):
+        b = self.kbd_brightness.get()
+        sp = self.kbd_speed.get()
+        # the four per-zone swatches are the gradient anchors; drop consecutive
+        # duplicates so "all one colour" → a single-anchor comet, two distinct
+        # → a two-stop gradient, etc.
+        raw = [self._safe_hex(self.kbd_zone_vars[z].get()).lstrip("#").upper()
+               for z in range(dellg15_kbd.ZONE_COUNT)]
+        anchors = [c for i, c in enumerate(raw) if i == 0 or c != raw[i - 1]]
+        block = {"colors": anchors, "wavelength": 1.0, "blend": "oklab",
+                 "direction": "ltr", "min_value": 0.15, "max_value": 1.0,
+                 "fps": 60, "smooth": 0.12, "dither": True, "ease": "linear"}
+        colors = self._kbd_zone_colors()
+        self._kbd_run(lambda kb: (
+            dellg15_kbd.start_gradient(anchors, sp, b),
+            dellg15_kbd.save_state(colors, b, mode="gradient", speed=sp,
+                                   gradient=block)),
+            f"gradient [{', '.join('#' + c for c in anchors)}] @ speed {sp}")
+
+    def _kbd_apply_solid(self):
+        b = self.kbd_brightness.get()
+        colors = self._kbd_zone_colors()
+        self._kbd_run(lambda kb: (kb.set_zones(colors, b),
+                                  dellg15_kbd.save_state(colors, b, mode="zones")),
+                      f"solid colour @ {b}%")
+
+    def _kbd_reset(self):
+        self._kbd_run(lambda kb: kb.reset(), "reset backlight (restart OpenRGB + re-apply)")
+
     def _kbd_off(self):
         self.kbd_brightness.set(0)
         self._kbd_run(lambda kb: kb.off(), "backlight off")
+
+    # ---------- fan control ----------
+
+    def _build_fan_tab(self):
+        outer = tb.Frame(self.notebook)
+        self.notebook.add(outer, text="Fans")
+        frame = self._scroll_body(outer, pad=16)
+
+        fans = sensors.read_fans()
+        if not fans:
+            tb.Label(frame, bootstyle=WARNING, justify="left", wraplength=1000,
+                     text="No fan interface found (expected the alienware_wmi / "
+                          "dell_smm hwmon devices). Is the alienware-wmi kernel "
+                          "module loaded on this Dell G15 5515?").pack(anchor="w")
+            return
+
+        self._fan_rpm_labels: dict = {}
+        self._fan_boost_vars: dict = {}
+        self._fan_pwm_vars: dict = {}
+        self._fan_manual = tk.BooleanVar(value=False)
+
+        note = tb.Labelframe(frame, text="How this works", bootstyle=INFO, padding=12)
+        note.pack(fill="x", pady=(0, 14))
+        tb.Label(
+            note, wraplength=1100, justify="left", bootstyle="inverse-info",
+            text="Thermal profile + fan boost steer the firmware (AWCC-style) fan "
+                 "curve — boost only adds airflow on top, it can't slow a fan below "
+                 "the automatic curve. Manual PWM (advanced) takes the EC off its "
+                 "curve entirely; it's floored so the fans never fully stop, but "
+                 "watch temperatures and hit “Restore automatic” when done. Nothing "
+                 "here persists across a reboot yet.",
+        ).pack(anchor="w")
+
+        choices = sensors.platform_profile_choices()
+        if choices:
+            pf = tb.Labelframe(frame, text="Thermal profile", bootstyle=INFO, padding=12)
+            pf.pack(fill="x", pady=6)
+            prow = tb.Frame(pf); prow.pack(anchor="w")
+            self._fan_profile_var = tk.StringVar(value=sensors.get_platform_profile())
+            for c in choices:
+                tb.Radiobutton(prow, text=c.capitalize(), value=c,
+                               variable=self._fan_profile_var, bootstyle="toolbutton",
+                               command=lambda v=c: self._fan_set_profile(v)
+                               ).pack(side="left", padx=4)
+
+        lf = tb.Labelframe(frame, text="Fans & boost", bootstyle=INFO, padding=12)
+        lf.pack(fill="x", pady=6)
+        boosts = sensors.get_fan_boost()
+        for k, fan in enumerate(fans):
+            i = fan["index"]
+            r = tb.Frame(lf); r.pack(fill="x", pady=6)
+            tb.Label(r, text=fan["label"], font=("Sans", 10, "bold"), width=16,
+                     anchor="w").pack(side="left")
+            rpm_lab = tb.Label(r, text="— rpm", width=11, anchor="w",
+                               bootstyle=SECONDARY)
+            rpm_lab.pack(side="left")
+            self._fan_rpm_labels[i] = rpm_lab
+            bv = tk.IntVar(value=round((boosts[k] if k < len(boosts) else 0) / 255 * 100))
+            self._fan_boost_vars[i] = bv
+            tb.Label(r, text="Boost").pack(side="left", padx=(12, 4))
+            sc = tb.Scale(r, from_=0, to=100, variable=bv, orient="horizontal", length=240)
+            sc.pack(side="left", fill="x", expand=True)
+            sc.bind("<ButtonRelease-1>", lambda _e, idx=i: self._fan_set_boost(idx))
+            tb.Label(r, textvariable=bv, width=4).pack(side="left")
+            for lbl, pct in (("0", 0), ("50", 50), ("Max", 100)):
+                tb.Button(r, text=lbl, bootstyle=(SECONDARY, "outline"), width=4,
+                          command=lambda idx=i, p=pct, v=bv: (v.set(p),
+                                                              self._fan_set_boost(idx))
+                          ).pack(side="left", padx=2)
+
+        pr = tb.Frame(frame); pr.pack(anchor="w", pady=(8, 0))
+        tb.Label(pr, text="Presets:", bootstyle=SECONDARY).pack(side="left", padx=(0, 6))
+        tb.Button(pr, text="Auto / silent", bootstyle=SUCCESS,
+                  command=lambda: self._fan_preset("auto")).pack(side="left", padx=4)
+        tb.Button(pr, text="Cooler", bootstyle=(INFO, "outline"),
+                  command=lambda: self._fan_preset("cool")).pack(side="left", padx=4)
+        tb.Button(pr, text="Max cooling", bootstyle=(DANGER, "outline"),
+                  command=lambda: self._fan_preset("max")).pack(side="left", padx=4)
+
+        if sensors.get_pwm_state():
+            adv = tb.Labelframe(frame, text="Manual PWM — advanced / risky",
+                                bootstyle=DANGER, padding=12)
+            adv.pack(fill="x", pady=(14, 6))
+            tb.Checkbutton(adv, variable=self._fan_manual, bootstyle="round-toggle",
+                           text="Enable manual PWM control (takes the EC off its "
+                                "automatic curve)",
+                           command=self._fan_manual_toggle).pack(anchor="w")
+            self._fan_pwm_box = tb.Frame(adv)
+            self._fan_pwm_box.pack(fill="x", pady=(8, 0))
+            for fan in fans:
+                i = fan["index"]
+                r = tb.Frame(self._fan_pwm_box); r.pack(fill="x", pady=4)
+                tb.Label(r, text=fan["label"], width=16, anchor="w").pack(side="left")
+                pv = tk.IntVar(value=50)
+                self._fan_pwm_vars[i] = pv
+                sc = tb.Scale(r, from_=30, to=100, variable=pv, orient="horizontal",
+                              length=280)
+                sc.pack(side="left", fill="x", expand=True)
+                sc.bind("<ButtonRelease-1>", lambda _e, idx=i: self._fan_set_pwm(idx))
+                tb.Label(r, textvariable=pv, width=4).pack(side="left")
+            tb.Button(adv, text="Restore automatic", bootstyle=SUCCESS,
+                      command=self._fan_restore).pack(anchor="w", pady=(10, 0))
+            self._fan_manual_toggle()
+
+        self._fan_live = True
+        self._fan_poll()
+
+    def _fan_set_profile(self, name: str):
+        ok, err = sensors.set_platform_profile(name)
+        self._log(f"[Fans] thermal profile → {name}" + ("" if ok else f"  FAILED: {err}"))
+
+    def _fan_set_boost(self, index: int):
+        pct = self._fan_boost_vars[index].get()
+        ok, err = sensors.set_fan_boost(index, round(pct * 255 / 100))
+        self._log(f"[Fans] fan {index} boost → {pct}%" + ("" if ok else f"  FAILED: {err}"))
+
+    def _fan_manual_toggle(self):
+        on = self._fan_manual.get()
+        if on and not messagebox.askyesno(
+            "Manual fan control",
+            "This takes the fans off the firmware's automatic curve. They stay "
+            "floored so they can't stop, but keep an eye on temperatures and use "
+            "“Restore automatic” when you're done.\n\nProceed?"):
+            self._fan_manual.set(False)
+            on = False
+        for r in self._fan_pwm_box.winfo_children():
+            for w in r.winfo_children():
+                try:
+                    w.configure(state="normal" if on else "disabled")
+                except tk.TclError:
+                    pass
+        if on:
+            for i in self._fan_pwm_vars:
+                self._fan_set_pwm(i)
+
+    def _fan_set_pwm(self, index: int):
+        if not self._fan_manual.get():
+            return
+        pct = self._fan_pwm_vars[index].get()
+        ok, err = sensors.set_pwm_manual(index, round(pct * 255 / 100))
+        self._log(f"[Fans] fan {index} manual PWM → {pct}%" + ("" if ok else f"  FAILED: {err}"))
+
+    def _fan_restore(self):
+        ok, err = sensors.restore_fan_auto()
+        self._fan_manual.set(False)
+        if hasattr(self, "_fan_pwm_box"):
+            self._fan_manual_toggle()
+        for bv in self._fan_boost_vars.values():
+            bv.set(0)
+        self._log("[Fans] restored automatic control" + ("" if ok else f"  (errors: {err})"))
+
+    def _fan_preset(self, kind: str):
+        prof = {"auto": "balanced", "cool": "performance", "max": "performance"}[kind]
+        boost = {"auto": 0, "cool": 60, "max": 100}[kind]
+        if kind == "auto":
+            sensors.restore_fan_auto()
+        if hasattr(self, "_fan_profile_var") and prof in sensors.platform_profile_choices():
+            sensors.set_platform_profile(prof)
+            self._fan_profile_var.set(prof)
+        for i, bv in self._fan_boost_vars.items():
+            bv.set(boost)
+            sensors.set_fan_boost(i, round(boost * 255 / 100))
+        self._log(f"[Fans] preset: {kind} (profile {prof}, boost {boost}%)")
+
+    def _fan_poll(self):
+        if not getattr(self, "_fan_live", False):
+            return
+        for fan in sensors.read_fans():
+            lab = self._fan_rpm_labels.get(fan["index"])
+            if lab is not None:
+                try:
+                    lab.configure(text=f"{fan['rpm']} rpm")
+                except tk.TclError:
+                    pass
+        self.root.after(2000, self._fan_poll)
 
     def _build_category_tab(self, category: str):
         outer = tb.Frame(self.notebook)
@@ -772,6 +1233,397 @@ class ToolkitApp:
                 box, text="Apply This Preset", bootstyle=SUCCESS,
                 command=lambda pid=preset_id: self._on_apply_preset(pid)
             ).pack(anchor="e")
+
+    # ---------- app-wide busy lock ----------
+
+    def _begin_busy(self, text: str = "Working…", steps: int = 0) -> None:
+        """Lock the UI for a long task. MAIN THREAD ONLY (call from the button
+        handler, not the worker). Covers the notebook with a click-eating
+        overlay showing two progress bars — overall (determinate when `steps`
+        is known) and current task (indeterminate) — plus a step/phase line
+        and an elapsed timer. Reversed by _poll_busy_queue on _busy_queue."""
+        self._busy = True
+        self.worker_running = True
+        self._busy_t0 = time.monotonic()
+        self._busy_steps = steps
+        self._cur_step = ""
+        for btn in self._footer_btns:
+            btn.configure(state="disabled")
+        self.status_var.set(text)
+        self._busy_bar.pack(side="right", padx=(8, 0))
+        self._busy_bar.start(12)
+        if self._busy_overlay is None:
+            ov = tk.Frame(self.notebook, cursor="watch", bg="#0e1116")
+            ov.place(x=0, y=0, relwidth=1, relheight=1)
+            # swallow every pointer/key event so no tab control can be used
+            for seq in ("<Button>", "<Key>", "<MouseWheel>", "<Button-4>", "<Button-5>"):
+                ov.bind(seq, lambda _e: "break")
+            box = tb.Frame(ov, padding=28, bootstyle="dark")
+            box.place(relx=0.5, rely=0.4, anchor="center")
+            self._busy_label = tb.Label(box, text=text, bootstyle="inverse-dark",
+                                        font=("Sans", 12, "bold"))
+            self._busy_label.pack(anchor="w", pady=(0, 16))
+
+            tb.Label(box, text="OVERALL", bootstyle="inverse-dark",
+                     font=("Sans", 8, "bold")).pack(anchor="w")
+            self._busy_bar_overall = tb.Progressbar(box, length=400,
+                                                    bootstyle=(SUCCESS, "striped"))
+            self._busy_bar_overall.pack(fill="x", pady=(2, 1))
+            self._busy_overall_lbl = tb.Label(box, text="", bootstyle="inverse-dark",
+                                              font=("Sans", 9))
+            self._busy_overall_lbl.pack(anchor="w", pady=(0, 14))
+
+            tb.Label(box, text="CURRENT TASK", bootstyle="inverse-dark",
+                     font=("Sans", 8, "bold")).pack(anchor="w")
+            self._busy_bar_task = tb.Progressbar(box, length=400, mode="indeterminate",
+                                                 bootstyle=(INFO, "striped"))
+            self._busy_bar_task.pack(fill="x", pady=(2, 1))
+            self._busy_bar_task.start(12)
+            self._busy_step = tb.Label(box, text="Preparing…", bootstyle="inverse-dark",
+                                       font=("Sans", 9), wraplength=400, justify="left")
+            self._busy_step.pack(anchor="w", pady=(0, 14))
+
+            self._busy_elapsed = tb.Label(box, text="Elapsed: 0s",
+                                          bootstyle="inverse-dark", font=("Sans", 10))
+            self._busy_elapsed.pack(anchor="w")
+            tb.Label(box, text="Full output is in the log console below.",
+                     bootstyle="inverse-dark", font=("Sans", 9)).pack(anchor="w", pady=(4, 0))
+            self._busy_overlay = ov
+        else:
+            self._busy_label.configure(text=text)
+            self._busy_elapsed.configure(text="Elapsed: 0s")
+            self._busy_step.configure(text="Preparing…")
+            self._busy_overall_lbl.configure(text="")
+
+        ob = self._busy_bar_overall
+        if steps > 0:
+            ob.stop()
+            ob.configure(mode="determinate", maximum=steps, value=0)
+        else:
+            ob.configure(mode="indeterminate")
+            ob.start(16)
+        self._busy_overlay.lift()
+        self._tick_busy()
+
+    def _progress(self, overall: int | None = None, step: str | None = None,
+                  phase: str | None = None) -> None:
+        """Thread-safe: feed the two-bar overlay. `overall` = completed-step
+        count, `step` = what's being worked on, `phase` = downloading /
+        installing / …  (drained in _poll_busy_queue)."""
+        self._prog_q.put((overall, step, phase))
+
+    @staticmethod
+    def _phase_from_line(line: str) -> str | None:
+        low = line.lower()
+        pairs = (("downloading", "downloading"), ("get:", "downloading"),
+                 ("fetching", "downloading"), ("resolving dependencies", "resolving"),
+                 ("dependencies resolved", "resolving"),
+                 ("running transaction check", "checking"),
+                 ("running scriptlet", "running scripts"),
+                 ("running transaction", "installing"),
+                 ("upgrading ", "upgrading"), ("installing ", "installing"),
+                 ("reinstalling ", "installing"), ("removing ", "removing"),
+                 ("erasing ", "removing"), ("verifying ", "verifying"),
+                 ("importing gpg key", "importing keys"))
+        for needle, label in pairs:
+            if needle in low:
+                return label
+        return None
+
+    @staticmethod
+    def _fmt_dur(sec: float) -> str:
+        sec = int(sec)
+        h, m, s = sec // 3600, (sec % 3600) // 60, sec % 60
+        if h:
+            return f"{h}h {m:02d}m {s:02d}s"
+        if m:
+            return f"{m}m {s:02d}s"
+        return f"{s}s"
+
+    def _tick_busy(self) -> None:
+        """1 Hz elapsed-time updater for the running task; stops itself when
+        the busy lock clears."""
+        if not self._busy:
+            return
+        el = self._fmt_dur(time.monotonic() - self._busy_t0)
+        try:
+            self._busy_elapsed.configure(text=f"Elapsed: {el}")
+            self.status_var.set(f"{self._busy_label.cget('text')}   ·   {el}")
+        except (tk.TclError, AttributeError):
+            pass
+        self.root.after(1000, self._tick_busy)
+
+    def _poll_busy_queue(self) -> None:
+        """Drain completion signals from worker threads and unlock the UI."""
+        # live progress → two-bar overlay
+        try:
+            while True:
+                ov, step, phase = self._prog_q.get_nowait()
+                if self._busy_overlay is None:
+                    continue
+                try:
+                    if ov is not None and self._busy_steps > 0:
+                        self._busy_bar_overall.configure(value=ov)
+                        self._busy_overall_lbl.configure(text=f"{ov} / {self._busy_steps}")
+                    if step is not None:
+                        self._cur_step = step
+                    if step is not None or phase is not None:
+                        base = self._cur_step or "Working…"
+                        self._busy_step.configure(
+                            text=f"{base}   —   {phase}" if phase else base)
+                except tk.TclError:
+                    pass
+        except queue.Empty:
+            pass
+
+        done = None
+        try:
+            while True:
+                done = self._busy_queue.get_nowait()
+        except queue.Empty:
+            pass
+        if done is not None:
+            elapsed = self._fmt_dur(time.monotonic() - getattr(self, "_busy_t0", time.monotonic()))
+            self._busy = False
+            self.worker_running = False
+            for btn in self._footer_btns:
+                btn.configure(state="normal")
+            self._busy_bar.stop()
+            self._busy_bar.pack_forget()
+            self.status_var.set(f"{done}   ·   took {elapsed}")
+            if self._busy_overlay is not None:
+                self._busy_overlay.destroy()
+                self._busy_overlay = None
+            # post-task follow-ups from _run_updates (failure detail / reboot)
+            info, self._upd_last = getattr(self, "_upd_last", None), None
+            if info:
+                if not info["ok"]:
+                    self._show_output_dialog(
+                        f"{info['desc']} — failed (exit {info['rc']})", info["tail"])
+                elif info["reboot"] and messagebox.askyesno(
+                    "Reboot recommended",
+                    f"{info['desc']} finished.\n\nNobara recommends a reboot after a "
+                    "system update. Reboot now?"):
+                    subprocess.Popen(["systemctl", "reboot"])
+            if hasattr(self, "_upd_count_var"):
+                self._refresh_update_count()
+        if hasattr(self, "_upd_count_q"):
+            try:
+                self._upd_count_var.set(self._upd_count_q.get_nowait())
+            except queue.Empty:
+                pass
+        self.root.after(150, self._poll_busy_queue)
+
+    def _show_output_dialog(self, title: str, lines: list[str]) -> None:
+        """Modal scrollable dump of a task's captured output (used on failure)."""
+        win = tk.Toplevel(self.root)
+        win.title(title)
+        win.geometry("900x520")
+        win.transient(self.root)
+        tb.Label(win, text=title, bootstyle=DANGER, font=("Sans", 10, "bold"),
+                 padding=(12, 10)).pack(anchor="w")
+        tb.Label(win, text="Full output is in the log console at the bottom of the "
+                 "main window.", bootstyle=SECONDARY, padding=(12, 0)).pack(anchor="w")
+        txt = self._make_log_text(win)
+        txt.pack(fill="both", expand=True, padx=12, pady=10)
+        txt.configure(state="normal")
+        txt.insert("end", "\n".join(lines[-400:]))
+        txt.see("end")
+        txt.configure(state="disabled")
+        tb.Button(win, text="Close", bootstyle=SECONDARY,
+                  command=win.destroy).pack(pady=(0, 12))
+
+    # ---------- updates ----------
+
+    def _build_updates_tab(self):
+        outer = tb.Frame(self.notebook)
+        self.notebook.add(outer, text="Updates")
+        frame = self._scroll_body(outer, pad=16)
+
+        have_ns = shutil.which("nobara-sync") is not None
+        have_flatpak = shutil.which("flatpak") is not None
+        have_fwupd = shutil.which("fwupdmgr") is not None
+
+        note = tb.Labelframe(frame, text="System updates", bootstyle=INFO, padding=12)
+        note.pack(fill="x", pady=(0, 14))
+        mgrs = ", ".join(m for m, ok in (("dnf" if have_ns else "dnf (no nobara-sync)", True),
+                                         ("flatpak", have_flatpak), ("fwupd", have_fwupd)) if ok)
+        tb.Label(
+            note, wraplength=1100, justify="left", bootstyle="inverse-info",
+            text=f"Package managers found: {mgrs}. Each has its own section below; "
+                 "“Update everything” runs the system + Flatpak updates back to back. "
+                 "Output streams to the log console at the bottom of the window; a reboot "
+                 "is recommended after a system or firmware update.",
+        ).pack(anchor="w")
+
+        self._upd_count_q: queue.Queue = queue.Queue()
+        self._upd_count_var = tk.StringVar(value="Updates available:  checking…")
+        crow = tb.Frame(note); crow.pack(anchor="w", fill="x", pady=(8, 0))
+        tb.Label(crow, textvariable=self._upd_count_var, bootstyle="inverse-info",
+                 font=("Sans", 10, "bold")).pack(side="left")
+        tb.Button(crow, text="↻ recount", bootstyle=(INFO, "link"),
+                  command=self._refresh_update_count).pack(side="left", padx=8)
+
+        def add(parent, text, style, cmd, desc, reboot=False):
+            tb.Button(parent, text=text, bootstyle=style,
+                      command=lambda: self._run_updates(cmd, desc, reboot=reboot)
+                      ).pack(side="left", padx=4, pady=4)
+
+        def section(title, style):
+            lf = tb.Labelframe(frame, text=title, bootstyle=style, padding=12)
+            lf.pack(fill="x", pady=6)
+            row = tb.Frame(lf); row.pack(anchor="w")
+            return row
+
+        sys_update = (f"nobara-sync cli {shlex.quote(self.user)}" if have_ns
+                      else "dnf upgrade --refresh -y")
+
+        # ---- Overall ----
+        r0 = section("Everything", SUCCESS)
+        check_all = " ; ".join(
+            [f"echo '### {n}' ; {c} || true" for n, c in (
+                ("dnf", "nobara-sync check-updates" if have_ns else "dnf check-update"),
+                ("flatpak", "flatpak remote-ls --updates"),
+                ("fwupd", "fwupdmgr get-updates")) if (
+                n != "flatpak" or have_flatpak) and (n != "fwupd" or have_fwupd)])
+        add(r0, "Check everything", (INFO, "outline"), check_all, "check all package managers")
+        update_all = " ; ".join([sys_update] + (["flatpak update -y"] if have_flatpak else []))
+        add(r0, "Update everything (system + Flatpak)", SUCCESS,
+            update_all, "update everything", reboot=True)
+
+        # ---- dnf / Nobara ----
+        r1 = section("System — dnf" + (" / nobara-sync" if have_ns else ""), INFO)
+        if have_ns:
+            add(r1, "Check for updates", (INFO, "outline"),
+                "nobara-sync check-updates || true", "check for updates")
+            add(r1, "Update system", SUCCESS,
+                f"nobara-sync cli {shlex.quote(self.user)}", "update system + fixups",
+                reboot=True)
+            add(r1, "Apply known fixups", (WARNING, "outline"),
+                "nobara-sync install-fixups", "apply known fixups")
+            add(r1, "Repair (distro-sync)", (WARNING, "outline"),
+                "nobara-sync repair", "repair via distro-sync", reboot=True)
+            add(r1, "List enabled repos", (SECONDARY, "outline"),
+                "nobara-sync check-repos || true", "list enabled repos")
+        else:
+            add(r1, "Check for updates", (INFO, "outline"),
+                "dnf check-update || true", "check for updates")
+        add(r1, "dnf upgrade --refresh", (SECONDARY, "outline"),
+            "dnf upgrade --refresh -y", "dnf upgrade --refresh", reboot=True)
+        add(r1, "Clean dnf cache", (SECONDARY, "outline"),
+            "dnf clean all && dnf makecache", "clean + rebuild dnf cache")
+        add(r1, "Fix Fedora GPG keys", (DANGER, "outline"),
+            "rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-*-primary "
+            "&& dnf clean all && dnf makecache",
+            "import Fedora GPG keys + rebuild cache")
+
+        # ---- Flatpak ----
+        if have_flatpak:
+            rf = section("Flatpak", INFO)
+            add(rf, "Check updates", (INFO, "outline"),
+                "flatpak remote-ls --updates || true", "check Flatpak updates")
+            add(rf, "Update Flatpaks", SUCCESS, "flatpak update -y", "update Flatpaks")
+            add(rf, "Remove unused runtimes", (SECONDARY, "outline"),
+                "flatpak uninstall --unused -y", "remove unused Flatpak runtimes")
+
+        # ---- Firmware ----
+        if have_fwupd:
+            rw = section("Firmware — fwupd", WARNING)
+            add(rw, "Refresh metadata", (INFO, "outline"),
+                "fwupdmgr refresh --force || true", "refresh firmware metadata")
+            add(rw, "Show updates", (INFO, "outline"),
+                "fwupdmgr get-updates || true", "list firmware updates")
+            add(rw, "Apply firmware updates", (DANGER, "outline"),
+                "fwupdmgr update -y", "apply firmware updates", reboot=True)
+
+        tb.Label(
+            frame, bootstyle=SECONDARY, wraplength=1100, justify="left",
+            text="Tip: if an update aborts with a GPG signature error (Nobara ships some "
+                 ".fc44 packages signed with a key that's on disk but not imported), run "
+                 "“Fix Fedora GPG keys” then retry. Firmware updates can need the charger "
+                 "plugged in and a reboot to complete.",
+        ).pack(anchor="w", pady=(12, 0))
+
+        self._refresh_update_count()
+
+    def _refresh_update_count(self) -> None:
+        """Count pending updates per package manager, off-thread. Result goes to
+        _upd_count_var via _upd_count_q (drained in _poll_busy_queue).
+
+        dnf is queried with --cacheonly so this never blocks on slow mirrors —
+        the number is "as of the last metadata sync" and becomes exact right
+        after any Check/Update action (which refreshes the cache; this then
+        re-runs). '?' means the query failed or timed out."""
+        self._upd_count_var.set("Updates available:  checking…")
+
+        def sh(cmd: str, timeout: int) -> tuple[int, str]:
+            try:
+                p = subprocess.run(["bash", "-c", cmd], capture_output=True,
+                                   text=True, timeout=timeout)
+                return p.returncode, p.stdout
+            except Exception:  # noqa: BLE001
+                return -1, ""
+
+        def work():
+            parts = []
+            rc, out = sh("dnf -q --cacheonly check-update 2>/dev/null", 60)
+            if rc in (0, 100):
+                n = sum(1 for ln in out.splitlines()
+                        if ln[:1].isalnum() and len(ln.split()) >= 3
+                        and "." in ln.split()[0])
+                parts.append(("dnf", str(n)))
+            else:
+                parts.append(("dnf", "?"))
+            if shutil.which("flatpak"):
+                rc, out = sh("flatpak remote-ls --updates --columns=application 2>/dev/null", 45)
+                parts.append(("flatpak", str(sum(1 for ln in out.splitlines() if ln.strip()))
+                              if rc == 0 else "?"))
+            if shutil.which("fwupdmgr"):
+                rc, out = sh("fwupdmgr get-updates -y 2>/dev/null", 45)
+                parts.append(("firmware", str(out.count("New version:")) if rc in (0, 2) else "?"))
+            total = sum(int(v) for _, v in parts if v.isdigit())
+            detail = "  ·  ".join(f"{k} {v}" for k, v in parts)
+            self._upd_count_q.put(f"Updates available:  {total}   ({detail})")
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _run_updates(self, cmd: str, desc: str, reboot: bool = False):
+        if self._busy:
+            messagebox.showinfo("Busy", "An operation is already running — check the log.")
+            return
+        self._begin_busy(f"Updates — {desc}", steps=0)
+        self._progress(step=desc)
+        self._log(f"[Updates] {desc} …")
+
+        def work():
+            rc, tail = -1, []
+            try:
+                proc = subprocess.Popen(
+                    ["bash", "-c", cmd], stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT, text=True, bufsize=1,
+                )
+                for line in proc.stdout:
+                    line = line.rstrip()
+                    self._log(line)
+                    tail.append(line)
+                    del tail[:-400]
+                    ph = self._phase_from_line(line)
+                    if ph:
+                        self._progress(step=desc, phase=ph)
+                rc = proc.wait()
+            except Exception as exc:  # noqa: BLE001
+                self._log(f"[Updates FAILED] {exc}")
+                tail.append(f"[Updates FAILED] {exc}")
+            finally:
+                result = "done ✓" if rc == 0 else f"exit {rc}"
+                self._log(f"[Updates] {desc} — {result}")
+                # _poll_busy_queue (main thread) reads this after unlocking, to
+                # pop a failure dialog or the reboot prompt — Tk isn't thread-safe.
+                self._upd_last = {"ok": rc == 0, "rc": rc, "desc": desc,
+                                  "reboot": reboot, "tail": tail}
+                self._busy_queue.put(f"Updates: {desc} — {result}")
+
+        threading.Thread(target=work, daemon=True).start()
 
     # ---------- dashboard loop ----------
 
@@ -863,21 +1715,25 @@ class ToolkitApp:
                 widget.insert("end", chunk)
                 widget.see("end")
                 widget.configure(state="disabled")
-        self.root.after(50, self._poll_log_queue)
+        self.root.after(120, self._poll_log_queue)
 
     def _refresh_all_status(self):
-        for item in self.items.values():
+        def _check(item):
             item.pending = False
-            if not item.hw_supported:
+            if not item.hw_supported or not item.check_cmd:
                 item.applied = False
-                continue
-            if not item.check_cmd:
-                item.applied = False
-                continue
+                return
             ok, _ = run_cmd(item.check_cmd)
             item.applied = ok
             if not ok and item.check_pending_cmd:
                 item.pending = run_cmd(item.check_pending_cmd)[0]
+
+        # Each check spawns a shell; running them serially made startup crawl.
+        # They're independent and I/O-bound, so fan them out over a pool.
+        items = list(self.items.values())
+        if items:
+            with ThreadPoolExecutor(max_workers=min(12, len(items))) as ex:
+                list(ex.map(_check, items))
         # Hand back to the main thread via a queue — Tk is not thread-safe and
         # calling root.after() from here races the interpreter (crashes as
         # "main thread is not in main loop"). Mirrors the log/dash queues.
@@ -928,13 +1784,33 @@ class ToolkitApp:
 
     # ---------- apply logic ----------
 
+    def _stream_apply_cmd(self, cmd: str) -> bool:
+        """Run one apply/undo command, streaming its output to the log and
+        feeding phase hints (downloading / installing / …) to the overlay."""
+        try:
+            proc = subprocess.Popen(["bash", "-c", cmd], stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True, bufsize=1)
+        except Exception as exc:  # noqa: BLE001
+            self._log(str(exc))
+            return False
+        for line in proc.stdout:
+            line = line.rstrip()
+            if line:
+                self._log(line)
+                ph = self._phase_from_line(line)
+                if ph:
+                    self._progress(phase=ph)
+        try:
+            return proc.wait(timeout=3600) == 0
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            self._log("[TIMEOUT] command ran over 60 min — killed")
+            return False
+
     def _run_item_apply(self, item: Item):
         self._log(f"--- Applying: {item.content} ---")
         for cmd in item.apply_cmds:
-            ok, out = run_cmd(cmd)
-            if out:
-                self._log(out)
-            if not ok:
+            if not self._stream_apply_cmd(cmd):
                 self._log(f"[FAILED] {cmd}")
                 return False
         self._log(f"[OK] {item.content}")
@@ -943,50 +1819,61 @@ class ToolkitApp:
     def _run_item_undo(self, item: Item):
         self._log(f"--- Reverting: {item.content} ---")
         for cmd in item.undo_cmds:
-            ok, out = run_cmd(cmd)
-            if out:
-                self._log(out)
-            if not ok:
+            if not self._stream_apply_cmd(cmd):
                 self._log(f"[FAILED] {cmd}")
                 return False
         self._log(f"[OK reverted] {item.content}")
         return True
 
     def _on_apply_click(self):
-        if self.worker_running:
+        if self._busy:
             messagebox.showinfo("Busy", "An operation is already running — check the log.")
             return
         selected_ids = [i.id for i in self.items.values() if i.var is not None and i.hw_supported]
+
+        def _runnable(it):
+            checked = it.var.get() if it.var else False
+            if checked and not it.done:
+                return True
+            return bool(it.kind == "tweak" and not checked and it.applied and it.undo_cmds)
+
+        n = sum(1 for iid in selected_ids if _runnable(self.items[iid]))
+        self._begin_busy("Applying selected tweaks / apps", steps=max(1, n))
         threading.Thread(target=self._apply_worker, args=(selected_ids,), daemon=True).start()
 
     def _apply_worker(self, item_ids: list[str]):
-        self.worker_running = True
-        self.status_var.set("Applying…")
         n_skipped = 0
+        done = 0
         for item_id in item_ids:
             item = self.items[item_id]
             checked = item.var.get() if item.var else False
             if item.kind == "tweak":
                 if checked and not item.done:
+                    self._progress(overall=done, step=f"Applying {item.content}")
                     self._run_item_apply(item)
+                    done += 1
                 elif checked and item.done:
                     n_skipped += 1
                 elif not checked and item.applied and item.undo_cmds:
+                    self._progress(overall=done, step=f"Reverting {item.content}")
                     self._run_item_undo(item)
+                    done += 1
             else:  # app: one-directional install only
                 if checked and not item.done:
+                    self._progress(overall=done, step=f"Installing {item.content}")
                     self._run_item_apply(item)
+                    done += 1
                 elif checked and item.done:
                     n_skipped += 1
+        self._progress(overall=done)
         if n_skipped:
             self._log(f"[skipped {n_skipped} already-applied/installed item(s)]")
         self._log("=== Done. Click Refresh Status to confirm. ===")
-        self.status_var.set("Done — refresh to confirm.")
-        self.worker_running = False
+        self._busy_queue.put("Done — refresh to confirm.")
         threading.Thread(target=self._refresh_all_status, daemon=True).start()
 
     def _on_apply_preset(self, preset_id: str):
-        if self.worker_running:
+        if self._busy:
             messagebox.showinfo("Busy", "An operation is already running — check the log.")
             return
         preset = self.presets[preset_id]
@@ -997,23 +1884,28 @@ class ToolkitApp:
         ):
             return
         ids = list(preset.get("tweaks", [])) + list(preset.get("apps", []))
+        n = sum(1 for i in ids
+                if (it := self.items.get(i)) and it.hw_supported and not it.done)
+        self._begin_busy(f"Applying preset — {preset['Content']}", steps=max(1, n))
         threading.Thread(target=self._preset_worker, args=(ids,), daemon=True).start()
 
     def _preset_worker(self, item_ids: list[str]):
-        self.worker_running = True
-        self.status_var.set("Applying preset…")
+        done = 0
         for item_id in item_ids:
             item = self.items.get(item_id)
             if not item or not item.hw_supported:
                 continue
             if not item.done:
+                verb = "Installing" if item.kind == "app" else "Applying"
+                self._progress(overall=done, step=f"{verb} {item.content}")
                 self._run_item_apply(item)
+                done += 1
             else:
                 state = "pending reboot" if item.pending else ("installed" if item.kind == "app" else "applied")
                 self._log(f"[skip, already {state}] {item.content}")
+        self._progress(overall=done)
         self._log("=== Preset done. Click Refresh Status to confirm. ===")
-        self.status_var.set("Preset done — refresh to confirm.")
-        self.worker_running = False
+        self._busy_queue.put("Preset done — refresh to confirm.")
         threading.Thread(target=self._refresh_all_status, daemon=True).start()
 
 
