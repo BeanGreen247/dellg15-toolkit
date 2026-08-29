@@ -1835,6 +1835,16 @@ class ToolkitApp:
         tb.Button(row, text="Save .txt…", bootstyle=(SECONDARY, "outline"),
                   command=self._save_diag).pack(side="left", padx=4)
 
+        row2 = tb.Frame(frame)
+        row2.pack(anchor="w", pady=(0, 8))
+        self._bundle_btn = tb.Button(
+            row2, text="⇩  Collect hardware bundle (.tar.gz)", bootstyle=(WARNING, "outline"),
+            command=self._collect_bundle)
+        self._bundle_btn.pack(side="left")
+        tb.Label(row2, bootstyle=SECONDARY,
+                 text="  — raw sysfs / DMI / evdev-keycaps / hwmon / PCI / OpenRGB dumps; "
+                      "attach the file to a “new hardware support” issue").pack(side="left", padx=6)
+
         box = tb.Labelframe(
             frame, padding=10, bootstyle=INFO,
             text="  ⧉  GITHUB ISSUE BLOCK — “Copy for GitHub issue” copies exactly what's "
@@ -1860,6 +1870,22 @@ class ToolkitApp:
         self._diag_text.insert("end", text)
         self._diag_text.see("1.0")
         self._diag_text.configure(state="disabled")
+
+    def _collect_bundle(self):
+        if self._diag_running:
+            return
+        self._diag_running = True
+        self._bundle_btn.configure(state="disabled", text="Collecting bundle…")
+        self.status_var.set("Collecting hardware dump bundle…")
+
+        def work():
+            try:
+                path = collect_hw_bundle()
+                self._diag_q.put(("bundle", path))
+            except Exception as exc:  # noqa: BLE001
+                self._diag_q.put(("bundle", f"ERROR: {exc}"))
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _copy_full_issue(self):
         if not self._diag_raw:
@@ -2006,10 +2032,22 @@ class ToolkitApp:
         if hasattr(self, "_diag_q"):
             try:
                 rep = self._diag_q.get_nowait()
-                self._set_diag(rep)
                 self._diag_running = False
-                self._diag_btn.configure(state="normal", text="Regenerate report")
-                self.status_var.set("Debug report ready — Copy, or Copy the issue template.")
+                if isinstance(rep, tuple) and rep[0] == "bundle":
+                    self._bundle_btn.configure(
+                        state="normal", text="⇩  Collect hardware bundle (.tar.gz)")
+                    if rep[1].startswith("ERROR"):
+                        self.status_var.set(f"Bundle {rep[1]}")
+                    else:
+                        self.status_var.set(f"Hardware bundle saved: {rep[1]}")
+                        messagebox.showinfo(
+                            "Hardware bundle",
+                            f"Saved:\n{rep[1]}\n\nSkim it for private strings, then attach "
+                            "the .tar.gz to a “new hardware support” issue on GitHub.")
+                else:
+                    self._set_diag(rep)
+                    self._diag_btn.configure(state="normal", text="Regenerate report")
+                    self.status_var.set("Debug report ready — Copy for GitHub issue.")
             except queue.Empty:
                 pass
         self.root.after(120, self._poll_log_queue)
@@ -2475,6 +2513,181 @@ PASTE THE DEBUG REPORT HERE
 """
 
 
+# ── new-hardware onboarding: a raw dump bundle to attach to a support issue ──
+
+# linux/input-event-codes.h — the codes that matter for a laptop's function /
+# media / hardware keys. Unknowns print as KEY_<n>.
+_KEY_CODE_NAMES = {
+    59: "F1", 60: "F2", 61: "F3", 62: "F4", 63: "F5", 64: "F6", 65: "F7",
+    66: "F8", 67: "F9", 68: "F10", 87: "F11", 88: "F12",
+    99: "SYSRQ", 110: "INSERT", 111: "DELETE", 119: "PAUSE", 127: "MENU",
+    113: "MUTE", 114: "VOLUMEDOWN", 115: "VOLUMEUP", 116: "POWER",
+    128: "STOP", 140: "CALC", 142: "SLEEP", 143: "WAKEUP",
+    148: "PROG1", 149: "PROG2", 150: "WWW", 152: "SCREENLOCK",
+    158: "BACK", 159: "FORWARD", 161: "EJECTCD",
+    163: "NEXTSONG", 164: "PLAYPAUSE", 165: "PREVIOUSSONG", 166: "STOPCD",
+    172: "HOMEPAGE", 173: "REFRESH", 190: "PROG3", 191: "PROG4",
+    202: "PAUSECD", 217: "SEARCH",
+    224: "BRIGHTNESSDOWN", 225: "BRIGHTNESSUP", 226: "MEDIA",
+    227: "SWITCHVIDEOMODE", 228: "KBDILLUMTOGGLE", 229: "KBDILLUMDOWN",
+    230: "KBDILLUMUP", 236: "BATTERY", 238: "WLAN", 239: "UWB",
+    240: "UNKNOWN", 241: "VIDEO_NEXT", 244: "BRIGHTNESS_AUTO",
+    245: "DISPLAY_OFF", 246: "WWAN", 247: "RFKILL", 248: "MICMUTE",
+    418: "SCALE", 431: "ASSISTANT", 464: "FN", 484: "FN_RIGHT_SHIFT",
+    582: "MICMUTE", 701: "PERFORMANCE (the G-key / G-Mode)",
+}
+for _i in range(183, 195):                       # 183-194 -> F13..F24
+    _KEY_CODE_NAMES[_i] = f"F{_i - 170}"
+
+
+def _decode_key_caps() -> str:
+    """For each evdev device in /proc/bus/input/devices, decode its `B: KEY=`
+    capability bitmap into KEY_ names — the fastest way to see what a new
+    laptop's Fn / media / vendor keys can emit, without live evtest."""
+    ok, _rc, blob = run_cmd3("cat /proc/bus/input/devices", timeout=8)
+    if not ok:
+        return "(could not read /proc/bus/input/devices)"
+    out, name, keyline = [], "?", ""
+    def flush():
+        if not keyline:
+            return
+        words = keyline.split()
+        codes = []
+        for wi, w in enumerate(reversed(words)):
+            try:
+                val = int(w, 16)
+            except ValueError:
+                continue
+            for bit in range(64):
+                if val >> bit & 1:
+                    codes.append(wi * 64 + bit)
+        pretty = ", ".join(
+            f"{c}:{_KEY_CODE_NAMES.get(c, 'KEY_' + str(c))}" for c in sorted(codes)
+            if c >= 55 or c in _KEY_CODE_NAMES)          # skip the boring alnum block
+        out.append(f"[{name}]\n  {pretty or '(only standard keys)'}\n")
+    for ln in blob.splitlines():
+        if ln.startswith("N: Name="):
+            flush(); name = ln.split('"', 2)[1] if '"' in ln else ln[8:]; keyline = ""
+        elif ln.startswith("B: KEY="):
+            keyline = ln[7:].strip()
+    flush()
+    return "\n".join(out) or "(no KEY-capable devices found)"
+
+
+_HW_BUNDLE_FILES = [
+    ("dmi.txt", "grep -r . /sys/class/dmi/id/ 2>/dev/null | sed 's#/sys/class/dmi/id/##' "
+     "| grep -viE 'uevid|modalias'"),
+    ("kernel.txt", "uname -a; echo; echo '# cmdline'; cat /proc/cmdline; echo; "
+     "echo '# os-release'; cat /etc/os-release"),
+    ("lspci.txt", "lspci -nnvvv 2>/dev/null || lspci -nnk 2>/dev/null || echo '(lspci missing)'"),
+    ("lsusb.txt", "lsusb -t 2>/dev/null; echo; lsusb 2>/dev/null; echo '=== verbose ==='; "
+     "lsusb -v 2>/dev/null"),
+    ("modules.txt", "lsmod; echo; for m in dell_laptop dell_wmi dell_smbios dell_smm_hwmon "
+     "alienware_wmi hid_generic i8k sparse_keymap; do echo \"=== modinfo $m ===\"; "
+     "modinfo $m 2>/dev/null | grep -E '^(filename|description|parm|alias):'; done"),
+    ("input-devices.txt", "cat /proc/bus/input/devices"),
+    ("key-capabilities.txt", _decode_key_caps),
+    ("evdev-udev.txt", "for e in /dev/input/event*; do echo \"=== $e ===\"; "
+     "udevadm info -q all -n $e 2>/dev/null; echo; done"),
+    ("hwmon.txt", "for h in /sys/class/hwmon/hwmon*; do echo \"### $h  name=$(cat $h/name 2>/dev/null)\"; "
+     "for f in $h/*; do [ -f \"$f\" ] || continue; printf '  %-26s %s\\n' \"$(basename $f)\" "
+     "\"$(head -c 160 \"$f\" 2>/dev/null | tr -d '\\n')\"; done; echo; done"),
+    ("thermal-power.txt", "echo '# platform_profile'; for f in /sys/firmware/acpi/platform_profile*; do "
+     "echo \"$f = $(cat $f 2>/dev/null)\"; done; echo; echo '# powercap'; "
+     "grep -rH . /sys/class/powercap/*/name /sys/class/powercap/*/*_range_uj 2>/dev/null; echo; "
+     "echo '# power-profiles-daemon'; powerprofilesctl 2>/dev/null"),
+    ("acpi.txt", "ls -l /sys/firmware/acpi/tables/ 2>/dev/null; echo; "
+     "command -v acpidump >/dev/null && echo 'acpidump present — run: sudo acpidump -b (attach the DSDT.dat)'; "
+     "command -v acpi_listen >/dev/null && echo 'acpi_listen present — run it and press Fn/media keys to capture ACPI events'"),
+    ("drm-gpu.txt", "for c in /sys/class/drm/card[0-9]*; do echo \"### $c\"; "
+     "cat $c/device/uevent 2>/dev/null; echo \" runtime_status=$(cat $c/device/power/runtime_status 2>/dev/null)\"; "
+     "echo; done; echo '=== nvidia-smi -q ==='; nvidia-smi -q 2>/dev/null | head -90"),
+    ("openrgb.txt", "openrgb --version 2>/dev/null; echo; "
+     "openrgb --noautoconnect -l --verbose 2>/dev/null | grep -vE 'i2c|SMBus|help.openrgb' "
+     "|| openrgb --noautoconnect -l 2>/dev/null"),
+    ("dmesg-full.txt", "dmesg 2>/dev/null || echo '(dmesg needs root / kernel.dmesg_restrict=1)'"),
+    ("journal-boot-tail.txt", "journalctl -b --no-pager 2>/dev/null | tail -3000 || echo '(journalctl unavailable)'"),
+]
+
+
+def collect_hw_bundle(dest_dir: str | None = None) -> str:
+    """Write a folder of raw hardware dumps (+ the human report + a README) and
+    tar it. Return the .tar.gz path. Everything needed to add a new laptop
+    model to config/*.json and the sysfs paths — attach it to a
+    'new hardware support' issue."""
+    prod = run_cmd3("cat /sys/class/dmi/id/product_name 2>/dev/null")[2].strip() or "unknown"
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", prod).strip("-").lower() or "laptop"
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    dirname = f"dellg15-hwdump-{slug}-{stamp}"
+
+    try:
+        home = pwd.getpwnam(resolve_real_user()).pw_dir
+    except KeyError:
+        home = os.path.expanduser("~")
+    dest_dir = dest_dir or home
+    work = os.path.join(dest_dir, dirname)
+    os.makedirs(work, exist_ok=True)
+
+    for fname, cmd in _HW_BUNDLE_FILES:
+        try:
+            data = cmd() if callable(cmd) else run_cmd3(
+                f"timeout -k 2 25 bash -lc {shlex.quote(cmd)}", timeout=30)[2]
+        except Exception as exc:  # noqa: BLE001
+            data = f"(error: {exc})"
+        with open(os.path.join(work, fname), "w") as fh:
+            fh.write((data or "(no output)").rstrip() + "\n")
+
+    with open(os.path.join(work, "report.md"), "w") as fh:
+        fh.write(collect_debug_report())
+    with open(os.path.join(work, "README-attach-this.txt"), "w") as fh:
+        fh.write(
+            "Dell G15 Toolkit — hardware dump bundle\n"
+            f"machine: {prod}   collected: {stamp}   euid={os.geteuid()}\n\n"
+            "WHAT THIS IS\n"
+            "  Raw sysfs / DMI / evdev / hwmon / PCI / OpenRGB dumps + the readable\n"
+            "  debug report. Enough to add support for this laptop model: the DMI\n"
+            "  strings to gate on, the hwmon fan/pwm paths, the evdev key codes for\n"
+            "  the Fn/media/vendor keys, the OpenRGB controller layout, etc.\n\n"
+            "HOW TO USE\n"
+            "  1. Skim the files for anything private (hostname, serials in dmi.txt /\n"
+            "     lsusb.txt / nvidia-smi). Redact if you care.\n"
+            "  2. Open a 'new hardware support' issue and ATTACH this whole .tar.gz\n"
+            "     (drag it onto the GitHub comment box).\n"
+            "  3. If a Fn/media key doesn't work: run  sudo evtest  , pick the\n"
+            "     keyboard / hotkey device, press the key, and paste those lines too.\n\n"
+            "FILES\n" + "".join(f"  {n}\n" for n, _ in _HW_BUNDLE_FILES) +
+            "  report.md\n")
+
+    tgz = os.path.join(dest_dir, dirname + ".tar.gz")
+    run_cmd3(f"tar czf {shlex.quote(tgz)} -C {shlex.quote(dest_dir)} {shlex.quote(dirname)}",
+             timeout=60)
+    run_cmd3(f"rm -rf {shlex.quote(work)}", timeout=10)
+    if os.geteuid() == 0:
+        try:
+            pw = pwd.getpwnam(resolve_real_user())
+            os.chown(tgz, pw.pw_uid, pw.pw_gid)
+        except (KeyError, OSError):
+            pass
+    return tgz
+
+
+def cli_collect() -> int:
+    """`--collect [dir]`: write the hardware dump bundle .tar.gz."""
+    args = [a for a in sys.argv[1:] if not a.startswith("-")]
+    dest = args[0] if args else None
+    try:
+        path = collect_hw_bundle(dest)
+        print(f"hardware bundle written:\n  {path}\nAttach it to a "
+              f"'new hardware support' issue.")
+        if os.geteuid() != 0:
+            print("note: run with sudo for the full DSDT / dmesg / privileged dumps.",
+                  file=sys.stderr)
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        print(f"collect failed: {exc}", file=sys.stderr)
+        return 1
+
+
 def cli_report() -> int:
     """`--report`: print the status table, no GUI."""
     items = _load_all_items()
@@ -2501,6 +2714,8 @@ def main():
         raise SystemExit(cli_report())
     if "--debug" in sys.argv or "--diag" in sys.argv:
         raise SystemExit(cli_debug())
+    if "--collect" in sys.argv or "--hw-bundle" in sys.argv:
+        raise SystemExit(cli_collect())
     self_elevate()
     root = tb.Window(themename=THEME)
     ToolkitApp(root)
