@@ -276,6 +276,53 @@ def apply_bios_style(style: "tb.Style", accent: str) -> None:
             pass
 
 
+class RingGauge(tk.Canvas):
+    """A self-drawn 270° ring gauge — replaces ttkbootstrap's Meter, which
+    doesn't re-colour cleanly under the custom theme and rendered thin/odd.
+    `set(value)` redraws; `size` scales the whole thing."""
+
+    def __init__(self, master, *, caption="", unit="", maximum=100.0,
+                 color=None, size=150, fmt="{:.0f}"):
+        super().__init__(master, width=size, height=size + 20,
+                         bg=BIOS_PANEL, highlightthickness=0, bd=0)
+        self._max = float(maximum) or 1.0
+        self._color = color or ACCENT_FALLBACK
+        self._size = size
+        self._unit = unit
+        self._caption = caption
+        self._fmt = fmt
+        self._ring = max(8, size // 11)       # ring thickness
+        self._value = 0.0
+        self._draw()
+
+    def _draw(self):
+        self.delete("all")
+        s, w = self._size, self._ring
+        pad = w // 2 + 3
+        box = (pad, pad, s - pad, s - pad)
+        frac = max(0.0, min(1.0, self._value / self._max))
+        # track + value arc — 270° sweep with a symmetric gap at the bottom
+        self.create_arc(*box, start=225, extent=-270, style="arc",
+                        outline=BIOS_SUNKEN, width=w)
+        if frac > 0.001:
+            self.create_arc(*box, start=225, extent=-270 * frac, style="arc",
+                            outline=self._color, width=w)
+        self.create_text(s / 2, s / 2 - 4, text=self._fmt.format(self._value),
+                         fill=BIOS_FG, font=("Sans", int(s * 0.19), "bold"))
+        if self._unit:
+            self.create_text(s / 2, s / 2 + int(s * 0.16), text=self._unit,
+                             fill=BIOS_MUTED, font=("Sans", int(s * 0.09)))
+        self.create_text(s / 2, s + 8, text=self._caption, fill=BIOS_MUTED,
+                         font=("Sans", 9))
+
+    def set(self, value):
+        try:
+            self._value = float(value or 0.0)
+        except (TypeError, ValueError):
+            self._value = 0.0
+        self._draw()
+
+
 class SidebarNav(tb.Frame):
     """Minimal drop-in for tb.Notebook that renders a left nav rail + a single
     swapped content pane and a big page header (gaming-BIOS layout).
@@ -825,46 +872,22 @@ class ToolkitApp:
         frame = self._scroll_body(outer, pad=16)
 
         gauges = tb.Frame(frame)
-        gauges.pack(fill="x", pady=(0, 20))
-
-        self.meter_cpu_temp = tb.Meter(
-            gauges, amounttotal=100, amountused=0, metersize=170,
-            subtext="CPU °C", bootstyle=INFO, interactive=False, textright="°C",
-        )
-        self.meter_cpu_temp.grid(row=0, column=0, padx=14)
-
-        self.meter_cpu_freq = tb.Meter(
-            gauges, amounttotal=50, amountused=0, metersize=170,
-            subtext="CPU GHz (x0.1)", bootstyle=SUCCESS, interactive=False,
-        )
-        self.meter_cpu_freq.grid(row=0, column=1, padx=14)
-
-        self.meter_dgpu_temp = tb.Meter(
-            gauges, amounttotal=100, amountused=0, metersize=170,
-            subtext="dGPU °C", bootstyle=WARNING, interactive=False, textright="°C",
-        )
-        self.meter_dgpu_temp.grid(row=0, column=2, padx=14)
-
-        self.meter_dgpu_util = tb.Meter(
-            gauges, amounttotal=100, amountused=0, metersize=170,
-            subtext="dGPU Util %", bootstyle=DANGER, interactive=False, textright="%",
-        )
-        self.meter_dgpu_util.grid(row=0, column=3, padx=14)
-
-        gauges2 = tb.Frame(frame)
-        gauges2.pack(fill="x", pady=(0, 8))
-
-        self.meter_cpu_power = tb.Meter(
-            gauges2, amounttotal=65, amountused=0, metersize=170,
-            subtext="CPU Package W", bootstyle=INFO, interactive=False, textright="W",
-        )
-        self.meter_cpu_power.grid(row=0, column=0, padx=14)
-
-        self.meter_dgpu_power = tb.Meter(
-            gauges2, amounttotal=80, amountused=0, metersize=170,
-            subtext="dGPU W", bootstyle=WARNING, interactive=False, textright="W",
-        )
-        self.meter_dgpu_power.grid(row=0, column=1, padx=14)
+        gauges.pack(fill="x", pady=(0, 18))
+        acc = getattr(self, "accent", ACCENT_FALLBACK)
+        specs = [
+            ("meter_cpu_temp",  "CPU temp",  "°C",  100, acc,       "{:.0f}"),
+            ("meter_cpu_freq",  "CPU clock", "GHz", 5.0, "#3fb950", "{:.2f}"),
+            ("meter_cpu_power", "CPU power", "W",    65, acc,       "{:.0f}"),
+            ("meter_dgpu_temp", "dGPU temp", "°C",  100, "#d29922", "{:.0f}"),
+            ("meter_dgpu_util", "dGPU util", "%",   100, "#f85149", "{:.0f}"),
+            ("meter_dgpu_power","dGPU power","W",    80, "#d29922", "{:.0f}"),
+        ]
+        for i, (attr, cap, unit, mx, col, fmt) in enumerate(specs):
+            g = RingGauge(gauges, caption=cap, unit=unit, maximum=mx,
+                          color=col, fmt=fmt)
+            g.grid(row=0, column=i, padx=8, sticky="n")
+            gauges.columnconfigure(i, weight=1)
+            setattr(self, attr, g)
 
         self.rapl_warning = tb.Label(
             frame, text="", bootstyle=WARNING, wraplength=900,
@@ -930,10 +953,10 @@ class ToolkitApp:
             ).pack(anchor="w")
             return
 
-        note = tb.Labelframe(frame, text="How this works", bootstyle=INFO, padding=12)
+        note = tb.Labelframe(frame, text="How this works", padding=12)
         note.pack(fill="x", pady=(0, 14))
         tb.Label(
-            note, wraplength=1100, justify="left", bootstyle="inverse-info",
+            note, wraplength=1100, justify="left", bootstyle=SECONDARY,
             text="Driven through OpenRGB (the AW-ELC has no kernel driver and ignores raw HID). "
                  "The backlight must be enabled in BIOS setup (F2 -> Keyboard Backlight) first — "
                  "if the keys stay dark, that's why. It's a 4-zone board (Left / Middle / Right / "
@@ -1181,10 +1204,10 @@ class ToolkitApp:
         self._fan_pwm_vars: dict = {}
         self._fan_manual = tk.BooleanVar(value=False)
 
-        note = tb.Labelframe(frame, text="How this works", bootstyle=INFO, padding=12)
+        note = tb.Labelframe(frame, text="How this works", padding=12)
         note.pack(fill="x", pady=(0, 14))
         tb.Label(
-            note, wraplength=1100, justify="left", bootstyle="inverse-info",
+            note, wraplength=1100, justify="left", bootstyle=SECONDARY,
             text="Thermal profile + fan boost steer the firmware (AWCC-style) fan "
                  "curve — boost only adds airflow on top, it can't slow a fan below "
                  "the automatic curve. Manual PWM (advanced) takes the EC off its "
@@ -1195,7 +1218,7 @@ class ToolkitApp:
 
         choices = sensors.platform_profile_choices()
         if choices:
-            pf = tb.Labelframe(frame, text="Thermal profile", bootstyle=INFO, padding=12)
+            pf = tb.Labelframe(frame, text="Thermal profile", padding=12)
             pf.pack(fill="x", pady=6)
             prow = tb.Frame(pf); prow.pack(anchor="w")
             self._fan_profile_var = tk.StringVar(value=sensors.get_platform_profile())
@@ -1205,7 +1228,7 @@ class ToolkitApp:
                                command=lambda v=c: self._fan_set_profile(v)
                                ).pack(side="left", padx=4)
 
-        lf = tb.Labelframe(frame, text="Fans & boost", bootstyle=INFO, padding=12)
+        lf = tb.Labelframe(frame, text="Fans & boost", padding=12)
         lf.pack(fill="x", pady=6)
         boosts = sensors.get_fan_boost()
         for k, fan in enumerate(fans):
@@ -1596,12 +1619,12 @@ class ToolkitApp:
         have_flatpak = shutil.which("flatpak") is not None
         have_fwupd = shutil.which("fwupdmgr") is not None
 
-        note = tb.Labelframe(frame, text="System updates", bootstyle=INFO, padding=12)
+        note = tb.Labelframe(frame, text="System updates", padding=12)
         note.pack(fill="x", pady=(0, 14))
         mgrs = ", ".join(m for m, ok in (("dnf" if have_ns else "dnf (no nobara-sync)", True),
                                          ("flatpak", have_flatpak), ("fwupd", have_fwupd)) if ok)
         tb.Label(
-            note, wraplength=1100, justify="left", bootstyle="inverse-info",
+            note, wraplength=1100, justify="left", bootstyle=SECONDARY,
             text=f"Package managers found: {mgrs}. Each has its own section below; "
                  "“Update everything” runs the system + Flatpak updates back to back. "
                  "Output streams to the log console at the bottom of the window; a reboot "
@@ -1611,7 +1634,7 @@ class ToolkitApp:
         self._upd_count_q: queue.Queue = queue.Queue()
         self._upd_count_var = tk.StringVar(value="Updates available:  checking…")
         crow = tb.Frame(note); crow.pack(anchor="w", fill="x", pady=(8, 0))
-        tb.Label(crow, textvariable=self._upd_count_var, bootstyle="inverse-info",
+        tb.Label(crow, textvariable=self._upd_count_var, bootstyle=SECONDARY,
                  font=("Sans", 10, "bold")).pack(side="left")
         tb.Button(crow, text="↻ recount", bootstyle=(INFO, "link"),
                   command=self._refresh_update_count).pack(side="left", padx=8)
@@ -1800,12 +1823,12 @@ class ToolkitApp:
             while True:
                 (cpu_temp, cpu_freq, cpu_power, igpu_clock, igpu_temp,
                  dgpu_clock, dgpu_temp, dgpu_util, dgpu_power, rapl_ok, gamemode) = self.dash_queue.get_nowait()
-                self.meter_cpu_temp.configure(amountused=cpu_temp or 0)
-                self.meter_cpu_freq.configure(amountused=(cpu_freq or 0) * 10)
-                self.meter_cpu_power.configure(amountused=cpu_power or 0)
-                self.meter_dgpu_temp.configure(amountused=dgpu_temp or 0)
-                self.meter_dgpu_util.configure(amountused=dgpu_util or 0)
-                self.meter_dgpu_power.configure(amountused=dgpu_power or 0)
+                self.meter_cpu_temp.set(cpu_temp)
+                self.meter_cpu_freq.set(cpu_freq)
+                self.meter_cpu_power.set(cpu_power)
+                self.meter_dgpu_temp.set(dgpu_temp)
+                self.meter_dgpu_util.set(dgpu_util)
+                self.meter_dgpu_power.set(dgpu_power)
                 cpu_power_txt = f", {cpu_power:.1f} W" if cpu_power is not None else ""
                 self.dash_cpu_label.configure(text=f"CPU: {cpu_freq:.2f} GHz, {cpu_temp:.0f} C{cpu_power_txt}" if cpu_temp else "CPU: n/a")
                 if igpu_clock is not None:
