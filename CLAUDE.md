@@ -21,7 +21,8 @@ Edition** (Ryzen 7 5800H + RTX 3050 Ti Mobile) running **Nobara Linux** (Fedora
 | `dellg15_kbd.py` | AW-ELC RGB keyboard driver: an `openrgb` CLI wrapper for static/zone colours + firmware effects, **plus** stdlib software animation daemons (`rainbow_wave`, `gradient_wave`) that stream per-LED frames over a hand-rolled OpenRGB SDK socket client (`_Sdk`). Detached daemons tracked by `<statedir>/fx.pid` + `stop_fx()`. |
 | `dellg15_automount.py` | scans `lsblk`, adds `/etc/fstab` entries mounting fixed internal data disks at `/mnt/<label>` with `nofail`. |
 | `config/tweaks.json`, `apps.json`, `presets.json` | the data. Tweaks have `check` / `check_pending` (staged-but-needs-reboot) / `apply` / `undo`. `{USER}` and `{TOOLKIT_DIR}` are substituted. |
-| `install.sh` | system-wide install → `/opt/dellg15-toolkit`, launcher, hicolor icon, `/usr/share/applications` desktop entry. `--uninstall` reverses it. |
+| `install.sh` | system-wide install → `/opt/dellg15-toolkit`, launcher, hicolor icon, `/usr/share/applications` desktop entry. `--uninstall` removes just the app. |
+| `uninstall.sh` | remove the tool (default: app + per-user config, tweaks kept). `--purge` also undoes every tweak's system bits (services, helper scripts, sudoers, drop-ins); `--grub` / `--fstab` / `--pip` / `--all` for the boot-affecting extras. Never touches installed apps. |
 | `assets/` | `icon.svg` (flaming tachometer on a wine plate) + rendered PNGs. |
 
 ## Working on the real hardware
@@ -121,6 +122,15 @@ ssh g15 'cd ~/DellG15Toolkit && sudo ./install.sh'    # system-install to /opt
   `after()` poller (see `status_queue` / `_poll_status_queue` /
   `_poll_busy_queue`). The keyboard software daemons run as **detached**
   processes, not threads.
+- **Item status** = `evaluate_item()` sets `item.state` (one of `applied`,
+  `not_applied`, `pending`, `error`, `drifted`, `failed`, `unsupported`).
+  `applied`/`pending`/`done` are derived read-only properties. The per-tweak
+  `check` command is still authoritative for *current* state; the **apply
+  ledger** (`~/.config/dellg15-toolkit/state.json`, written by
+  `ledger_record()` from `_run_item_apply`/`_run_item_undo`) adds "we set this"
+  → `drifted` (we applied it, check now fails) and `failed` (our last attempt
+  errored). "Status report" button / `python3 dellg15_toolkit.py --report`
+  print the full table (`format_status_report`).
 - Colour maths in `dellg15_kbd.py` is **stdlib only** (`colorsys` + a small
   sRGB↔linear↔OKLab↔OKLCH set) — no numpy/Pillow.
 - No-hardware self-tests: `dellg15_kbd.py rainbow-test` / `gradient-test`.

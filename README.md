@@ -96,9 +96,17 @@ on the machine can find "Dell G15 Toolkit" in the KDE launcher / KRunner
 search. It pulls the deps too (`python3-tkinter`, `ttkbootstrap` via pip
 system-wide, and — best effort — `python3-pyside6` and `python3-evdev`).
 
-`sudo ./install.sh --uninstall` removes all of that. (Tweaks you applied from
-*inside* the tool are separate — revert those in the UI first if you want
-them gone.)
+**Uninstalling:**
+
+- `sudo ./install.sh --uninstall` — removes just the app (`/opt`, launcher,
+  icon, menu entry).
+- `sudo ./uninstall.sh` — the same, plus your per-user toolkit config; tweaks
+  and services are **kept** (they work without the GUI).
+- `sudo ./uninstall.sh --purge` — also undoes every tweak's system bits
+  (RGB/hotkey/CPU-perf services, helper scripts, the passwordless-sudo rule,
+  drop-ins). Add `--grub` / `--fstab` / `--pip` (or `--all`) for the
+  boot-affecting extras. Apps it installed (Steam, Lutris, …) are never
+  touched.
 
 ## Running it from the source tree
 
@@ -187,6 +195,8 @@ principle DAMX uses, done via one detection pass (`sensors.has_nvidia_gpu()`
   static/zone colours + firmware effects, plus stdlib software animation
   daemons (gradient / rainbow) that stream per-LED frames over a hand-rolled
   OpenRGB SDK socket client
+- `install.sh` / `uninstall.sh` — system install; uninstall removes the app
+  (`uninstall.sh --purge` also undoes the tweaks' system bits)
 - `assets/` — `icon.svg` (a flaming tachometer redlined into "G15") and the
   PNGs rendered from it, used as the window icon and tray icon. The
   **DesktopLauncher** tweak drops a `.desktop` entry into your app menu
@@ -466,6 +476,18 @@ reboot to be live gets a third state, **Pending reboot** (via an optional
 `check_pending` command) — pre-ticked, and skipped by Apply, so you don't
 re-select and re-run it in the window between applying and rebooting.
 
+**Telling what really happened.** The check command is authoritative for the
+*current* state, but the tool also keeps an **apply ledger**
+(`~/.config/dellg15-toolkit/state.json`) of what it applied/undid and how it
+went. Combined, an item reads as one of: **Applied / Not applied / Pending
+reboot / Check error** (the check couldn't even run) / **Reverted** (the tool
+applied it but the check now fails — something undid it) / **Apply failed**
+(the tool's last attempt errored). The footer's **≣ Status report** button
+(or `python3 dellg15_toolkit.py --report` on the terminal, run with `sudo`
+for checks that need root) prints a full copyable table: every item, its
+state, the exact check command + exit code, and the toolkit's last action on
+it with a timestamp.
+
 **Apply Selected** is a diff, not a blind re-run:
 - Tweak checked + not applied → applies it.
 - Tweak checked + already applied / pending reboot → **skipped** (logged).
@@ -502,9 +524,10 @@ resolved from `PKEXEC_UID`/`SUDO_UID` since the whole app runs elevated.
 
 ## Known limitations (prototype)
 
-- No backup/snapshot system like the Windows tool's `state.json` — undo
-  relies on each tweak's own `undo` commands being correct, not a generic
-  "restore whatever was there before."
+- The apply ledger (`state.json`) records *what the tool did* and surfaces
+  drift, but it's not a full system snapshot — undo still relies on each
+  tweak's own `undo` commands, not a generic "restore whatever was there
+  before."
 - Apply/preset runs are still one item at a time (log streams live, the
   overlay shows which item and the phase); the *status checks* on startup now
   fan out over a thread pool.
