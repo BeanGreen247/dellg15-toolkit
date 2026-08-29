@@ -97,7 +97,7 @@ them.
 ## Install (system-wide, adds it to the KDE menu)
 
 ```bash
-cd TuxThrottle
+cd tuxthrottle
 sudo ./install.sh
 ```
 
@@ -123,7 +123,7 @@ system-wide, and — best effort — `python3-pyside6` and `python3-evdev`).
 ## Running it from the source tree
 
 ```bash
-cd TuxThrottle
+cd tuxthrottle
 pip install --user ttkbootstrap   # one-time; dark theme + round-toggle switches + gauges
 python3 tuxthrottle.py
 ```

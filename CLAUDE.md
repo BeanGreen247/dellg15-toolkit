@@ -32,8 +32,8 @@ The actual laptop is reachable as **`ssh g15`** (SSH host alias; hostname
 `Ashblade`, user `bean`). Workflow used during development:
 
 ```bash
-rsync -az --exclude=.git ./ g15:~/TuxThrottle/     # push source
-ssh g15 'cd ~/TuxThrottle && sudo ./install.sh'    # system-install to /opt
+rsync -az --exclude=.git ./ g15:~/tuxthrottle/     # push source
+ssh g15 'cd ~/tuxthrottle && sudo ./install.sh'    # system-install to /opt
 ```
 
 - Passwordless sudo on the box is via `/etc/sudoers.d/claude-test` (`bean
