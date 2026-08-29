@@ -452,6 +452,23 @@ class Item:
             self.undo_cmds = [sub(c) for c in data.get("undo", [])]
         else:
             manager = data.get("manager", "dnf")
+            # An app counts as "already here" if ANY reasonable install of it is
+            # present — not just the one this entry would use. Otherwise the row
+            # shows "not installed" and Apply happily adds a second, colliding
+            # copy (classic: dnf `steam` on top of the Flatpak). `provides` is a
+            # list of extra shell probes OR-ed into the check; for a Flatpak
+            # entry we also auto-detect a system *or* per-user install of its
+            # app-id, and `binary` adds a `command -v` probe.
+            alts: list[str] = [sub(p) for p in data.get("provides", [])]
+            if data.get("binary"):
+                alts.append(f"command -v {data['binary']} >/dev/null 2>&1")
+            if manager == "flatpak":
+                fid = data.get("package", item_id)
+                alts.append(f"flatpak info {fid} >/dev/null 2>&1")
+                alts.append(sub(f"sudo -u {{USER}} flatpak info {fid} >/dev/null 2>&1"))
+            if alts:
+                base = self.check_cmd.strip() or "false"
+                self.check_cmd = " || ".join(f"({c})" for c in [base, *alts])
             if "install" in data:
                 self.apply_cmds = [sub(c) for c in data["install"]]
             elif manager == "dnf":
@@ -2214,6 +2231,15 @@ class ToolkitApp:
             return False
 
     def _run_item_apply(self, item: Item):
+        # Last-second collision guard: state might be stale (the user installed
+        # this app another way since the last refresh). Re-run the (broadened)
+        # check right before touching the system and bail if it's already here.
+        if item.kind == "app" and item.check_cmd:
+            ok, _rc, _out = run_cmd3(item.check_cmd, timeout=30)
+            if ok:
+                self._log(f"[skip, already present] {item.content} — nothing to install")
+                ledger_record(item.id, "apply", True, "already present (another source); skipped")
+                return True
         self._log(f"--- Applying: {item.content} ---")
         for n, cmd in enumerate(item.apply_cmds, 1):
             if not self._stream_apply_cmd(cmd):

@@ -29,7 +29,12 @@
     "manager": "dnf",
     "package": "corectrl",
     "requires_vendor": "amd",
-    "check": "rpm -q corectrl >/dev/null 2>&1"
+    "check": "rpm -q corectrl >/dev/null 2>&1",
+    "binary": "corectrl",
+    "provides": [
+      "flatpak info org.corectrl.corectrl >/dev/null 2>&1",
+      "sudo -u {USER} flatpak info org.corectrl.corectrl >/dev/null 2>&1"
+    ]
   },
   "I8kutils": {
     "Content": "i8kutils (fan control)",
@@ -74,7 +79,9 @@
     "category": "Gaming",
     "manager": "dnf",
     "package": "steam",
-    "check": "rpm -q steam >/dev/null 2>&1"
+    "check": "rpm -q steam >/dev/null 2>&1",
+    "binary": "steam",
+    "note": "Native RPM (RPM Fusion) \u2014 the SteamOS-style approach: Steam itself then manages Proton and the Steam Linux Runtime containers. A Flatpak Steam is deliberately NOT treated as satisfying this; its sandbox complicates controller access, external game drives, mods and LD_PRELOAD layers (MangoHud / gamescope / vkBasalt)."
   },
   "Lutris": {
     "Content": "Lutris",
@@ -82,15 +89,26 @@
     "category": "Gaming",
     "manager": "dnf",
     "package": "lutris",
-    "check": "rpm -q lutris >/dev/null 2>&1"
+    "check": "rpm -q lutris >/dev/null 2>&1",
+    "binary": "lutris",
+    "provides": [
+      "flatpak info net.lutris.Lutris >/dev/null 2>&1",
+      "sudo -u {USER} flatpak info net.lutris.Lutris >/dev/null 2>&1"
+    ]
   },
   "Heroic": {
     "Content": "Heroic Games Launcher",
     "Description": "Epic Games Store / GOG launcher.",
     "category": "Gaming",
-    "manager": "flatpak",
-    "package": "com.heroicgameslauncher.hgl",
-    "check": "flatpak list 2>/dev/null | grep -q com.heroicgameslauncher.hgl"
+    "manager": "dnf",
+    "package": "heroic-games-launcher",
+    "check": "rpm -q heroic-games-launcher >/dev/null 2>&1",
+    "binary": "heroic",
+    "provides": [
+      "flatpak info com.heroicgameslauncher.hgl >/dev/null 2>&1",
+      "sudo -u {USER} flatpak info com.heroicgameslauncher.hgl >/dev/null 2>&1"
+    ],
+    "flatpak_id": "com.heroicgameslauncher.hgl"
   },
   "GameModeMangoHud": {
     "Content": "GameMode + MangoHud",
@@ -110,7 +128,12 @@
     "category": "Gaming",
     "manager": "dnf",
     "package": "goverlay",
-    "check": "rpm -q goverlay >/dev/null 2>&1"
+    "check": "rpm -q goverlay >/dev/null 2>&1",
+    "binary": "goverlay",
+    "provides": [
+      "flatpak info io.github.benjamimgois.goverlay >/dev/null 2>&1",
+      "sudo -u {USER} flatpak info io.github.benjamimgois.goverlay >/dev/null 2>&1"
+    ]
   },
   "Gamescope": {
     "Content": "gamescope",
@@ -118,7 +141,8 @@
     "category": "Gaming",
     "manager": "dnf",
     "package": "gamescope",
-    "check": "rpm -q gamescope >/dev/null 2>&1"
+    "check": "rpm -q gamescope >/dev/null 2>&1",
+    "binary": "gamescope"
   },
   "OpenRGB": {
     "Content": "OpenRGB",
@@ -126,7 +150,8 @@
     "category": "RGB",
     "manager": "dnf",
     "package": "openrgb",
-    "check": "rpm -q openrgb >/dev/null 2>&1"
+    "check": "rpm -q openrgb >/dev/null 2>&1",
+    "binary": "openrgb"
   },
   "Btop": {
     "Content": "btop",
@@ -134,7 +159,8 @@
     "category": "Monitoring",
     "manager": "dnf",
     "package": "btop",
-    "check": "rpm -q btop >/dev/null 2>&1"
+    "check": "rpm -q btop >/dev/null 2>&1",
+    "binary": "btop"
   },
   "Nvtop": {
     "Content": "nvtop",
@@ -142,7 +168,8 @@
     "category": "Monitoring",
     "manager": "dnf",
     "package": "nvtop",
-    "check": "rpm -q nvtop >/dev/null 2>&1"
+    "check": "rpm -q nvtop >/dev/null 2>&1",
+    "binary": "nvtop"
   },
   "LmSensors": {
     "Content": "lm_sensors",
@@ -161,15 +188,22 @@
     "category": "Monitoring",
     "manager": "dnf",
     "package": "fastfetch",
-    "check": "rpm -q fastfetch >/dev/null 2>&1"
+    "check": "rpm -q fastfetch >/dev/null 2>&1",
+    "binary": "fastfetch"
   },
   "Discord": {
     "Content": "Discord",
     "Description": "Voice/text chat.",
     "category": "Streaming",
-    "manager": "flatpak",
-    "package": "com.discordapp.Discord",
-    "check": "flatpak list 2>/dev/null | grep -q com.discordapp.Discord"
+    "manager": "dnf",
+    "package": "discord",
+    "check": "rpm -q discord >/dev/null 2>&1",
+    "binary": "discord",
+    "provides": [
+      "flatpak info com.discordapp.Discord >/dev/null 2>&1",
+      "sudo -u {USER} flatpak info com.discordapp.Discord >/dev/null 2>&1"
+    ],
+    "flatpak_id": "com.discordapp.Discord"
   },
   "OBSStudio": {
     "Content": "OBS Studio",
@@ -177,15 +211,27 @@
     "category": "Streaming",
     "manager": "dnf",
     "package": "obs-studio",
-    "check": "rpm -q obs-studio >/dev/null 2>&1"
+    "check": "rpm -q obs-studio >/dev/null 2>&1",
+    "binary": "obs",
+    "provides": [
+      "flatpak info com.obsproject.Studio >/dev/null 2>&1",
+      "sudo -u {USER} flatpak info com.obsproject.Studio >/dev/null 2>&1"
+    ]
   },
   "Sunshine": {
     "Content": "Sunshine",
     "Description": "Self-hosted game-streaming host, pairs with Moonlight on a Steam Deck/tablet/other PC.",
     "category": "Streaming",
-    "manager": "flatpak",
-    "package": "dev.lizardbyte.sunshine",
-    "check": "flatpak list 2>/dev/null | grep -q dev.lizardbyte.sunshine"
+    "manager": "dnf",
+    "package": "sunshine",
+    "check": "rpm -q sunshine >/dev/null 2>&1",
+    "binary": "sunshine",
+    "provides": [
+      "flatpak info dev.lizardbyte.sunshine >/dev/null 2>&1",
+      "sudo -u {USER} flatpak info dev.lizardbyte.sunshine >/dev/null 2>&1",
+      "rpm -q Sunshine >/dev/null 2>&1"
+    ],
+    "flatpak_id": "dev.lizardbyte.sunshine"
   },
   "Moonlight": {
     "Content": "Moonlight",
@@ -193,7 +239,11 @@
     "category": "Streaming",
     "manager": "flatpak",
     "package": "com.moonlight_stream.Moonlight",
-    "check": "flatpak list 2>/dev/null | grep -q com.moonlight_stream.Moonlight"
+    "check": "flatpak list 2>/dev/null | grep -q com.moonlight_stream.Moonlight",
+    "binary": "moonlight-qt",
+    "provides": [
+      "rpm -q moonlight-qt >/dev/null 2>&1"
+    ]
   },
   "ProtonUpQt": {
     "Content": "ProtonUp-Qt",
@@ -201,23 +251,40 @@
     "category": "Gaming",
     "manager": "flatpak",
     "package": "net.davidotek.pupgui2",
-    "check": "flatpak list 2>/dev/null | grep -q net.davidotek.pupgui2"
+    "check": "flatpak list 2>/dev/null | grep -q net.davidotek.pupgui2",
+    "binary": "protonup-qt",
+    "provides": [
+      "rpm -q protonup-qt >/dev/null 2>&1"
+    ]
   },
   "Protontricks": {
     "Content": "Protontricks",
     "Description": "winetricks for Steam/Proton prefixes \u2014 install DLLs/fonts (vcrun2019, d3dcompiler_47, corefonts\u2026) into a specific game's Proton prefix. Needed for the Rockstar launcher / Social Club under Proton.",
     "category": "Gaming",
-    "manager": "flatpak",
-    "package": "com.github.Matoking.protontricks",
-    "check": "flatpak list 2>/dev/null | grep -q com.github.Matoking.protontricks"
+    "manager": "dnf",
+    "package": "protontricks",
+    "check": "rpm -q protontricks >/dev/null 2>&1",
+    "binary": "protontricks",
+    "provides": [
+      "flatpak info com.github.Matoking.protontricks >/dev/null 2>&1",
+      "sudo -u {USER} flatpak info com.github.Matoking.protontricks >/dev/null 2>&1",
+      "rpm -q python3-protontricks >/dev/null 2>&1"
+    ],
+    "flatpak_id": "com.github.Matoking.protontricks"
   },
   "Bottles": {
     "Content": "Bottles",
     "Description": "Isolated Wine-prefix manager with bundled Wine-GE/Soda runners and a dependency installer \u2014 the non-Steam path for the Rockstar Games Launcher + GTA V. See the README's 'GTA V Online' section.",
     "category": "Gaming",
-    "manager": "flatpak",
-    "package": "com.usebottles.bottles",
-    "check": "flatpak list 2>/dev/null | grep -q com.usebottles.bottles"
+    "manager": "dnf",
+    "package": "bottles",
+    "check": "rpm -q bottles >/dev/null 2>&1",
+    "binary": "bottles",
+    "flatpak_id": "com.usebottles.bottles",
+    "provides": [
+      "flatpak info com.usebottles.bottles >/dev/null 2>&1",
+      "sudo -u {USER} flatpak info com.usebottles.bottles >/dev/null 2>&1"
+    ]
   },
   "ProtonBattlEyeRuntime": {
     "Content": "Steam: Proton BattlEye Runtime",
@@ -245,15 +312,25 @@
     "category": "Gaming",
     "manager": "dnf",
     "package": "vkBasalt",
-    "check": "rpm -q vkBasalt >/dev/null 2>&1"
+    "check": "rpm -q vkBasalt >/dev/null 2>&1",
+    "provides": [
+      "ls /usr/lib64/libvkbasalt.so* >/dev/null 2>&1",
+      "rpm -q vkbasalt >/dev/null 2>&1"
+    ]
   },
   "PrismLauncher": {
     "Content": "Prism Launcher",
     "Description": "Open-source Minecraft launcher \u2014 manage multiple instances, mod loaders (Fabric/Forge/Quilt/NeoForge) and modpacks side by side. The recommended MC launcher.",
     "category": "Gaming",
-    "manager": "flatpak",
-    "package": "org.prismlauncher.PrismLauncher",
-    "check": "flatpak list 2>/dev/null | grep -q org.prismlauncher.PrismLauncher"
+    "manager": "dnf",
+    "package": "prismlauncher",
+    "check": "rpm -q prismlauncher >/dev/null 2>&1",
+    "binary": "prismlauncher",
+    "provides": [
+      "flatpak info org.prismlauncher.PrismLauncher >/dev/null 2>&1",
+      "sudo -u {USER} flatpak info org.prismlauncher.PrismLauncher >/dev/null 2>&1"
+    ],
+    "flatpak_id": "org.prismlauncher.PrismLauncher"
   },
   "ModrinthApp": {
     "Content": "Modrinth App",
@@ -261,7 +338,8 @@
     "category": "Gaming",
     "manager": "flatpak",
     "package": "com.modrinth.ModrinthApp",
-    "check": "flatpak list 2>/dev/null | grep -q com.modrinth.ModrinthApp"
+    "check": "flatpak list 2>/dev/null | grep -q com.modrinth.ModrinthApp",
+    "binary": "modrinth-app"
   },
   "ATLauncher": {
     "Content": "ATLauncher",
@@ -269,7 +347,8 @@
     "category": "Gaming",
     "manager": "flatpak",
     "package": "com.atlauncher.ATLauncher",
-    "check": "flatpak list 2>/dev/null | grep -q com.atlauncher.ATLauncher"
+    "check": "flatpak list 2>/dev/null | grep -q com.atlauncher.ATLauncher",
+    "binary": "atlauncher"
   },
   "ItchIo": {
     "Content": "itch",
@@ -277,15 +356,22 @@
     "category": "Gaming",
     "manager": "flatpak",
     "package": "io.itch.itch",
-    "check": "flatpak list 2>/dev/null | grep -q io.itch.itch"
+    "check": "flatpak list 2>/dev/null | grep -q io.itch.itch",
+    "binary": "itch"
   },
   "Minigalaxy": {
     "Content": "Minigalaxy",
     "Description": "Lightweight GOG client \u2014 download and install your DRM-free GOG library without the Heroic/Lutris overhead.",
     "category": "Gaming",
-    "manager": "flatpak",
-    "package": "io.github.sharkwouter.Minigalaxy",
-    "check": "flatpak list 2>/dev/null | grep -q io.github.sharkwouter.Minigalaxy"
+    "manager": "dnf",
+    "package": "minigalaxy",
+    "check": "rpm -q minigalaxy >/dev/null 2>&1",
+    "binary": "minigalaxy",
+    "provides": [
+      "flatpak info io.github.sharkwouter.Minigalaxy >/dev/null 2>&1",
+      "sudo -u {USER} flatpak info io.github.sharkwouter.Minigalaxy >/dev/null 2>&1"
+    ],
+    "flatpak_id": "io.github.sharkwouter.Minigalaxy"
   },
   "Cartridges": {
     "Content": "Cartridges",
@@ -293,7 +379,10 @@
     "category": "Gaming",
     "manager": "flatpak",
     "package": "page.kramo.Cartridges",
-    "check": "flatpak list 2>/dev/null | grep -q page.kramo.Cartridges"
+    "check": "flatpak list 2>/dev/null | grep -q page.kramo.Cartridges",
+    "provides": [
+      "rpm -q cartridges >/dev/null 2>&1"
+    ]
   },
   "SteamRomManager": {
     "Content": "Steam ROM Manager",
@@ -301,7 +390,8 @@
     "category": "Gaming",
     "manager": "flatpak",
     "package": "com.steamgriddb.steam-rom-manager",
-    "check": "flatpak list 2>/dev/null | grep -q com.steamgriddb.steam-rom-manager"
+    "check": "flatpak list 2>/dev/null | grep -q com.steamgriddb.steam-rom-manager",
+    "binary": "steam-rom-manager"
   },
   "Ludusavi": {
     "Content": "Ludusavi",
@@ -309,7 +399,11 @@
     "category": "Gaming",
     "manager": "flatpak",
     "package": "com.github.mtkennerly.ludusavi",
-    "check": "flatpak list 2>/dev/null | grep -q com.github.mtkennerly.ludusavi"
+    "check": "flatpak list 2>/dev/null | grep -q com.github.mtkennerly.ludusavi",
+    "binary": "ludusavi",
+    "provides": [
+      "rpm -q ludusavi >/dev/null 2>&1"
+    ]
   },
   "NtfsSupport": {
     "Content": "NTFS read/write support",
