@@ -549,12 +549,11 @@ class ToolkitApp:
             text="Driven through OpenRGB (the AW-ELC has no kernel driver and ignores raw HID). "
                  "The backlight must be enabled in BIOS setup (F2 -> Keyboard Backlight) first — "
                  "if the keys stay dark, that's why. It's a 4-zone board (Left / Middle / Right / "
-                 "Numpad), not per-key. Effects (Rainbow Wave, Spectrum Cycle) run on the "
-                 "controller itself; speed is adjustable. Direction is not offered — none of "
-                 "this controller's six firmware modes carries a direction field (confirmed via "
-                 "the OpenRGB SDK), so it can't be set from any software. Colours don't persist "
-                 "a reboot on their own — apply the KbdBacklightFix tweak (Power tab) to "
-                 "re-assert the last setting at login and after resume.",
+                 "Numpad), not per-key. Effects run on the controller itself; speed is adjustable "
+                 "(100 = fastest), direction is not — none of the six firmware modes exposes a "
+                 "direction field. Colours don't persist a reboot on their own — apply the "
+                 "KbdBacklightFix tweak (Power tab) to re-assert the last setting at login and "
+                 "after resume.",
         ).pack(anchor="w")
 
         self._kbd_busy = False
@@ -562,8 +561,6 @@ class ToolkitApp:
         self.kbd_all_hex = tk.StringVar(value="#ffffff")
         self.kbd_speed = tk.IntVar(value=50)
         self.kbd_zone_vars: dict[int, tk.StringVar] = {}
-        self.kbd_grad_a = tk.StringVar(value="#ff0000")
-        self.kbd_grad_b = tk.StringVar(value="#0000ff")
 
         # pre-fill from saved state if present
         saved = dellg15_kbd.load_state()
@@ -575,11 +572,7 @@ class ToolkitApp:
                 self.kbd_all_hex.set("#%02x%02x%02x" % (r, g, b))
                 for z, rgb in zc.items():
                     self.kbd_zone_vars.setdefault(z, tk.StringVar()).set("#%02x%02x%02x" % tuple(rgb))
-        meta = dellg15_kbd.load_meta()
-        self.kbd_speed.set(meta.get("speed", 50))
-        if meta.get("gradient"):
-            self.kbd_grad_a.set("#" + meta["gradient"][0].lower())
-            self.kbd_grad_b.set("#" + meta["gradient"][1].lower())
+        self.kbd_speed.set(dellg15_kbd.load_meta().get("speed", 50))
 
         # ---- brightness ----
         br_box = tb.Labelframe(frame, text="Brightness", padding=12)
@@ -619,20 +612,6 @@ class ToolkitApp:
                       command=lambda v=hv: self._kbd_pick(v)).pack(side="left", padx=4)
             tb.Button(row, text="Apply", bootstyle=SUCCESS,
                       command=lambda z=zi: self._kbd_apply_zone(z)).pack(side="left", padx=4)
-
-        # ---- gradient ----
-        gr = tb.Labelframe(frame, text="Gradient  (Left → Numpad)", padding=12)
-        gr.pack(fill="x", pady=(0, 12))
-        grow = tb.Frame(gr)
-        grow.pack(fill="x")
-        self._kbd_swatch(grow, self.kbd_grad_a).pack(side="left", padx=(0, 4))
-        tb.Button(grow, text="A…", bootstyle=SECONDARY, width=3,
-                  command=lambda: self._kbd_pick(self.kbd_grad_a)).pack(side="left", padx=2)
-        self._kbd_swatch(grow, self.kbd_grad_b).pack(side="left", padx=(10, 4))
-        tb.Button(grow, text="B…", bootstyle=SECONDARY, width=3,
-                  command=lambda: self._kbd_pick(self.kbd_grad_b)).pack(side="left", padx=2)
-        tb.Button(grow, text="Apply gradient", bootstyle=SUCCESS,
-                  command=self._kbd_apply_gradient).pack(side="left", padx=10)
 
         # ---- effects ----
         fx = tb.Labelframe(frame, text="Effects  (run on the controller)", padding=12)
@@ -732,21 +711,11 @@ class ToolkitApp:
                                   dellg15_kbd.save_state(colors, b, mode="zones")),
                       f"zone {dellg15_kbd.ZONE_NAMES[z]} -> {self._safe_hex(self.kbd_zone_vars[z].get())} @ {b}%")
 
-    def _kbd_apply_gradient(self):
-        a = self._safe_hex(self.kbd_grad_a.get())
-        c = self._safe_hex(self.kbd_grad_b.get())
-        b = self.kbd_brightness.get()
-        colors = self._kbd_all_colors()
-        self._kbd_run(lambda kb: (kb.set_gradient(a, c, b),
-                                  dellg15_kbd.save_state(colors, b, mode="gradient",
-                                                        gradient=(a, c))),
-                      f"gradient {a} -> {c} @ {b}%")
-
     def _kbd_apply_effect(self, key: str):
         b = self.kbd_brightness.get()
         sp = self.kbd_speed.get()
         colors = self._kbd_all_colors()
-        self._kbd_run(lambda kb: (kb.set_effect(key, sp, brightness=b),
+        self._kbd_run(lambda kb: (kb.set_effect(key, sp, b),
                                   dellg15_kbd.save_state(colors, b, mode=key, speed=sp)),
                       f"effect {key} @ speed {sp}, {b}%")
 
