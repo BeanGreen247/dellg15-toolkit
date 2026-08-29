@@ -16,9 +16,13 @@ import re
 import shutil
 import subprocess
 import time
+from functools import lru_cache
 
 
+@lru_cache(maxsize=None)
 def which(cmd: str):
+    # PATH doesn't change over a session; cache so the hot dashboard/status
+    # paths stop stat-walking PATH on every poll.
     return shutil.which(cmd)
 
 
@@ -173,9 +177,37 @@ def read_dgpu_clock_temp_util() -> str:
     return f"{clock} MHz, {temp} C, {util}% util{pw}"
 
 
+def _nvidia_pci_dir():
+    for dev in glob.glob("/sys/bus/pci/devices/*"):
+        try:
+            with open(f"{dev}/vendor") as f:
+                if f.read().strip() != "0x10de":
+                    continue
+            with open(f"{dev}/class") as f:
+                if f.read().strip().startswith("0x03"):  # display controller
+                    return dev
+        except OSError:
+            continue
+    return None
+
+
+def dgpu_is_awake() -> bool:
+    """True unless the NVIDIA dGPU is runtime-suspended. Lets callers skip
+    `nvidia-smi` while the GPU is parked — polling it would spin it back up
+    (battery + heat) for nothing."""
+    dev = _nvidia_pci_dir()
+    if not dev:
+        return False
+    try:
+        with open(f"{dev}/power/runtime_status") as f:
+            return f.read().strip() == "active"
+    except OSError:
+        return True
+
+
 def read_dgpu_values():
     """Returns (clock_mhz, temp_c, util_pct, power_w) — any may be None."""
-    if not which("nvidia-smi"):
+    if not which("nvidia-smi") or not dgpu_is_awake():
         return None, None, None, None
     try:
         out = subprocess.run(
@@ -346,3 +378,161 @@ def toggle_game_mode_external():
     to flip Game Mode without going through any particular GUI."""
     enable = not get_game_mode_state()
     return set_game_mode(enable)
+
+
+# --------------------------------------------------------------------------- #
+#  Fan control — Dell G15 5515
+#
+#  Two hwmon devices carry the fans:
+#   * alienware_wmi : fan{1,2}_input (RPM, ro), fan{1,2}_boost (0-255, RW) —
+#     the AWCC-style additive boost. Boost only *adds* airflow on top of the
+#     firmware curve, so it can never stop a fan → the safe lever.
+#   * dell_smm      : pwm{1,2} + pwm{1,2}_enable (0=full, 1=manual, 2=auto).
+#     Real manual control, but a low pwm can slow/stop the fan → risky, gated
+#     behind a warning in the GUI and floored at PWM_FLOOR here.
+#  Thermal profile is /sys/firmware/acpi/platform_profile
+#  (balanced / performance / custom on this board).
+# --------------------------------------------------------------------------- #
+
+_PLATFORM_PROFILE = "/sys/firmware/acpi/platform_profile"
+PWM_FLOOR = 77   # ~30 % of 255 — a manual curve never drops below this
+
+
+def _hwmon_by_name(name: str):
+    for name_path in glob.glob("/sys/class/hwmon/hwmon*/name"):
+        try:
+            with open(name_path) as f:
+                if f.read().strip() == name:
+                    return name_path.rsplit("/", 1)[0]
+        except OSError:
+            continue
+    return None
+
+
+def _read_int(path: str):
+    try:
+        with open(path) as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def read_fans() -> list:
+    """[{'index', 'label', 'rpm', 'max', 'boost'}] per fan. RPM comes from
+    alienware_wmi, falling back to dell_smm; 'boost' is the current
+    alienware_wmi fan boost (0-255) or None."""
+    aw = _hwmon_by_name("alienware_wmi")
+    smm = _hwmon_by_name("dell_smm")
+    base = aw or smm
+    if not base:
+        return []
+    fans = []
+    for i in (1, 2):
+        rpm = _read_int(f"{base}/fan{i}_input")
+        if rpm is None and smm and smm != base:
+            rpm = _read_int(f"{smm}/fan{i}_input")
+        if rpm is None:
+            continue
+        try:
+            with open(f"{base}/fan{i}_label") as f:
+                label = f.read().strip()
+        except OSError:
+            label = f"Fan {i}"
+        fans.append({
+            "index": i,
+            "label": label,
+            "rpm": rpm,
+            "max": _read_int(f"{base}/fan{i}_max") or 4700,
+            "boost": _read_int(f"{aw}/fan{i}_boost") if aw else None,
+        })
+    return fans
+
+
+def get_fan_boost() -> list:
+    aw = _hwmon_by_name("alienware_wmi")
+    if not aw:
+        return []
+    return [(_read_int(f"{aw}/fan{i}_boost") or 0) for i in (1, 2)]
+
+
+def set_fan_boost(index: int, value_0_255: int) -> tuple[bool, str]:
+    aw = _hwmon_by_name("alienware_wmi")
+    if not aw:
+        return False, "alienware_wmi hwmon not present"
+    v = max(0, min(255, int(value_0_255)))
+    try:
+        with open(f"{aw}/fan{index}_boost", "w") as f:
+            f.write(str(v))
+        return True, ""
+    except OSError as exc:
+        return False, str(exc)
+
+
+def platform_profile_choices() -> list:
+    try:
+        with open(f"{_PLATFORM_PROFILE}_choices") as f:
+            return f.read().split()
+    except OSError:
+        return []
+
+
+def get_platform_profile() -> str:
+    try:
+        with open(_PLATFORM_PROFILE) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def set_platform_profile(name: str) -> tuple[bool, str]:
+    try:
+        with open(_PLATFORM_PROFILE, "w") as f:
+            f.write(name)
+        return True, ""
+    except OSError as exc:
+        return False, str(exc)
+
+
+def get_pwm_state() -> list:
+    """[(enable_mode, pwm_value)] for dell_smm pwm1/pwm2. enable: 0 full /
+    1 manual / 2 automatic. pwm_value is None while in automatic mode."""
+    smm = _hwmon_by_name("dell_smm")
+    if not smm:
+        return []
+    return [(_read_int(f"{smm}/pwm{i}_enable"), _read_int(f"{smm}/pwm{i}"))
+            for i in (1, 2)]
+
+
+def set_pwm_manual(index: int, value_0_255: int) -> tuple[bool, str]:
+    """Put dell_smm fan `index` into manual mode at the given PWM (floored at
+    PWM_FLOOR so the fan can't be stopped)."""
+    smm = _hwmon_by_name("dell_smm")
+    if not smm:
+        return False, "dell_smm hwmon not present"
+    v = max(PWM_FLOOR, min(255, int(value_0_255)))
+    try:
+        with open(f"{smm}/pwm{index}_enable", "w") as f:
+            f.write("1")
+        with open(f"{smm}/pwm{index}", "w") as f:
+            f.write(str(v))
+        return True, ""
+    except OSError as exc:
+        return False, str(exc)
+
+
+def restore_fan_auto() -> tuple[bool, str]:
+    """Full reset: dell_smm pwm back to automatic, alienware_wmi boost to 0."""
+    errs = []
+    smm = _hwmon_by_name("dell_smm")
+    if smm:
+        for i in (1, 2):
+            try:
+                with open(f"{smm}/pwm{i}_enable", "w") as f:
+                    f.write("2")
+            except OSError as exc:
+                errs.append(str(exc))
+    for i in (1, 2):
+        ok, err = set_fan_boost(i, 0)
+        if not ok and "not present" not in err:
+            errs.append(err)
+    return (not errs), "; ".join(errs)
