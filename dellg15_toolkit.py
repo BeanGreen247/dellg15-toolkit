@@ -550,9 +550,11 @@ class ToolkitApp:
                  "The backlight must be enabled in BIOS setup (F2 -> Keyboard Backlight) first — "
                  "if the keys stay dark, that's why. It's a 4-zone board (Left / Middle / Right / "
                  "Numpad), not per-key. Effects (Rainbow Wave, Spectrum Cycle) run on the "
-                 "controller itself; speed is adjustable but direction is not exposed by OpenRGB. "
-                 "Colours don't persist a reboot on their own — apply the KbdBacklightFix tweak "
-                 "(Power tab) to re-assert the last setting at login and after resume.",
+                 "controller itself; speed is adjustable. Direction is not offered — none of "
+                 "this controller's six firmware modes carries a direction field (confirmed via "
+                 "the OpenRGB SDK), so it can't be set from any software. Colours don't persist "
+                 "a reboot on their own — apply the KbdBacklightFix tweak (Power tab) to "
+                 "re-assert the last setting at login and after resume.",
         ).pack(anchor="w")
 
         self._kbd_busy = False
@@ -605,7 +607,7 @@ class ToolkitApp:
                       ).pack(side="left", padx=2)
 
         # ---- per-zone ----
-        pz = tb.Labelframe(frame, text="Per-zone  (Left = where the G-key is)", padding=12)
+        pz = tb.Labelframe(frame, text="Per-zone", padding=12)
         pz.pack(fill="x", pady=(0, 12))
         for zi, zname in enumerate(dellg15_kbd.ZONE_NAMES):
             row = tb.Frame(pz)

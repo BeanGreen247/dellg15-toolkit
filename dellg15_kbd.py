@@ -33,6 +33,8 @@ import argparse
 import json
 import os
 import shutil
+import socket
+import struct
 import subprocess
 import sys
 import time
@@ -149,6 +151,228 @@ def _run(args: list[str]) -> str:
     return blob
 
 
+# ------------------------------------------------------------------------- #
+#  OpenRGB SDK (network protocol) client — hand-rolled, stdlib only.
+#
+#  The `openrgb` CLI can't set an effect's *direction* and maps speed coarsely.
+#  Talking the SDK server directly (dellg15-openrgb.service, :6742) lets us
+#  read a mode's real speed/direction/brightness ranges and write them back,
+#  and push a true per-LED gradient. Protocol ref: OpenRGB NetworkProtocol
+#  (this build negotiates v5).
+# ------------------------------------------------------------------------- #
+
+_SDK_HOST, _SDK_PORT = "127.0.0.1", 6742
+_PKT_CONTROLLER_COUNT = 0
+_PKT_CONTROLLER_DATA = 1
+_PKT_PROTOCOL_VERSION = 40
+_PKT_SET_CLIENT_NAME = 50
+_PKT_UPDATE_LEDS = 1050
+_PKT_UPDATE_MODE = 1054
+
+MODE_FLAG_HAS_SPEED = 1 << 0
+MODE_FLAG_HAS_DIR_LR = 1 << 1
+MODE_FLAG_HAS_DIR_UD = 1 << 2
+MODE_FLAG_HAS_DIR_HV = 1 << 3
+MODE_FLAG_HAS_BRIGHTNESS = 1 << 4
+MODE_FLAG_HAS_PER_LED = 1 << 5
+_MODE_FLAG_ANY_DIR = MODE_FLAG_HAS_DIR_LR | MODE_FLAG_HAS_DIR_UD | MODE_FLAG_HAS_DIR_HV
+
+# direction constants (OpenRGB mode_direction)
+DIR_LEFT, DIR_RIGHT, DIR_UP, DIR_DOWN, DIR_HORIZONTAL, DIR_VERTICAL = range(6)
+DIRECTIONS = {"left": DIR_LEFT, "right": DIR_RIGHT, "up": DIR_UP,
+              "down": DIR_DOWN, "horizontal": DIR_HORIZONTAL, "vertical": DIR_VERTICAL}
+
+
+class _Sdk:
+    def __init__(self, timeout: float = 4.0):
+        self.sock = socket.create_connection((_SDK_HOST, _SDK_PORT), timeout)
+        self.sock.settimeout(timeout)
+        self._send(0, _PKT_SET_CLIENT_NAME, b"dellg15-toolkit\0")
+        self._send(0, _PKT_PROTOCOL_VERSION, struct.pack("<I", 5))
+        _, _, body = self._recv()
+        self.version = min(5, struct.unpack("<I", body[:4])[0]) if len(body) >= 4 else 1
+
+    # -- framing --
+    def _send(self, dev: int, pid: int, data: bytes = b"") -> None:
+        self.sock.sendall(b"ORGB" + struct.pack("<III", dev, pid, len(data)) + data)
+
+    def _recvn(self, n: int) -> bytes:
+        buf = b""
+        while len(buf) < n:
+            chunk = self.sock.recv(n - len(buf))
+            if not chunk:
+                raise ElcError("OpenRGB server closed the connection")
+            buf += chunk
+        return buf
+
+    def _recv(self):
+        hdr = self._recvn(16)
+        if hdr[:4] != b"ORGB":
+            raise ElcError("bad reply from OpenRGB server")
+        dev, pid, size = struct.unpack("<III", hdr[4:16])
+        return dev, pid, self._recvn(size)
+
+    def close(self) -> None:
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+    # -- high level --
+    def _count(self) -> int:
+        self._send(0, _PKT_CONTROLLER_COUNT)
+        _, _, body = self._recv()
+        return struct.unpack("<I", body[:4])[0]
+
+    def _controller(self, idx: int) -> bytes:
+        self._send(idx, _PKT_CONTROLLER_DATA, struct.pack("<I", self.version))
+        _, _, body = self._recv()
+        return body
+
+    def find(self, name_sub: str) -> dict:
+        for i in range(self._count()):
+            dev = _parse_controller(self._controller(i), self.version)
+            if name_sub.lower() in dev["name"].lower():
+                dev["index"] = i
+                return dev
+        raise ElcError(f"OpenRGB server has no device matching {name_sub!r}")
+
+    def set_mode(self, idx: int, mode: dict) -> None:
+        self._send(idx, _PKT_UPDATE_MODE, _pack_mode(mode, self.version, idx))
+
+    def update_leds(self, idx: int, rgb_list: list) -> None:
+        data = struct.pack("<H", len(rgb_list))
+        for r, g, b in rgb_list:
+            data += struct.pack("<BBBB", r, g, b, 0)
+        self._send(idx, _PKT_UPDATE_LEDS, struct.pack("<I", len(data) + 4) + data)
+
+
+def _parse_controller(b: bytes, version: int) -> dict:
+    off = [0]
+
+    def u(fmt: str):
+        v = struct.unpack_from("<" + fmt, b, off[0])
+        off[0] += struct.calcsize("<" + fmt)
+        return v
+
+    def rstr() -> str:
+        (ln,) = u("H")
+        s = b[off[0]:off[0] + ln]
+        off[0] += ln
+        return s.split(b"\0", 1)[0].decode("utf-8", "replace")
+
+    u("I")            # data_size
+    u("I")            # device type (4 bytes on this protocol build)
+    name = rstr()
+    if version >= 1:
+        rstr()        # vendor
+    rstr(); rstr(); rstr(); rstr()   # description, version, serial, location
+    (num_modes,) = u("H")
+    (active_mode,) = u("i")
+    modes = []
+    for _ in range(num_modes):
+        m = {"name": rstr()}
+        m["value"], m["flags"], m["speed_min"], m["speed_max"] = u("iIII")
+        if version >= 3:
+            m["brightness_min"], m["brightness_max"] = u("II")
+        m["colors_min"], m["colors_max"] = u("II")
+        (m["speed"],) = u("I")
+        if version >= 3:
+            (m["brightness"],) = u("I")
+        m["direction"], m["color_mode"], ncol = u("IIH")
+        m["colors"] = [u("BBBB")[:3] for _ in range(ncol)]
+        modes.append(m)
+    return {"name": name, "active_mode": active_mode, "modes": modes}
+
+
+def _pack_mode(m: dict, version: int, idx: int) -> bytes:
+    raw = m["name"].encode("utf-8") + b"\0"
+    body = struct.pack("<I", idx)
+    body += struct.pack("<H", len(raw)) + raw
+    body += struct.pack("<iIII", m["value"], m["flags"], m["speed_min"], m["speed_max"])
+    if version >= 3:
+        body += struct.pack("<II", m.get("brightness_min", 0), m.get("brightness_max", 0))
+    body += struct.pack("<II", m["colors_min"], m["colors_max"])
+    body += struct.pack("<I", m["speed"])
+    if version >= 3:
+        body += struct.pack("<I", m.get("brightness", m.get("brightness_max", 0)))
+    body += struct.pack("<IIH", m["direction"], m["color_mode"], len(m.get("colors", [])))
+    for r, g, bl in m.get("colors", []):
+        body += struct.pack("<BBBB", r, g, bl, 0)
+    return struct.pack("<I", len(body) + 4) + body
+
+
+def _scale_into(pct: int, lo: int, hi: int) -> int:
+    """Map a 0-100 % onto [lo, hi] (handles hi < lo, i.e. inverted ranges)."""
+    pct = max(0, min(100, pct))
+    return round(lo + (hi - lo) * (pct / 100.0))
+
+
+def sdk_set_effect(mode_name: str, speed_pct: int | None = None,
+                   direction: int | None = None, brightness_pct: int = 100) -> dict:
+    """Switch the device to `mode_name` via the SDK, applying speed/direction/
+    brightness within that mode's real ranges. Returns the mode dict used.
+    Raises ElcError / OSError if the server isn't reachable."""
+    with _Sdk() as c:
+        dev = c.find(DEVICE)
+        idx = next((i for i, m in enumerate(dev["modes"])
+                    if m["name"].lower() == mode_name.lower()), None)
+        if idx is None:
+            raise ElcError(f"device has no mode {mode_name!r}")
+        m = dev["modes"][idx]
+        if speed_pct is not None and (m["flags"] & MODE_FLAG_HAS_SPEED):
+            # On this controller the raw speed value is a delay: LOWER = FASTER
+            # (Rainbow Wave range 15..250). Invert the % so the UI's "100%"
+            # gives the fastest animation.
+            m["speed"] = _scale_into(100 - speed_pct, m["speed_min"], m["speed_max"])
+        if direction is not None and (m["flags"] & _MODE_FLAG_ANY_DIR):
+            m["direction"] = int(direction)
+        if m["flags"] & MODE_FLAG_HAS_BRIGHTNESS:
+            m["brightness"] = _scale_into(brightness_pct, m.get("brightness_min", 0),
+                                          m.get("brightness_max", 100))
+        c.set_mode(dev["index"], m)
+        return m
+
+
+def sdk_set_leds(rgb_list: list) -> None:
+    """Push explicit per-LED colours (used for the gradient). Sets the device
+    to its first per-LED-capable mode first, then streams the colours."""
+    with _Sdk() as c:
+        dev = c.find(DEVICE)
+        idx = next((i for i, m in enumerate(dev["modes"])
+                    if m["flags"] & MODE_FLAG_HAS_PER_LED), None)
+        if idx is None:
+            idx = next((i for i, m in enumerate(dev["modes"])
+                        if m["name"].lower() == "static"), 0)
+        c.set_mode(dev["index"], dev["modes"][idx])
+        c.update_leds(dev["index"], rgb_list)
+
+
+def sdk_mode_caps(mode_name: str) -> dict | None:
+    """Best-effort: what does this mode support? {'speed','direction'} bools +
+    ranges. None if the server can't be reached."""
+    try:
+        with _Sdk() as c:
+            dev = c.find(DEVICE)
+            for m in dev["modes"]:
+                if m["name"].lower() == mode_name.lower():
+                    return {
+                        "speed": bool(m["flags"] & MODE_FLAG_HAS_SPEED),
+                        "direction": bool(m["flags"] & _MODE_FLAG_ANY_DIR),
+                        "speed_min": m["speed_min"], "speed_max": m["speed_max"],
+                    }
+    except (OSError, ElcError, struct.error):
+        return None
+    return None
+
+
 def _hexval(s: str) -> str:
     s = s.lstrip("#")
     if len(s) != 6 or any(c not in "0123456789abcdefABCDEF" for c in s):
@@ -198,10 +422,12 @@ def off() -> None:
 
 
 # Hardware effect modes the AW-ELC / "Dell G Series LED Controller" exposes
-# through OpenRGB (from `openrgb -l`): Static Flashing Morph 'Spectrum Cycle'
-# 'Rainbow Wave' Breathing. Speed is a 0-100 percentage where the mode
-# supports it. DIRECTION IS NOT SETTABLE VIA THE OpenRGB CLI — only via the
-# GUI or the SDK network protocol — so it isn't offered here.
+# through OpenRGB: Static Flashing Morph 'Spectrum Cycle' 'Rainbow Wave'
+# Breathing. Verified live via the SDK: *none* of the six modes carries a
+# direction flag, so direction genuinely can't be controlled on this board
+# (not a CLI limitation — the firmware/plugin doesn't expose it). Speed is a
+# raw firmware value in [15..250] for the wave modes where LOWER = FASTER, so
+# the 0-100 % from the UI is inverted before it's mapped in.
 EFFECT_MODES = {
     "rainbow": "Rainbow Wave",
     "spectrum": "Spectrum Cycle",
@@ -212,12 +438,22 @@ EFFECT_MODES = {
 
 def set_effect(name: str, speed: int | None = None, color=None,
                brightness: int = 100) -> None:
+    """Switch to a hardware effect. Prefers the SDK (real speed range, snappy);
+    falls back to the openrgb CLI if the server isn't up."""
     mode = EFFECT_MODES.get(name, name)
+    if speed is not None:
+        speed = max(0, min(100, int(speed)))
+    try:
+        sdk_set_effect(mode, speed_pct=speed, brightness_pct=brightness)
+        return
+    except (OSError, ElcError, struct.error):
+        pass
     args = ["-m", mode, "-b", str(max(0, min(100, brightness)))]
     if color is not None:
         args += ["-c", _hexify(color)]
     if speed is not None:
-        args += ["-s", str(max(0, min(100, int(speed))))]
+        # CLI's -s is 0-100 %; invert so higher % = faster, matching the SDK.
+        args += ["-s", str(100 - speed)]
     _run(args)
 
 
@@ -229,13 +465,21 @@ def _to_rgb(c) -> tuple[int, int, int]:
 
 
 def set_gradient(color_a, color_b, brightness: int = 100) -> None:
-    """Static colour gradient from A (left) to B (right/numpad), interpolated
-    across the 16 logical zones."""
+    """Colour gradient from A (Left) to B (Numpad), interpolated across the
+    device's LEDs. Uses the SDK's per-LED path — the CLI's -z form just shows
+    a solid colour on this controller."""
     a, b = _to_rgb(color_a), _to_rgb(color_b)
+    n = LOGICAL_ZONES
+    leds = [tuple(round(a[i] + (b[i] - a[i]) * (k / (n - 1))) for i in range(3))
+            for k in range(n)]
+    try:
+        sdk_set_leds(leds)
+        return
+    except (OSError, ElcError, struct.error):
+        pass
+    # last-ditch CLI attempt (may render solid)
     args = ["-m", "Static", "-b", str(max(0, min(100, brightness)))]
-    for lz in range(LOGICAL_ZONES):
-        t = lz / (LOGICAL_ZONES - 1)
-        mix = tuple(round(a[i] + (b[i] - a[i]) * t) for i in range(3))
+    for lz, mix in enumerate(leds):
         args += ["-z", str(lz), "-c", _hexify(mix)]
     _run(args)
 
