@@ -369,26 +369,162 @@ class Item:
             else:
                 self.apply_cmds = []
             self.undo_cmds = []
-        self.applied = False
-        self.pending = False  # staged (bootloader) but needs a reboot to be live
+        # live status — set by _refresh_all_status. `state` is the single
+        # source of truth; `applied`/`pending` are kept as derived bools so the
+        # rest of the code doesn't change.
+        #   applied      check exited 0
+        #   not_applied  check exited non-zero, cleanly
+        #   pending      check_pending exited 0 (staged, needs reboot)
+        #   error        the check command couldn't run (not our no/yes answer)
+        #   drifted      we applied it OK (per the ledger) but the check now fails
+        #   failed       our last apply/undo of this item failed (per the ledger)
+        self.state = "unknown"
+        self.check_rc: int | None = None
+        self.check_out = ""
+        self.ledger: dict | None = None   # {"action","ok","ts","note"} or None
         self.var = None  # tk.BooleanVar, set when widget built
         self.status_label = None
         self.checkbutton = None
 
     @property
+    def applied(self) -> bool:
+        return self.state == "applied"
+
+    @property
+    def pending(self) -> bool:
+        return self.state == "pending"
+
+    @property
     def done(self) -> bool:
         """Already in the desired state — nothing to (re-)apply."""
-        return self.applied or self.pending
+        return self.state in ("applied", "pending")
 
 
 def run_cmd(cmd: str) -> tuple[bool, str]:
+    ok, _rc, out = run_cmd3(cmd)
+    return ok, out
+
+
+def run_cmd3(cmd: str) -> tuple[bool, int, str]:
+    """(ok, returncode, combined-output). rc is -1 if the command itself
+    couldn't be launched (used to tell "check says no" from "check broke")."""
     try:
-        result = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=1800)
-        ok = result.returncode == 0
-        out = (result.stdout or "") + (result.stderr or "")
-        return ok, out.strip()
+        r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=1800)
+        out = ((r.stdout or "") + (r.stderr or "")).strip()
+        return r.returncode == 0, r.returncode, out
     except Exception as exc:  # noqa: BLE001
-        return False, str(exc)
+        return False, -1, str(exc)
+
+
+# --------------------------------------------------------------------------- #
+#  Apply ledger — what the toolkit itself has applied/undone, and how it went.
+#  The per-tweak `check` command is still the source of truth for the *current*
+#  state; the ledger adds "...and we're the ones who set it" / "...and our last
+#  attempt failed", which is how "Reverted" and "Apply failed" are told apart
+#  from a plain "Not applied".
+# --------------------------------------------------------------------------- #
+
+def _ledger_path() -> Path:
+    try:
+        home = Path(pwd.getpwnam(resolve_real_user()).pw_dir)
+    except (KeyError, Exception):  # noqa: BLE001
+        home = Path.home()
+    return home / ".config" / "dellg15-toolkit" / "state.json"
+
+
+def ledger_load() -> dict:
+    try:
+        d = json.loads(_ledger_path().read_text())
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def ledger_record(item_id: str, action: str, ok: bool, note: str = "") -> None:
+    p = _ledger_path()
+    data = ledger_load()
+    data[item_id] = {"action": action, "ok": bool(ok),
+                     "ts": time.strftime("%Y-%m-%d %H:%M:%S"), "note": note[:200]}
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(data, indent=2, sort_keys=True))
+        if os.geteuid() == 0:
+            pw = pwd.getpwnam(resolve_real_user())
+            os.chown(p, pw.pw_uid, pw.pw_gid)
+            os.chown(p.parent, pw.pw_uid, pw.pw_gid)
+    except (OSError, KeyError):
+        pass
+
+
+# state key → (short label, ttkbootstrap style). App items relabel
+# applied/not_applied to installed/not installed at render time.
+_STATE_UI = {
+    "applied":     ("Applied", SUCCESS),
+    "pending":     ("Pending reboot", INFO),
+    "not_applied": ("Not applied", SECONDARY),
+    "error":       ("Check error", WARNING),
+    "drifted":     ("Reverted", WARNING),
+    "failed":      ("Apply failed", DANGER),
+    "unsupported": ("unsupported", SECONDARY),
+    "unknown":     ("checking…", SECONDARY),
+}
+
+
+def format_status_report(items) -> str:
+    """Plain-text table of every item's state + the check that decided it +
+    the toolkit's last action. Used by the GUI dialog and `--report`."""
+    rows = sorted(items, key=lambda i: (i.category, i.kind, i.content.lower()))
+    out = [f"Dell G15 Toolkit — status report   {time.strftime('%Y-%m-%d %H:%M:%S')}",
+           "=" * 100]
+    cur = None
+    counts: dict[str, int] = {}
+    for it in rows:
+        counts[it.state] = counts.get(it.state, 0) + 1
+        if it.category != cur:
+            cur = it.category
+            out.append(f"\n[{cur}]")
+        led = it.ledger
+        led_s = (f"{led['action']} {'ok' if led['ok'] else 'FAILED'} {led['ts']}"
+                 + (f" — {led['note']}" if led.get("note") else "")) if led else "—"
+        rc = "" if it.check_rc in (None, 0) else f" (rc {it.check_rc})"
+        out.append(f"  {it.state.upper():<12} {it.content[:44]:<44} "
+                   f"check{rc}: {it.check_cmd[:60] or '(none)'}")
+        if it.check_out and it.state in ("error", "drifted", "failed", "not_applied"):
+            out.append(f"    ↳ check said: {it.check_out.splitlines()[-1][:88]}")
+        if led:
+            out.append(f"    ↳ toolkit:    {led_s}")
+    out.append("\n" + "-" * 100)
+    out.append("  ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+    return "\n".join(out) + "\n"
+
+
+def evaluate_item(item: "Item", ledger: dict) -> None:
+    """Run `item`'s check(s), consult the ledger, and set item.state /
+    check_rc / check_out / ledger."""
+    item.check_rc, item.check_out = None, ""
+    item.ledger = ledger.get(item.id)
+    if not item.hw_supported:
+        item.state = "unsupported"
+        return
+    if not item.check_cmd:
+        item.state = "not_applied"
+        return
+    ok, rc, out = run_cmd3(item.check_cmd)
+    item.check_rc, item.check_out = rc, out[:600]
+    if ok:
+        item.state = "applied"
+        return
+    led = item.ledger
+    if rc in (-1, 127):
+        item.state = "error"
+    elif item.check_pending_cmd and run_cmd3(item.check_pending_cmd)[0]:
+        item.state = "pending"
+    elif led and led.get("action") == "apply" and led.get("ok"):
+        item.state = "drifted"        # we applied it OK; something undid it
+    elif led and not led.get("ok"):
+        item.state = "failed"         # our last apply/undo of it errored
+    else:
+        item.state = "not_applied"
 
 
 class ToolkitApp:
@@ -596,7 +732,10 @@ class ToolkitApp:
         btn_apply = tb.Button(btn_bar, text="✓  Apply Selected", bootstyle=SUCCESS,
                               command=self._on_apply_click)
         btn_apply.pack(side="left", padx=8)
-        self._footer_btns = [btn_refresh, btn_apply]
+        btn_report = tb.Button(btn_bar, text="≣  Status report", bootstyle=(SECONDARY, "outline"),
+                               command=self._show_status_report)
+        btn_report.pack(side="left")
+        self._footer_btns = [btn_refresh, btn_apply, btn_report]
         self.status_var = tk.StringVar(value="Ready.")
         tb.Label(btn_bar, textvariable=self.status_var, bootstyle=SECONDARY,
                  font=("Sans", 9)).pack(side="right")
@@ -1718,22 +1857,13 @@ class ToolkitApp:
         self.root.after(120, self._poll_log_queue)
 
     def _refresh_all_status(self):
-        def _check(item):
-            item.pending = False
-            if not item.hw_supported or not item.check_cmd:
-                item.applied = False
-                return
-            ok, _ = run_cmd(item.check_cmd)
-            item.applied = ok
-            if not ok and item.check_pending_cmd:
-                item.pending = run_cmd(item.check_pending_cmd)[0]
-
+        ledger = ledger_load()
         # Each check spawns a shell; running them serially made startup crawl.
         # They're independent and I/O-bound, so fan them out over a pool.
         items = list(self.items.values())
         if items:
             with ThreadPoolExecutor(max_workers=min(12, len(items))) as ex:
-                list(ex.map(_check, items))
+                list(ex.map(lambda it: evaluate_item(it, ledger), items))
         # Hand back to the main thread via a queue — Tk is not thread-safe and
         # calling root.after() from here races the interpreter (crashes as
         # "main thread is not in main loop"). Mirrors the log/dash queues.
@@ -1752,7 +1882,7 @@ class ToolkitApp:
         self.root.after(200, self._poll_status_queue)
 
     def _apply_status_to_widgets(self):
-        n_done = n_total = 0
+        n_done = n_total = n_attention = 0
         for item in self.items.values():
             if item.status_label is None:
                 continue
@@ -1760,27 +1890,53 @@ class ToolkitApp:
                 item.status_label.configure(text="unsupported", bootstyle=SECONDARY)
                 continue
             n_total += 1
-            if item.pending:
-                label, style = "Pending reboot", INFO
-            elif item.applied:
-                label = "Installed" if item.kind == "app" else "Applied"
-                style = SUCCESS
-            else:
-                label = "Not installed" if item.kind == "app" else "Not applied"
-                style = SECONDARY
+            label, style = _STATE_UI.get(item.state, _STATE_UI["unknown"])
+            if item.kind == "app":
+                label = {"Applied": "Installed", "Not applied": "Not installed"}.get(label, label)
             if item.done:
                 n_done += 1
+            if item.state in ("error", "drifted", "failed"):
+                n_attention += 1
             item.status_label.configure(text=label, bootstyle=style)
             if item.var is not None:
                 item.var.set(item.done)
-        self.status_var.set(
-            f"{n_done} of {n_total} already applied/installed — "
-            f"{n_total - n_done} available. Ticked = already done; Apply skips those."
-        )
+        msg = (f"{n_done} of {n_total} applied/installed — "
+               f"{n_total - n_done} available.")
+        if n_attention:
+            msg += f"  ⚠ {n_attention} need attention (see Status report)."
+        self.status_var.set(msg)
 
     def _on_refresh_click(self):
         self.status_var.set("Refreshing status…")
         threading.Thread(target=self._refresh_all_status, daemon=True).start()
+
+    def _show_status_report(self):
+        """Scrollable, copyable table of every item: state, the check that
+        decided it (+ exit code), and the last thing the toolkit did to it."""
+        win = tk.Toplevel(self.root)
+        win.title("Dell G15 Toolkit — status report")
+        win.geometry("1040x640")
+        win.transient(self.root)
+        tb.Label(win, text="Status report", font=("Sans", 11, "bold"),
+                 padding=(12, 10)).pack(anchor="w")
+        tb.Label(win, bootstyle=SECONDARY, padding=(12, 0), justify="left",
+                 text="State = the item's own check command. “Reverted” = the toolkit "
+                      "applied it but the check now fails; “Apply failed” = our last "
+                      "attempt errored; “Check error” = the check couldn't run.").pack(anchor="w")
+        txt = self._make_log_text(win)
+        txt.pack(fill="both", expand=True, padx=12, pady=10)
+        txt.configure(state="normal")
+        txt.insert("end", format_status_report(self.items.values()))
+        txt.configure(state="disabled")
+        bar = tb.Frame(win); bar.pack(pady=(0, 12))
+        tb.Button(bar, text="Re-check now", bootstyle=(INFO, "outline"),
+                  command=lambda: (win.destroy(), self._on_refresh_click())).pack(side="left", padx=4)
+        tb.Button(bar, text="Copy", bootstyle=(SECONDARY, "outline"),
+                  command=lambda: (self.root.clipboard_clear(),
+                                   self.root.clipboard_append(
+                                       format_status_report(self.items.values())))
+                  ).pack(side="left", padx=4)
+        tb.Button(bar, text="Close", bootstyle=SECONDARY, command=win.destroy).pack(side="left", padx=4)
 
     # ---------- apply logic ----------
 
@@ -1809,20 +1965,26 @@ class ToolkitApp:
 
     def _run_item_apply(self, item: Item):
         self._log(f"--- Applying: {item.content} ---")
-        for cmd in item.apply_cmds:
+        for n, cmd in enumerate(item.apply_cmds, 1):
             if not self._stream_apply_cmd(cmd):
                 self._log(f"[FAILED] {cmd}")
+                ledger_record(item.id, "apply", False,
+                              f"failed at step {n}/{len(item.apply_cmds)}: {cmd}")
                 return False
         self._log(f"[OK] {item.content}")
+        ledger_record(item.id, "apply", True, f"{len(item.apply_cmds)} cmd(s) ok")
         return True
 
     def _run_item_undo(self, item: Item):
         self._log(f"--- Reverting: {item.content} ---")
-        for cmd in item.undo_cmds:
+        for n, cmd in enumerate(item.undo_cmds, 1):
             if not self._stream_apply_cmd(cmd):
                 self._log(f"[FAILED] {cmd}")
+                ledger_record(item.id, "undo", False,
+                              f"failed at step {n}/{len(item.undo_cmds)}: {cmd}")
                 return False
         self._log(f"[OK reverted] {item.content}")
+        ledger_record(item.id, "undo", True, f"{len(item.undo_cmds)} cmd(s) ok")
         return True
 
     def _on_apply_click(self):
@@ -1909,7 +2071,33 @@ class ToolkitApp:
         threading.Thread(target=self._refresh_all_status, daemon=True).start()
 
 
+def cli_report() -> int:
+    """`--report`: print the status table, no GUI. Some checks need root, so
+    run it with sudo for a complete picture (a note is printed if not)."""
+    user = resolve_real_user()
+    has_nv, has_amd = sensors.has_nvidia_gpu(), sensors.has_amd_gpu()
+    items = []
+    for kind, fn in (("tweak", "tweaks.json"), ("app", "apps.json")):
+        for iid, data in load_json(fn).items():
+            it = Item(iid, data, kind, user)
+            if it.requires_vendor == "nvidia" and not has_nv:
+                it.hw_supported = False
+            elif it.requires_vendor == "amd" and not has_amd:
+                it.hw_supported = False
+            items.append(it)
+    ledger = ledger_load()
+    with ThreadPoolExecutor(max_workers=12) as ex:
+        list(ex.map(lambda it: evaluate_item(it, ledger), items))
+    print(format_status_report(items))
+    if os.geteuid() != 0:
+        print("note: not running as root — checks that need privileges may read "
+              "as 'Not applied'/'Check error'. Re-run with sudo for accuracy.")
+    return 0
+
+
 def main():
+    if "--report" in sys.argv:
+        raise SystemExit(cli_report())
     self_elevate()
     root = tb.Window(themename=THEME)
     ToolkitApp(root)
