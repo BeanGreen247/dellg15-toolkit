@@ -44,8 +44,8 @@ do_uninstall() {
     rm -f "${ICONBASE}/scalable/apps/${APPID}.svg"
     rm -rf "$LIBDIR"
     refresh_caches
-    c_ok "Uninstalled. (System tweaks applied from inside the tool are left as-is —"
-    c_ok " revert those from the Toolkit UI before uninstalling if you want them gone.)"
+    c_ok "Uninstalled the app. (Tweaks/services applied from inside the tool are left"
+    c_ok " as-is — 'sudo ./uninstall.sh --purge' removes those too.)"
 }
 
 do_install() {
