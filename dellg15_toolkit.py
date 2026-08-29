@@ -382,6 +382,7 @@ class ToolkitApp:
         self.log_collapse_btn.pack(side="right")
         self.log_text = self._make_log_text(self.log_frame)
         self.log_text.pack(fill="both", expand=True)
+        self._toggle_log_collapse()   # start collapsed; expand on demand
 
     @staticmethod
     def _make_log_text(parent) -> tk.Text:
@@ -547,23 +548,24 @@ class ToolkitApp:
             note, wraplength=1100, justify="left", bootstyle="inverse-info",
             text="Driven through OpenRGB (the AW-ELC has no kernel driver and ignores raw HID). "
                  "The backlight must be enabled in BIOS setup (F2 -> Keyboard Backlight) first — "
-                 "if the keys stay dark, that's why. It's a 4-zone board (Left / Middle / Right / "
-                 "Numpad), not per-key. Colours don't persist a reboot on their own — apply the "
+                 "if the keys stay dark, that's why. Whole-keyboard colour only: this controller "
+                 "drops the backlight when the four zones are set to different colours, so per-zone "
+                 "control was removed. Colours don't persist a reboot on their own — apply the "
                  "KbdBacklightFix tweak (Power tab) to re-assert them at login and after resume.",
         ).pack(anchor="w")
 
         self._kbd_busy = False
         self.kbd_brightness = tk.IntVar(value=100)
         self.kbd_all_hex = tk.StringVar(value="#ffffff")
-        self.kbd_zone_vars: dict[int, tk.StringVar] = {}
 
         # pre-fill from saved state if present
         saved = dellg15_kbd.load_state()
         if saved:
             zc, br = saved
             self.kbd_brightness.set(br)
-            for z, rgb in zc.items():
-                self.kbd_zone_vars.setdefault(z, tk.StringVar()).set("#%02x%02x%02x" % tuple(rgb))
+            if zc:
+                r, g, b = tuple(sorted(zc.items())[0][1])
+                self.kbd_all_hex.set("#%02x%02x%02x" % (r, g, b))
 
         # ---- brightness ----
         br_box = tb.Labelframe(frame, text="Brightness", padding=12)
@@ -573,15 +575,15 @@ class ToolkitApp:
         scale.bind("<ButtonRelease-1>", lambda _e: self._kbd_apply_brightness())
         tb.Label(br_box, textvariable=self.kbd_brightness, width=4).pack(side="left")
 
-        # ---- whole keyboard ----
-        whole = tb.Labelframe(frame, text="Whole keyboard", padding=12)
+        # ---- colour (whole keyboard only — see note above) ----
+        whole = tb.Labelframe(frame, text="Colour", padding=12)
         whole.pack(fill="x", pady=(0, 12))
         r1 = tb.Frame(whole)
         r1.pack(fill="x")
         self._kbd_swatch(r1, self.kbd_all_hex).pack(side="left", padx=(0, 8))
         tb.Button(r1, text="Pick colour…", bootstyle=SECONDARY,
                   command=lambda: self._kbd_pick(self.kbd_all_hex)).pack(side="left", padx=4)
-        tb.Button(r1, text="Apply to all zones", bootstyle=SUCCESS,
+        tb.Button(r1, text="Apply", bootstyle=SUCCESS,
                   command=self._kbd_apply_all).pack(side="left", padx=4)
         r2 = tb.Frame(whole)
         r2.pack(fill="x", pady=(8, 0))
@@ -589,20 +591,6 @@ class ToolkitApp:
             tb.Button(r2, text=name, bootstyle=SECONDARY, width=8,
                       command=lambda h=hexv: (self.kbd_all_hex.set(h), self._kbd_apply_all())
                       ).pack(side="left", padx=2)
-
-        # ---- per-zone ----
-        pz = tb.Labelframe(frame, text="Per-zone  (Left = where the G-key is)", padding=12)
-        pz.pack(fill="x", pady=(0, 12))
-        for zi, zname in enumerate(dellg15_kbd.ZONE_NAMES):
-            row = tb.Frame(pz)
-            row.pack(fill="x", pady=3)
-            tb.Label(row, text=zname, width=10).pack(side="left")
-            hv = self.kbd_zone_vars.setdefault(zi, tk.StringVar(value="#ffffff"))
-            self._kbd_swatch(row, hv).pack(side="left", padx=(0, 8))
-            tb.Button(row, text="Pick…", bootstyle=SECONDARY,
-                      command=lambda v=hv: self._kbd_pick(v)).pack(side="left", padx=4)
-            tb.Button(row, text="Apply", bootstyle=SUCCESS,
-                      command=lambda z=zi: self._kbd_apply_zone(z)).pack(side="left", padx=4)
 
         bottom = tb.Frame(frame)
         bottom.pack(fill="x", pady=(4, 0))
@@ -636,6 +624,7 @@ class ToolkitApp:
             self._log("[Keyboard] busy — try again in a moment")
             return
         self._kbd_busy = True
+        self._log(f"[Keyboard] {desc} …")
 
         def work():
             try:
@@ -644,7 +633,7 @@ class ToolkitApp:
                     fn(kb)
                 finally:
                     kb.close()
-                self._log(f"[Keyboard] {desc}")
+                self._log(f"[Keyboard] {desc} ✓")
             except Exception as exc:  # noqa: BLE001
                 self._log(f"[Keyboard FAILED] {exc}")
             finally:
@@ -653,30 +642,24 @@ class ToolkitApp:
         threading.Thread(target=work, daemon=True).start()
 
     def _kbd_all_colors(self) -> dict[int, tuple[int, int, int]]:
-        return {z: self._hex_to_rgb(self._safe_hex(v.get())) for z, v in self.kbd_zone_vars.items()}
+        rgb = self._hex_to_rgb(self._safe_hex(self.kbd_all_hex.get()))
+        return {z: rgb for z in range(dellg15_kbd.ZONE_COUNT)}
 
     def _kbd_apply_brightness(self):
         b = self.kbd_brightness.get()
-        self._kbd_run(lambda kb: (kb.set_brightness(b),
-                                  dellg15_kbd.save_state(self._kbd_all_colors(), b)),
+        hx = self._safe_hex(self.kbd_all_hex.get())
+        colors = self._kbd_all_colors()
+        self._kbd_run(lambda kb: (kb.set_all(hx, b),
+                                  dellg15_kbd.save_state(colors, b)),
                       f"brightness {b}%")
 
     def _kbd_apply_all(self):
         hx = self._safe_hex(self.kbd_all_hex.get())
-        for v in self.kbd_zone_vars.values():
-            v.set(hx)
         b = self.kbd_brightness.get()
         colors = self._kbd_all_colors()
         self._kbd_run(lambda kb: (kb.set_all(hx, b),
                                   dellg15_kbd.save_state(colors, b)),
-                      f"all zones {hx} @ {b}%")
-
-    def _kbd_apply_zone(self, z: int):
-        b = self.kbd_brightness.get()
-        colors = self._kbd_all_colors()
-        self._kbd_run(lambda kb: (kb.set_zones(colors, b),
-                                  dellg15_kbd.save_state(colors, b)),
-                      f"zone {z} ({dellg15_kbd.ZONE_NAMES[z]}) -> {self._safe_hex(self.kbd_zone_vars[z].get())}")
+                      f"colour {hx} @ {b}%")
 
     def _kbd_off(self):
         self.kbd_brightness.set(0)
@@ -822,7 +805,7 @@ class ToolkitApp:
                 widget.insert("end", chunk)
                 widget.see("end")
                 widget.configure(state="disabled")
-        self.root.after(150, self._poll_log_queue)
+        self.root.after(50, self._poll_log_queue)
 
     def _refresh_all_status(self):
         for item in self.items.values():

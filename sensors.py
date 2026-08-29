@@ -291,26 +291,12 @@ def _notify_game_mode(enable: bool) -> None:
 
 
 def _gmode_kbd_indicator(enable: bool) -> None:
-    """Best-effort: tint the left keyboard zone (where the G-key sits) red
-    while G-Mode is active, the way AWCC does on Windows; restore the user's
-    colour when it turns off. No-op if the AW-ELC RGB keyboard, its helper
-    module, or a saved base colour isn't present."""
-    try:
-        import dellg15_kbd
-    except Exception:  # noqa: BLE001
-        return
-    try:
-        state = dellg15_kbd.load_state()
-        if not state:
-            return  # no base colour set in the Keyboard tab — nothing to tint/restore
-        colors, brightness = state
-        colors = dict(colors)
-        if enable:
-            colors[dellg15_kbd.GKEY_ZONE] = (255, 0, 0)
-        with dellg15_kbd.Keyboard() as kb:
-            kb.set_zones(colors, brightness)  # not persisted; KbdBacklightFix keeps the base
-    except Exception:  # noqa: BLE001
-        pass
+    """Disabled. The plan was to tint the G-key zone red while G-Mode is
+    active (as AWCC does on Windows), but this AW-ELC controller drops the
+    entire backlight whenever the four zones are given different colours —
+    the same reason the Keyboard tab is whole-keyboard only. Kept as a no-op
+    so callers don't need to change."""
+    return
 
 
 def set_game_mode(enable: bool) -> tuple[bool, str]:

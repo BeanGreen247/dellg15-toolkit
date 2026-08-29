@@ -386,22 +386,25 @@
   },
   "KbdBacklightFix": {
     "Content": "Keyboard Backlight: re-apply saved colour at boot/resume",
-    "Description": "On the G15 5515 the keyboard backlight is driven through OpenRGB (the AW-ELC has no kernel driver and ignores raw HID writes); the backlight must also be enabled in BIOS setup. This installs dellg15_kbd.py (an openrgb wrapper) to /usr/local/bin plus a systemd service + a systemd-sleep hook that re-apply ~/.config/dellg15-toolkit/kbd.json (set in the Keyboard tab) at boot and after resume, since the colour does not persist a power cycle on its own. Requires the OpenRGB app. Reversible.",
+    "Description": "On the G15 5515 the keyboard backlight is driven through OpenRGB (the AW-ELC has no kernel driver and ignores raw HID writes); the backlight must also be enabled in BIOS setup. This installs dellg15_kbd.py (an openrgb wrapper) to /usr/local/bin, a headless 'openrgb --server' service so colour changes apply in ~1s instead of ~4s, plus a systemd service + a systemd-sleep hook that re-apply ~/.config/dellg15-toolkit/kbd.json (set in the Keyboard tab) at boot and after resume, since the colour does not persist a power cycle on its own. Requires the OpenRGB app. Reversible.",
     "category": "Power",
     "risk": "advanced",
-    "check": "test -x /usr/local/bin/dellg15-kbd && systemctl is-enabled dellg15-kbd.service 2>/dev/null | grep -q enabled",
+    "check": "test -x /usr/local/bin/dellg15-kbd && systemctl is-enabled dellg15-kbd.service 2>/dev/null | grep -q enabled && systemctl is-enabled dellg15-openrgb.service 2>/dev/null | grep -q enabled",
     "apply": [
       "install -m 0755 {TOOLKIT_DIR}/dellg15_kbd.py /usr/local/bin/dellg15-kbd",
-      "cat > /etc/systemd/system/dellg15-kbd.service <<'UNIT'\n[Unit]\nDescription=Re-apply Dell G15 keyboard backlight (Dell G15 Toolkit)\nAfter=multi-user.target systemd-udev-settle.service\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nEnvironment=DELLG15_KBD_STATE=/home/{USER}/.config/dellg15-toolkit/kbd.json\nExecStartPre=/usr/bin/sleep 2\nExecStart=/usr/local/bin/dellg15-kbd apply-saved\n\n[Install]\nWantedBy=multi-user.target\nUNIT",
+      "cat > /etc/systemd/system/dellg15-openrgb.service <<'UNIT'\n[Unit]\nDescription=OpenRGB SDK server for the Dell G15 keyboard (Dell G15 Toolkit)\nAfter=multi-user.target systemd-udev-settle.service\n\n[Service]\nType=simple\nExecStart=/usr/bin/openrgb --server --noautoconnect\nRestart=on-failure\nRestartSec=3\n\n[Install]\nWantedBy=multi-user.target\nUNIT",
+      "cat > /etc/systemd/system/dellg15-kbd.service <<'UNIT'\n[Unit]\nDescription=Re-apply Dell G15 keyboard backlight (Dell G15 Toolkit)\nAfter=multi-user.target systemd-udev-settle.service dellg15-openrgb.service\nWants=dellg15-openrgb.service\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nEnvironment=DELLG15_KBD_STATE=/home/{USER}/.config/dellg15-toolkit/kbd.json\nExecStartPre=/usr/bin/sleep 3\nExecStart=/usr/local/bin/dellg15-kbd apply-saved\n\n[Install]\nWantedBy=multi-user.target\nUNIT",
       "mkdir -p /usr/lib/systemd/system-sleep",
       "cat > /usr/lib/systemd/system-sleep/dellg15-kbd <<'HOOK'\n#!/usr/bin/env bash\nif [ \"$1\" = post ]; then\n  sleep 2\n  DELLG15_KBD_STATE=/home/{USER}/.config/dellg15-toolkit/kbd.json /usr/local/bin/dellg15-kbd apply-saved || true\nfi\nHOOK",
       "chmod +x /usr/lib/systemd/system-sleep/dellg15-kbd",
       "systemctl daemon-reload",
+      "systemctl enable --now dellg15-openrgb.service || true",
       "systemctl enable --now dellg15-kbd.service || true"
     ],
     "undo": [
       "systemctl disable --now dellg15-kbd.service 2>/dev/null || true",
-      "rm -f /etc/systemd/system/dellg15-kbd.service /usr/lib/systemd/system-sleep/dellg15-kbd /usr/local/bin/dellg15-kbd",
+      "systemctl disable --now dellg15-openrgb.service 2>/dev/null || true",
+      "rm -f /etc/systemd/system/dellg15-kbd.service /etc/systemd/system/dellg15-openrgb.service /usr/lib/systemd/system-sleep/dellg15-kbd /usr/local/bin/dellg15-kbd",
       "systemctl daemon-reload"
     ]
   },

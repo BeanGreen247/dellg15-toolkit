@@ -28,6 +28,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 DEVICE = "Dell G Series LED Controller"   # OpenRGB's name for the AW-ELC on the G15
 ZONE_COUNT = 4                            # physical zones
@@ -100,14 +101,38 @@ def _openrgb() -> str:
     return exe
 
 
-def _run(args: list[str]) -> str:
-    out = subprocess.run([_openrgb(), "--noautoconnect", "-d", DEVICE, *args],
-                         capture_output=True, text=True, timeout=40)
+def _run_once(args: list[str], server: bool = True) -> str:
+    # server=True: talk to a running `openrgb --server` (dellg15-openrgb.service)
+    # — ~1s, devices stay initialised. server=False: standalone scan (~4s), the
+    # fallback when no server is up.
+    cmd = [_openrgb()] + ([] if server else ["--noautoconnect"]) + ["-d", DEVICE, *args]
+    out = subprocess.run(cmd, capture_output=True, text=True, timeout=40)
     # OpenRGB always exits 0 and prints an i2c/SMBus HTML warning to stdout;
     # a real failure shows up as "Device .* not found" / "Connection attempt".
     blob = (out.stdout + out.stderr)
     if "not found" in blob or "Connection attempt failed" in blob:
         raise ElcError(blob.strip().splitlines()[-1] if blob.strip() else "openrgb call failed")
+    return blob
+
+
+def _run(args: list[str]) -> str:
+    """Apply an openrgb command, fast path first.
+
+    Tries the running OpenRGB SDK server (~1s); falls back to a standalone
+    scan (~4s) if there's no server. Then writes the same command a second
+    time immediately — on this AW-ELC controller a lone write often doesn't
+    'take' (keys flash the colour then go dark a beat later); the repeat
+    locks it in, with no artificial delay so the GUI stays snappy."""
+    server = True
+    try:
+        blob = _run_once(args, server=True)
+    except (ElcError, subprocess.TimeoutExpired):
+        server = False
+        blob = _run_once(args, server=False)
+    try:
+        _run_once(args, server=server)
+    except (ElcError, subprocess.TimeoutExpired):
+        pass
     return blob
 
 
@@ -257,7 +282,19 @@ def main(argv: list[str] | None = None) -> int:
             if not st:
                 print("no saved lighting state")
                 return 0
-            set_zones(*st)
+            # Boot/resume: the controller may still be settling. Re-assert a
+            # few times spaced out; _run already double-writes each call.
+            last = None
+            for i in range(3):
+                if i:
+                    time.sleep(1.5)
+                try:
+                    set_zones(*st)
+                    last = None
+                except ElcError as exc:
+                    last = exc
+            if last:
+                raise last
             print(f"re-applied saved lighting @ {st[1]}%")
     except ElcError as exc:
         print(f"error: {exc}", file=sys.stderr)
