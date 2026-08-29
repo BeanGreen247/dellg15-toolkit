@@ -4,7 +4,15 @@ A checkbox-driven GUI + tray monitor for Dell gaming laptops on Nobara Linux
 (dnf), built the same way as [WinUtil](https://winutil.christitus.com/)-style
 Windows tweak tools: data-driven JSON config, live status detection per
 item, reversible tweaks, one-directional app installs, and one-click
-presets.
+presets. Plus a keyboard-RGB tab, a fan/thermal tab, an updates tab, and a
+diagnostics tab that dumps hardware + OS info for bug reports.
+
+> **Roadmap:** the goal is a general **gaming-laptop** tool. Today it targets
+> exactly one machine — every check/apply command and hardware path in
+> `config/*.json` is written for the Dell G15 5515 Ryzen Edition on Nobara.
+> Generalising means gating each item per-model (DMI-based) and adding
+> profiles for other boards; contributions and debug reports from other
+> hardware are welcome (see the issue template).
 
 **Inspired by [Div-Acer-Manager-Max](https://github.com/PXDiv/Div-Acer-Manager-Max)**
 (DAMX) — the Acer NitroSense/PredatorSense replacement for Linux this was
@@ -175,6 +183,23 @@ dialog. A pending-update counter (`dnf --cacheonly` + flatpak + fwupd) shows
 at the top with a "recount" button — the dnf figure is "as of the last
 metadata sync" because a full `dnf check-update` can take minutes on this
 box's mirrors.
+
+## The Diagnostics tab
+
+One button collects a read-only **hardware + OS + toolkit-state report** for
+bug reports: OS/kernel/cmdline, DMI identity, CPU/GPU, thermal + fan state,
+the keyboard / hotkey / **media-key** evdev map (`/proc/bus/input/devices`
+with the KEY-capability bitmaps, plus which event device the G-key and volume
+keys sit on), OpenRGB device list, package versions, and filtered
+`dmesg` / `journalctl` errors — the same kind of dump used to bring the G-key
+up in the first place. Buttons: **Copy report**, **Save to file…**, and
+**Copy GitHub issue template** (pre-filled sections to paste on the tracker).
+Terminal equivalent:
+
+```bash
+sudo python3 /opt/dellg15-toolkit/dellg15_toolkit.py --debug     # full report
+sudo python3 /opt/dellg15-toolkit/dellg15_toolkit.py --report    # just the apply-status table
+```
 
 ## Hardware-aware gating
 

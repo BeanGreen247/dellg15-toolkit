@@ -465,11 +465,11 @@ def run_cmd(cmd: str) -> tuple[bool, str]:
     return ok, out
 
 
-def run_cmd3(cmd: str) -> tuple[bool, int, str]:
+def run_cmd3(cmd: str, timeout: int = 1800) -> tuple[bool, int, str]:
     """(ok, returncode, combined-output). rc is -1 if the command itself
     couldn't be launched (used to tell "check says no" from "check broke")."""
     try:
-        r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=1800)
+        r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=timeout)
         out = ((r.stdout or "") + (r.stderr or "")).strip()
         return r.returncode == 0, r.returncode, out
     except Exception as exc:  # noqa: BLE001
@@ -774,6 +774,7 @@ class ToolkitApp:
         self._build_fan_tab()
         self._build_presets_tab()
         self._build_updates_tab()
+        self._build_diagnostics_tab()
 
         categories = sorted(
             {item.category for item in self.items.values()},
@@ -1800,6 +1801,102 @@ class ToolkitApp:
 
         threading.Thread(target=work, daemon=True).start()
 
+    # ---------- diagnostics / debug report ----------
+
+    def _build_diagnostics_tab(self):
+        outer = tb.Frame(self.notebook)
+        self.notebook.add(outer, text="Diagnostics")
+        frame = self._scroll_body(outer, pad=16)
+        self._diag_q: queue.Queue = queue.Queue()
+        self._diag_running = False
+
+        tb.Label(
+            frame, wraplength=1150, justify="left", bootstyle=SECONDARY,
+            text="Collects hardware + OS + toolkit state for bug reports: kernel & "
+                 "DMI, CPU/GPU, thermal/fan, the keyboard / hotkey / media-key evdev "
+                 "map (/proc/bus/input/devices + capability bitmaps), OpenRGB, package "
+                 "versions, and filtered dmesg / journal errors. Everything is "
+                 "read-only. Review the output for your username / hostname before "
+                 "sharing it. Run the toolkit with sudo for the privileged bits "
+                 "(dmesg, RAPL).",
+        ).pack(anchor="w", pady=(0, 10))
+
+        row = tb.Frame(frame)
+        row.pack(anchor="w", pady=(0, 8))
+        self._diag_btn = tb.Button(row, text="Generate report", bootstyle=SUCCESS,
+                                   command=self._gen_diag)
+        self._diag_btn.pack(side="left", padx=(0, 6))
+        tb.Button(row, text="Copy report", bootstyle=(SECONDARY, "outline"),
+                  command=lambda: self._to_clipboard(self._diag_text.get("1.0", "end"))
+                  ).pack(side="left", padx=4)
+        tb.Button(row, text="Save to file…", bootstyle=(SECONDARY, "outline"),
+                  command=self._save_diag).pack(side="left", padx=4)
+        tb.Button(row, text="Copy GitHub issue template", bootstyle=(INFO, "outline"),
+                  command=lambda: self._to_clipboard(GITHUB_ISSUE_TEMPLATE)
+                  ).pack(side="left", padx=4)
+
+        self._diag_text = self._make_log_text(frame)
+        self._diag_text.pack(fill="both", expand=True)
+        self._set_diag("Click “Generate report”.\n\nOr on a terminal:\n"
+                       "  sudo python3 /opt/dellg15-toolkit/dellg15_toolkit.py --debug\n")
+
+    def _to_clipboard(self, text: str):
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            self.status_var.set("Copied to clipboard.")
+        except tk.TclError:
+            pass
+
+    def _set_diag(self, text: str):
+        self._diag_text.configure(state="normal")
+        self._diag_text.delete("1.0", "end")
+        self._diag_text.insert("end", text)
+        self._diag_text.see("1.0")
+        self._diag_text.configure(state="disabled")
+
+    def _gen_diag(self):
+        if self._diag_running:
+            return
+        self._diag_running = True
+        self._diag_btn.configure(state="disabled", text="Collecting…")
+        self._set_diag("Collecting hardware / OS / toolkit info — ~15–30 s…\n")
+        items = list(self.items.values())
+
+        def work():
+            try:
+                rep = collect_debug_report(items)
+            except Exception as exc:  # noqa: BLE001
+                rep = f"debug report failed: {exc}"
+            self._diag_q.put(rep)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _save_diag(self):
+        from tkinter import filedialog
+        rep = self._diag_text.get("1.0", "end").strip()
+        if not rep or rep.startswith(("Click", "Collecting")):
+            self.status_var.set("Generate the report first.")
+            return
+        try:
+            home = pwd.getpwnam(self.user).pw_dir
+        except KeyError:
+            home = os.path.expanduser("~")
+        name = f"dellg15-debug-{time.strftime('%Y%m%d-%H%M%S')}.txt"
+        path = filedialog.asksaveasfilename(parent=self.root, initialdir=home,
+                                            initialfile=name, defaultextension=".txt")
+        if not path:
+            return
+        try:
+            with open(path, "w") as f:
+                f.write(rep + "\n")
+            if os.geteuid() == 0:
+                pw = pwd.getpwnam(self.user)
+                os.chown(path, pw.pw_uid, pw.pw_gid)
+            self.status_var.set(f"Saved {path}")
+        except (OSError, KeyError) as exc:
+            self.status_var.set(f"Save failed: {exc}")
+
     # ---------- dashboard loop ----------
 
     def _dashboard_loop(self):
@@ -1890,6 +1987,15 @@ class ToolkitApp:
                 widget.insert("end", chunk)
                 widget.see("end")
                 widget.configure(state="disabled")
+        if hasattr(self, "_diag_q"):
+            try:
+                rep = self._diag_q.get_nowait()
+                self._set_diag(rep)
+                self._diag_running = False
+                self._diag_btn.configure(state="normal", text="Regenerate report")
+                self.status_var.set("Debug report ready — Copy, or Copy the issue template.")
+            except queue.Empty:
+                pass
         self.root.after(120, self._poll_log_queue)
 
     def _refresh_all_status(self):
@@ -2107,9 +2213,9 @@ class ToolkitApp:
         threading.Thread(target=self._refresh_all_status, daemon=True).start()
 
 
-def cli_report() -> int:
-    """`--report`: print the status table, no GUI. Some checks need root, so
-    run it with sudo for a complete picture (a note is printed if not)."""
+def _load_all_items() -> list:
+    """Build the Item list (with vendor gating) without a ToolkitApp — shared
+    by the --report / --debug CLI paths."""
     user = resolve_real_user()
     has_nv, has_amd = sensors.has_nvidia_gpu(), sensors.has_amd_gpu()
     items = []
@@ -2121,19 +2227,230 @@ def cli_report() -> int:
             elif it.requires_vendor == "amd" and not has_amd:
                 it.hw_supported = False
             items.append(it)
+    return items
+
+
+def toolkit_version() -> str:
+    for p in (BASE_DIR / ".version",):
+        try:
+            v = p.read_text().strip()
+            if v:
+                return v
+        except OSError:
+            pass
+    ok, _rc, out = run_cmd3(f"git -C {BASE_DIR} describe --tags --always --dirty 2>/dev/null "
+                            f"|| git -C {BASE_DIR} rev-parse --short HEAD 2>/dev/null")
+    return out.strip() or "unknown"
+
+
+def _diag_fans() -> str:
+    lines = []
+    try:
+        lines.append(f"platform_profile: {sensors.get_platform_profile()}  "
+                     f"choices={sensors.platform_profile_choices()}")
+        fans = sensors.read_fans()
+        for f in fans or []:
+            lines.append(f"  {f['label']}: {f['rpm']} rpm  (max {f['max']}, boost {f['boost']})")
+        if not fans:
+            lines.append("  (no alienware_wmi / dell_smm fan interface found)")
+        lines.append(f"dell_smm pwm state (enable,value): {sensors.get_pwm_state()}")
+        lines.append(f"dGPU awake: {sensors.dgpu_is_awake()}")
+    except Exception as exc:  # noqa: BLE001
+        lines.append(f"(fan probe failed: {exc})")
+    return "\n".join(lines)
+
+
+# Groups of (title, shell-command, max-lines). Kept read-only + quick; every
+# command is best-effort. Inspired by the evtest / /proc/bus/input/devices /
+# dmesg dumps used to bring this board up in the first place.
+_DEBUG_CMDS = [
+    ("── SYSTEM ──", None, 0),
+    ("OS", "cat /etc/os-release 2>/dev/null | grep -E '^(NAME|VERSION|VARIANT|ID|BUILD)' ", 12),
+    ("Kernel / cmdline", "uname -a; echo; cat /proc/cmdline", 6),
+    ("Firmware / DMI", "for f in sys_vendor product_name product_sku board_name board_version "
+     "bios_vendor bios_version bios_date chassis_type; do "
+     "printf '%-16s %s\\n' \"$f\" \"$(cat /sys/class/dmi/id/$f 2>/dev/null)\"; done", 16),
+    ("Desktop session", "u=$(logname 2>/dev/null || echo \"${SUDO_USER:-$USER}\"); "
+     "s=$(loginctl list-sessions --no-legend 2>/dev/null | awk -v u=\"$u\" '$3==u{print $1; exit}'); "
+     "[ -n \"$s\" ] && loginctl show-session \"$s\" -p Type -p Desktop -p Active -p Remote 2>/dev/null "
+     "|| echo \"session=${XDG_SESSION_TYPE:-unknown} desktop=${XDG_CURRENT_DESKTOP:-unknown}\"", 8),
+    ("Uptime / load", "uptime", 3),
+    ("── CPU / MEMORY ──", None, 0),
+    ("CPU", "lscpu 2>/dev/null | grep -E 'Model name|^CPU\\(s\\)|Thread|Core|Socket|CPU max|Vendor'; "
+     "echo \"governor: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null) "
+     "epp: $(cat /sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference 2>/dev/null)\"", 16),
+    ("Memory / zram", "free -h; echo; zramctl 2>/dev/null; swapon --show 2>/dev/null", 14),
+    ("── GPU ──", None, 0),
+    ("PCI display devices", "lspci -nnk 2>/dev/null | grep -iA3 -E 'vga compatible|3d controller|display controller'", 24),
+    ("NVIDIA", "nvidia-smi 2>/dev/null | head -18 || echo '(nvidia-smi unavailable — driver missing or dGPU runtime-suspended)'", 20),
+    ("NVIDIA runtime PM", "for d in /sys/bus/pci/devices/*; do [ \"$(cat $d/vendor 2>/dev/null)\" = 0x10de ] && "
+     "echo \"$(basename $d)  class=$(cat $d/class 2>/dev/null)  power=$(cat $d/power/runtime_status 2>/dev/null)\"; done", 6),
+    ("AMD iGPU", "for c in /sys/class/drm/card[0-9]*/device; do [ \"$(cat $c/vendor 2>/dev/null)\" = 0x1002 ] && { "
+     "echo \"$c\"; echo \" dpm: $(cat $c/power_dpm_force_performance_level 2>/dev/null)\"; "
+     "cat $c/pp_dpm_sclk 2>/dev/null; }; done", 20),
+    ("Mesa / GL", "glxinfo -B 2>/dev/null | grep -E 'OpenGL renderer|OpenGL version|Device:|Video memory' "
+     "|| echo '(glxinfo not installed)'", 10),
+    ("── THERMAL / POWER ──", None, 0),
+    ("platform_profile", "echo \"current: $(cat /sys/firmware/acpi/platform_profile 2>/dev/null)\"; "
+     "echo \"choices: $(cat /sys/firmware/acpi/platform_profile_choices 2>/dev/null)\"", 4),
+    ("power-profiles-daemon", "powerprofilesctl get 2>/dev/null; echo '---'; powerprofilesctl 2>/dev/null | head -24", 26),
+    ("Fans / hwmon", _diag_fans, None),
+    ("sensors", "sensors 2>/dev/null || echo '(lm_sensors not installed)'", 45),
+    ("RAPL (CPU power)", "ls -l /sys/class/powercap/*/energy_uj 2>/dev/null; "
+     "(head -c1 /sys/class/powercap/intel-rapl:0/energy_uj >/dev/null 2>&1 && echo 'RAPL readable') "
+     "|| echo 'RAPL NOT readable without root (kernel side-channel mitigation)'", 10),
+    ("── KEYBOARD / HOTKEYS / MEDIA KEYS ──", None, 0),
+    ("Loaded modules", "lsmod | grep -E '^(dell|alienware|i8k|sparse_keymap|hid_|nvidia|amdgpu)' | sort", 30),
+    ("Alienware USB LED controller", "lsusb 2>/dev/null | grep -iE '187c:|alienware' || echo '(187c:0550 AW-ELC not seen on USB)'", 4),
+    ("HID devices", "ls /sys/bus/hid/devices 2>/dev/null; echo; for h in /sys/bus/hid/devices/*; do "
+     "echo \"$(basename $h)  $(cat $h/../input/input*/name 2>/dev/null | head -1)\"; done", 20),
+    ("input devices (evdev + KEY capability bitmaps)", "cat /proc/bus/input/devices", 140),
+    ("event device names", "for e in /dev/input/event*; do "
+     "printf '%-22s %s\\n' \"$e\" \"$(cat /sys/class/input/$(basename $e)/device/name 2>/dev/null)\"; done", 30),
+    ("Dell WMI / hotkey / media-key devices", "for e in /dev/input/event*; do "
+     "n=$(cat /sys/class/input/$(basename $e)/device/name 2>/dev/null); "
+     "case \"$n\" in *WMI*|*wireless\\ hotkey*|*Wireless\\ hotkey*|*Translated\\ Set\\ 2*|*Video\\ Bus*) "
+     "echo \"$e  $n\";; esac; done", 15),
+    ("Fn-Lock / G-key note", "echo 'G-key = KEY_PERFORMANCE(701) on \"AT Translated Set 2 keyboard\" when Fn-Lock OFF, "
+     "KEY_F9 when ON. Media keys (vol/mute) come via \"Dell WMI hotkeys\". Fn is an EC key and never reaches evdev.'", 4),
+    ("input group membership", "id; echo; getent group input", 6),
+    ("── RGB KEYBOARD (OpenRGB) ──", None, 0),
+    ("OpenRGB", "openrgb --version 2>/dev/null | head -1 || echo '(openrgb not installed)'", 4),
+    ("OpenRGB devices", "openrgb --noautoconnect -l 2>/dev/null | grep -vE '<[a-z]|i2c|SMBus|help.openrgb' | head -40", 45),
+    ("kbd services", "systemctl is-enabled dellg15-openrgb.service dellg15-kbd.service 2>&1; echo '---'; "
+     "systemctl is-active dellg15-openrgb.service dellg15-kbd.service 2>&1", 10),
+    ("kbd saved state", "cat ~/.config/dellg15-toolkit/kbd.json 2>/dev/null || echo '(no kbd.json)'", 24),
+    ("── TWEAK SERVICES / SUDOERS ──", None, 0),
+    ("dellg15 units", "systemctl list-unit-files 2>/dev/null | grep -E 'dellg15|hotkey' ; "
+     "systemctl --user list-unit-files 2>/dev/null | grep -E 'dellg15|hotkey'", 12),
+    ("sudoers drop-ins", "ls -l /etc/sudoers.d/ 2>/dev/null | grep -E 'dellg15|gamemode|claude' || echo '(none)'", 8),
+    ("── PACKAGES ──", None, 0),
+    ("Kernels installed", "rpm -q kernel --qf '%{VERSION}-%{RELEASE}.%{ARCH}\\n' 2>/dev/null | sort -V", 10),
+    ("Relevant packages", "rpm -q akmod-nvidia xorg-x11-drv-nvidia-cuda openrgb gamemode mangohud "
+     "lm_sensors nobara-updater tlp auto-cpufreq 2>&1", 16),
+    ("Update tooling", "dnf --version 2>/dev/null | head -1; command -v nobara-sync >/dev/null && echo 'nobara-sync: present'; "
+     "command -v flatpak >/dev/null && flatpak --version; command -v fwupdmgr >/dev/null && echo 'fwupd: present'", 6),
+    ("── LOGS ──", None, 0),
+    ("dmesg (filtered)", "dmesg 2>/dev/null | grep -iE 'dell|alienware|aw-elc|187c|nvidia|amdgpu|"
+     "firmware bug|thermal|platform profile|pstate|MCE|hardware error' | tail -70 "
+     "|| echo '(dmesg not readable — run as root, or kernel.dmesg_restrict=1)'", 70),
+    ("journal errors (this boot)", "journalctl -b -p err --no-pager 2>/dev/null | tail -55 || echo '(journalctl unavailable)'", 55),
+]
+
+
+def collect_debug_report(items=None) -> str:
+    """Assemble a hardware + OS + toolkit-state report for bug reports. All
+    commands are read-only and best-effort. Run as root for the complete
+    picture (dmesg, RAPL, privileged checks)."""
+    hdr = [
+        "Dell G15 Toolkit — debug report",
+        f"generated {time.strftime('%Y-%m-%d %H:%M:%S %Z')}   toolkit {toolkit_version()}   "
+        f"euid={os.geteuid()}",
+        "REVIEW BEFORE PASTING — this contains your username, hostname and hardware IDs.",
+        "=" * 92, "",
+    ]
+    body = []
+    for title, cmd, maxlines in _DEBUG_CMDS:
+        if cmd is None:                       # section divider
+            body.append(f"\n{title}")
+            continue
+        try:
+            out = cmd() if callable(cmd) else run_cmd3(cmd, timeout=25)[2]
+        except Exception as exc:              # noqa: BLE001
+            out = f"(error: {exc})"
+        out = out.strip() or "(no output)"
+        if maxlines:
+            ls = out.splitlines()
+            if len(ls) > maxlines:
+                out = "\n".join(ls[:maxlines]) + f"\n… ({len(ls) - maxlines} more lines trimmed)"
+        body.append(f"\n### {title}\n{out}")
+
+    body.append("\n\n── TOOLKIT: KEYBOARD DRIVER ──")
+    try:
+        info = __import__("dellg15_kbd").info()
+        body.append("\n### dellg15_kbd info\n" +
+                    "\n".join(f"{k:16}: {v}" for k, v in info.items()))
+    except Exception as exc:  # noqa: BLE001
+        body.append(f"\n### dellg15_kbd info\n(error: {exc})")
+
+    body.append("\n\n── TOOLKIT: APPLY STATUS ──")
+    if items is None:
+        items = _load_all_items()
+        led = ledger_load()
+        with ThreadPoolExecutor(max_workers=12) as ex:
+            list(ex.map(lambda it: evaluate_item(it, led), items))
+    body.append("\n" + format_status_report(items))
+
+    body.append("\n── TOOLKIT: APPLY LEDGER (state.json) ──\n" +
+                json.dumps(ledger_load(), indent=2, sort_keys=True))
+    return "\n".join(hdr) + "\n".join(body) + "\n"
+
+
+GITHUB_ISSUE_TEMPLATE = """\
+### What happened
+
+
+### What you expected instead
+
+
+### Where in the toolkit (which page / button / tweak)
+
+
+### Steps to reproduce
+1.
+2.
+3.
+
+### Is your hardware the Dell G15 5515 Ryzen Edition on Nobara?
+<!-- This tool is written for exactly that one machine. On anything else most
+     checks/tweaks won't apply — say what you're on. -->
+- [ ] yes, G15 5515 Ryzen + Nobara
+- [ ] close (other G15 / other Dell hybrid) — details:
+- [ ] no — details:
+
+### Debug report
+<!-- Toolkit → Diagnostics page → "Generate report" → "Copy report",
+     or a terminal:  sudo python3 /opt/dellg15-toolkit/dellg15_toolkit.py --debug
+     Review it for your username/hostname, then paste between the ``` fences. -->
+<details><summary>debug report</summary>
+
+```
+PASTE THE DEBUG REPORT HERE
+```
+
+</details>
+
+### Screenshot / log console output (if relevant)
+
+"""
+
+
+def cli_report() -> int:
+    """`--report`: print the status table, no GUI."""
+    items = _load_all_items()
     ledger = ledger_load()
     with ThreadPoolExecutor(max_workers=12) as ex:
         list(ex.map(lambda it: evaluate_item(it, ledger), items))
     print(format_status_report(items))
     if os.geteuid() != 0:
-        print("note: not running as root — checks that need privileges may read "
-              "as 'Not applied'/'Check error'. Re-run with sudo for accuracy.")
+        print("note: not running as root — privileged checks may read as "
+              "'Not applied'/'Check error'. Re-run with sudo for accuracy.")
+    return 0
+
+
+def cli_debug() -> int:
+    """`--debug`: print the full hardware/OS/toolkit debug report."""
+    print(collect_debug_report())
+    if os.geteuid() != 0:
+        print("\nnote: run with sudo for dmesg / RAPL / privileged checks.", file=sys.stderr)
     return 0
 
 
 def main():
     if "--report" in sys.argv:
         raise SystemExit(cli_report())
+    if "--debug" in sys.argv or "--diag" in sys.argv:
+        raise SystemExit(cli_debug())
     self_elevate()
     root = tb.Window(themename=THEME)
     ToolkitApp(root)

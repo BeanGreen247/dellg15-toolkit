@@ -21,8 +21,9 @@ Edition** (Ryzen 7 5800H + RTX 3050 Ti Mobile) running **Nobara Linux** (Fedora
 | `dellg15_kbd.py` | AW-ELC RGB keyboard driver: an `openrgb` CLI wrapper for static/zone colours + firmware effects, **plus** stdlib software animation daemons (`rainbow_wave`, `gradient_wave`) that stream per-LED frames over a hand-rolled OpenRGB SDK socket client (`_Sdk`). Detached daemons tracked by `<statedir>/fx.pid` + `stop_fx()`. |
 | `dellg15_automount.py` | scans `lsblk`, adds `/etc/fstab` entries mounting fixed internal data disks at `/mnt/<label>` with `nofail`. |
 | `config/tweaks.json`, `apps.json`, `presets.json` | the data. Tweaks have `check` / `check_pending` (staged-but-needs-reboot) / `apply` / `undo`. `{USER}` and `{TOOLKIT_DIR}` are substituted. |
-| `install.sh` | system-wide install → `/opt/dellg15-toolkit`, launcher, hicolor icon, `/usr/share/applications` desktop entry. `--uninstall` removes just the app. |
+| `install.sh` | system-wide install → `/opt/dellg15-toolkit`, launcher, hicolor icon, `/usr/share/applications` desktop entry. Also stamps `/opt/dellg15-toolkit/.version` (git describe). `--uninstall` removes just the app. |
 | `uninstall.sh` | remove the tool (default: app + per-user config, tweaks kept). `--purge` also undoes every tweak's system bits (services, helper scripts, sudoers, drop-ins); `--grub` / `--fstab` / `--pip` / `--all` for the boot-affecting extras. Never touches installed apps. |
+| `.github/ISSUE_TEMPLATE/` | GitHub bug-report template — asks for the output of the Diagnostics page / `--debug`. |
 | `assets/` | `icon.svg` (flaming tachometer on a wine plate) + rendered PNGs. |
 
 ## Working on the real hardware
@@ -134,3 +135,11 @@ ssh g15 'cd ~/DellG15Toolkit && sudo ./install.sh'    # system-install to /opt
 - Colour maths in `dellg15_kbd.py` is **stdlib only** (`colorsys` + a small
   sRGB↔linear↔OKLab↔OKLCH set) — no numpy/Pillow.
 - No-hardware self-tests: `dellg15_kbd.py rainbow-test` / `gradient-test`.
+- Diagnostics: `collect_debug_report()` (module-level, `_DEBUG_CMDS` list +
+  `_diag_fans`) assembles the hw/OS/toolkit dump; the **Diagnostics** page and
+  `dellg15_toolkit.py --debug` / `--report` both use it. `_DEBUG_CMDS` is
+  where to add commands. `RRGB` canvas gauges: never name a field `self._w`
+  on a `tk.Canvas` subclass — it clobbers the widget pathname.
+- **Roadmap:** this is meant to become a general gaming-laptop tool; right now
+  every `config/*.json` entry and hardware path assumes the G15 5515. When
+  generalising, gate per-model (DMI) rather than assuming.
