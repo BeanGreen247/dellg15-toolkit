@@ -280,6 +280,9 @@
     "category": "Power",
     "risk": "advanced",
     "check": "systemctl is-enabled tuxthrottle-cpu-perf.service 2>/dev/null | grep -q enabled",
+    "reinstall_if": [
+      "/etc/systemd/system/tuxthrottle-cpu-perf.service"
+    ],
     "apply": [
       "cat > /usr/local/bin/tuxthrottle-cpu-perf <<'SCRIPT'\n#!/usr/bin/env bash\nfor f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo performance > \"$f\"; done\nfor f in /sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference; do [ -e \"$f\" ] && echo performance > \"$f\"; done\nSCRIPT",
       "chmod +x /usr/local/bin/tuxthrottle-cpu-perf",
@@ -390,6 +393,10 @@
     "category": "Power",
     "risk": "advanced",
     "check": "test -x /usr/local/bin/tuxthrottle-kbd && systemctl is-enabled tuxthrottle-kbd.service 2>/dev/null | grep -q enabled && systemctl is-enabled tuxthrottle-openrgb.service 2>/dev/null | grep -q enabled",
+    "reinstall_if": [
+      "/etc/systemd/system/tuxthrottle-kbd.service",
+      "/etc/systemd/system/tuxthrottle-openrgb.service"
+    ],
     "apply": [
       "install -m 0755 {TOOLKIT_DIR}/tuxthrottle_kbd.py /usr/local/bin/tuxthrottle-kbd",
       "cat > /etc/systemd/system/tuxthrottle-openrgb.service <<'UNIT'\n[Unit]\nDescription=OpenRGB SDK server for the Dell G15 keyboard (TuxThrottle)\nAfter=multi-user.target systemd-udev-settle.service\n\n[Service]\nType=simple\nExecStart=/usr/bin/openrgb --server --noautoconnect\nExecStartPost=/bin/sh -c 'for i in $(seq 40); do ss -ltn 2>/dev/null | grep -q \":6742 \" && break; sleep 0.5; done; exit 0'\nRestart=on-failure\nRestartSec=3\nTimeoutStartSec=40\n\n[Install]\nWantedBy=multi-user.target\nUNIT",

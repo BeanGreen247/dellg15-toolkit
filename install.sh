@@ -126,6 +126,23 @@ EOF
     desktop-file-validate "$DESKTOP" >/dev/null 2>&1 && c_ok "desktop entry: ${DESKTOP}" \
         || c_warn "desktop entry written but desktop-file-validate flagged it"
 
+    # ---- refresh service files for already-enabled tweaks --------------
+    # install.sh does NOT turn features on, but if the keyboard-backlight or
+    # cpu-perf tuxthrottle-* service is already installed, re-run its apply so
+    # the /usr/local/bin scripts + unit files match this version.
+    # apply_tweak.py --only-if-present exits 3 (no-op) when it isn't enabled.
+    local _u="${SUDO_USER:-$(logname 2>/dev/null || echo root)}"
+    for tw in KbdBacklightFix CpuMaxPerformance; do
+        local _rc=0
+        python3 "$LIBDIR/apply_tweak.py" "$tw" --only-if-present \
+            --toolkit-dir "$LIBDIR" --user "$_u" >/dev/null 2>&1 || _rc=$?
+        case "$_rc" in
+            0) c_ok "refreshed service files: ${tw}" ;;
+            3) : ;;  # feature not enabled — nothing to do
+            *) c_warn "${tw} service refresh returned rc=${_rc}" ;;
+        esac
+    done
+
     refresh_caches
     echo
     c_ok "Installed. Launch it from the KDE menu ('TuxThrottle') or run: ${APPID}"
