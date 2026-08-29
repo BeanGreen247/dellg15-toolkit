@@ -24,7 +24,7 @@ all of it.
 
 ### Hardware bundle  (REQUIRED)
 <!--
-Toolkit → Diagnostics → "⇩ Collect hardware bundle (.tar.gz)"
+Toolkit → Report a Bug → "⇩ Collect hardware bundle (.tar.gz)"
    or a terminal:  sudo python3 /opt/tuxthrottle/tuxthrottle.py --collect
 Skim it for private strings (hostname, serials in dmi.txt / lsusb.txt), then
 DRAG THE .tar.gz ONTO THIS COMMENT to attach it.

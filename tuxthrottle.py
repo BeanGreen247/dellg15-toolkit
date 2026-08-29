@@ -144,6 +144,8 @@ BIOS_PANEL_HI = "#1e2731"     # hover / selected nav row
 BIOS_FG = "#e6edf3"
 BIOS_MUTED = "#93a1b1"
 BIOS_BORDER = "#2a3340"
+HELP_AMBER = "#e8a33d"         # the "support / bug report" accent (warm, != KDE accent)
+HELP_BANNER_BG = "#2a2314"     # dark amber tint behind the bug-report banner
 
 
 def _rgb_str_to_hex(s: str) -> str | None:
@@ -261,6 +263,22 @@ def apply_bios_style(style: "tb.Style", accent: str) -> None:
                               "bordercolor": accent, "focuscolor": "",
                               "font": ("Sans", 10, "bold"), "anchor": "w",
                               "padding": (16, 11), "relief": "flat"},
+        # the odd one out: the Bug Report / Logs page — warm amber, not the
+        # KDE accent, so it reads as "support / external", not a hardware tab
+        "NavSupport.TButton": {"background": BIOS_PANEL,
+                               "foreground": readable_on(HELP_AMBER, BIOS_PANEL, 4.5),
+                               "bordercolor": BIOS_PANEL, "focuscolor": "",
+                               "font": ("Sans", 10, "bold"), "anchor": "w",
+                               "padding": (16, 11), "relief": "flat"},
+        "NavSupportActive.TButton": {"background": BIOS_PANEL_HI,
+                                     "foreground": readable_on(HELP_AMBER, BIOS_PANEL_HI, 4.5),
+                                     "bordercolor": HELP_AMBER, "focuscolor": "",
+                                     "font": ("Sans", 10, "bold"), "anchor": "w",
+                                     "padding": (16, 11), "relief": "flat"},
+        "SupportBanner.TFrame": {"background": HELP_BANNER_BG},
+        "SupportBanner.TLabel": {"background": HELP_BANNER_BG,
+                                 "foreground": readable_on(HELP_AMBER, HELP_BANNER_BG, 4.5),
+                                 "font": ("Sans", 10, "bold")},
     }
     for name, opts in specs.items():
         try:
@@ -268,6 +286,13 @@ def apply_bios_style(style: "tb.Style", accent: str) -> None:
         except Exception:  # noqa: BLE001
             pass
     hover = readable_on(_mix(accent, "#ffffff", 0.18), BIOS_PANEL_HI, 4.0)
+    amber_hover = readable_on(_mix(HELP_AMBER, "#ffffff", 0.18), BIOS_PANEL_HI, 4.0)
+    for name in ("NavSupport.TButton", "NavSupportActive.TButton"):
+        try:
+            style.map(name, background=[("active", BIOS_PANEL_HI)],
+                      foreground=[("active", amber_hover)])
+        except Exception:  # noqa: BLE001
+            pass
     for name in ("Nav.TButton", "NavActive.TButton"):
         try:
             style.map(name, background=[("active", BIOS_PANEL_HI)],
@@ -350,11 +375,18 @@ class SidebarNav(tb.Frame):
         self._pages: list = []      # (text, frame, button)
         self._current = None
 
-    def add(self, frame, text: str = ""):
+    def add(self, frame, text: str = "", *, kind: str = "normal", spacer: bool = False):
         frame.master  # noqa: B018  (frame was created as tb.Frame(self); fine)
-        btn = tb.Button(self.rail, text=text, style="Nav.TButton",
+        if spacer:
+            # push the rest of the rail down and rule it off — used to detach
+            # the Bug Report / Logs page from the hardware tabs
+            tb.Frame(self.rail, style="Nav.TFrame").pack(fill="both", expand=True)
+            tb.Separator(self.rail, orient="horizontal").pack(fill="x", padx=12, pady=(0, 4))
+        base = "NavSupport.TButton" if kind == "support" else "Nav.TButton"
+        btn = tb.Button(self.rail, text=text, style=base,
                         takefocus=False, command=lambda f=frame: self.select(f))
         btn.pack(fill="x", padx=0, pady=1)
+        btn._nav_kind = kind  # noqa: SLF001
         self._pages.append((text, frame, btn))
         if self._current is None:
             self.select(frame)
@@ -364,8 +396,13 @@ class SidebarNav(tb.Frame):
             return self._current
         for text, f, b in self._pages:
             on = f is frame
+            support = getattr(b, "_nav_kind", "normal") == "support"
+            if support:
+                sty = "NavSupportActive.TButton" if on else "NavSupport.TButton"
+            else:
+                sty = "NavActive.TButton" if on else "Nav.TButton"
             try:
-                b.configure(style="NavActive.TButton" if on else "Nav.TButton")
+                b.configure(style=sty)
             except tk.TclError:
                 pass
             if on:
@@ -774,7 +811,6 @@ class ToolkitApp:
         self._build_fan_tab()
         self._build_presets_tab()
         self._build_updates_tab()
-        self._build_diagnostics_tab()
 
         categories = sorted(
             {item.category for item in self.items.values()},
@@ -782,6 +818,10 @@ class ToolkitApp:
         )
         for cat in categories:
             self._build_category_tab(cat)
+
+        # last, detached at the bottom of the rail: not a hardware tab, it's the
+        # "gather logs to attach to a GitHub issue" page
+        self._build_diagnostics_tab()
 
         # ---- footer: actions + status ----
         tb.Separator(self.root).pack(fill="x", padx=16)
@@ -1805,7 +1845,21 @@ class ToolkitApp:
 
     def _build_diagnostics_tab(self):
         outer = tb.Frame(self.notebook)
-        self.notebook.add(outer, text="Diagnostics")
+        self.notebook.add(outer, text="Report a Bug", kind="support", spacer=True)
+
+        # amber banner — this page is about GitHub issues / sending logs, not
+        # changing the machine
+        banner = tb.Frame(outer, style="SupportBanner.TFrame", padding=(16, 10))
+        banner.pack(fill="x")
+        tb.Label(
+            banner, style="SupportBanner.TLabel", wraplength=1200, justify="left",
+            text="⚑  Bug reports & logs.  This page only READS your system — it gathers "
+                 "hardware + OS + toolkit state so you can attach it to a GitHub issue. "
+                 "Nothing is uploaded automatically: you Copy or Save the report and paste "
+                 "it into the issue yourself. Review it for username / hostname first.",
+        ).pack(anchor="w")
+        tb.Separator(outer).pack(fill="x")
+
         frame = tb.Frame(outer, padding=16)      # NOT _scroll_body — the report
         frame.pack(fill="both", expand=True)     # box scrolls itself and must be tall
         self._diag_q: queue.Queue = queue.Queue()
@@ -1814,7 +1868,7 @@ class ToolkitApp:
 
         tb.Label(
             frame, wraplength=1200, justify="left", bootstyle=SECONDARY,
-            text="Collects hardware + OS + toolkit state for bug reports: kernel & DMI, "
+            text="Collected: kernel & DMI, "
                  "CPU/GPU, thermal/fan, the keyboard / hotkey / media-key evdev map "
                  "(/proc/bus/input/devices + capability bitmaps), OpenRGB, package "
                  "versions, filtered dmesg / journal. All read-only, hard-timed-out. "
@@ -1846,7 +1900,7 @@ class ToolkitApp:
                       "attach the file to a “new hardware support” issue").pack(side="left", padx=6)
 
         box = tb.Labelframe(
-            frame, padding=10, bootstyle=INFO,
+            frame, padding=10, bootstyle=WARNING,
             text="  ⧉  GITHUB ISSUE BLOCK — “Copy for GitHub issue” copies exactly what's "
                  "in here (a collapsible <details> block); paste it straight into the issue  ")
         box.pack(fill="both", expand=True, pady=(4, 0))
@@ -2497,7 +2551,7 @@ GITHUB_ISSUE_TEMPLATE = """\
 - [ ] no — details:
 
 ### Debug report
-<!-- Toolkit → Diagnostics page → "Generate report" → "Copy report",
+<!-- Toolkit → Report a Bug page → "Generate report" → "Copy report",
      or a terminal:  sudo python3 /opt/tuxthrottle/tuxthrottle.py --debug
      Review it for your username/hostname, then paste between the ``` fences. -->
 <details><summary>debug report</summary>

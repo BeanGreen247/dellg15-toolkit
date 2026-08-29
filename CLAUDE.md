@@ -14,7 +14,7 @@ Edition** (Ryzen 7 5800H + RTX 3050 Ti Mobile) running **Nobara Linux** (Fedora
 
 | File | Role |
 |---|---|
-| `tuxthrottle.py` | the GUI. ttkbootstrap `darkly` re-skinned into a dark "gaming-BIOS" look with the KDE accent colour (`apply_bios_style` / `read_desktop_accent`). **Left sidebar nav** (`SidebarNav`, a drop-in for `tb.Notebook`), not a top tab strip. Pages: Dashboard, Keyboard, Fans, Presets, Updates, then one per tweak/app category (Gaming first). App-wide "busy" modal overlay with a two-bar (overall + current-task) progress display + elapsed timer (`_begin_busy` / `_poll_busy_queue`). Self-elevates via `pkexec`→`sudo`. |
+| `tuxthrottle.py` | the GUI. ttkbootstrap `darkly` re-skinned into a dark "gaming-BIOS" look with the KDE accent colour (`apply_bios_style` / `read_desktop_accent`). **Left sidebar nav** (`SidebarNav`, a drop-in for `tb.Notebook`), not a top tab strip. Pages: Dashboard, Keyboard, Fans, Presets, Updates, then one per tweak/app category (Gaming first), and **Report a Bug** last (detached at the rail bottom, amber `NavSupport` style — the log/GitHub-issue page). App-wide "busy" modal overlay with a two-bar (overall + current-task) progress display + elapsed timer (`_begin_busy` / `_poll_busy_queue`). Self-elevates via `pkexec`→`sudo`. |
 | `tray_monitor.py` | PySide6 system-tray equivalent + `--toggle`. |
 | `hotkey_listener.py` | `systemd --user` service, reads the G-key from evdev, toggles Game Mode. |
 | `sensors.py` | **shared, no GUI deps.** Sensor reads + `set_game_mode()` + `notify()` + `detect_model()` + **fan control** (`read_fans`, `get/set_fan_boost`, `*_platform_profile`, `get_pwm_state`, `set_pwm_manual`, `restore_fan_auto`) + `dgpu_is_awake()`. `which()` is `lru_cache`d. |
@@ -23,7 +23,7 @@ Edition** (Ryzen 7 5800H + RTX 3050 Ti Mobile) running **Nobara Linux** (Fedora
 | `config/tweaks.json`, `apps.json`, `presets.json` | the data. Tweaks have `check` / `check_pending` (staged-but-needs-reboot) / `apply` / `undo`. `{USER}` and `{TOOLKIT_DIR}` are substituted. |
 | `install.sh` | system-wide install → `/opt/tuxthrottle`, launcher, hicolor icon, `/usr/share/applications` desktop entry. Also stamps `/opt/tuxthrottle/.version` (git describe). `--uninstall` removes just the app. |
 | `uninstall.sh` | remove the tool (default: app + per-user config, tweaks kept). `--purge` also undoes every tweak's system bits (services, helper scripts, sudoers, drop-ins); `--grub` / `--fstab` / `--pip` / `--all` for the boot-affecting extras. Never touches installed apps. |
-| `.github/ISSUE_TEMPLATE/` | GitHub bug-report template — asks for the output of the Diagnostics page / `--debug`. |
+| `.github/ISSUE_TEMPLATE/` | GitHub bug-report template — asks for the output of the Report a Bug page / `--debug`. |
 | `assets/` | `icon.svg` (Tux centred in a redlined throttle gauge, amber boost flame, graphite plate) + rendered PNGs. |
 
 ## Working on the real hardware
@@ -140,10 +140,12 @@ ssh g15 'cd ~/tuxthrottle && sudo ./install.sh'    # system-install to /opt
   runs as `timeout -k 2 12 bash -lc …`. `collect_hw_bundle()` (`_HW_BUNDLE_FILES`
   + `_decode_key_caps` which turns `/proc/bus/input/devices` `B: KEY=` bitmaps
   into KEY_ names) writes a `.tar.gz` of raw dumps for onboarding a new laptop
-  model. CLI: `--debug` / `--report` / `--collect [dir]`. GUI **Diagnostics**
-  page: Generate report → "⧉ Copy for GitHub issue" (wrapped `<details>` block
-  via `wrap_issue_block`), "Copy full issue", "Collect hardware bundle". Two
-  issue templates in `.github/ISSUE_TEMPLATE/` (bug + hardware_support).
+  model. CLI: `--debug` / `--report` / `--collect [dir]`. GUI **Report a Bug**
+  page (nav rail: detached at the bottom, amber `NavSupport.TButton` style, an
+  amber "reads only, nothing uploaded" banner + `WARNING`-framed report box —
+  it's the one non-hardware page): Generate report → "⧉ Copy for GitHub issue"
+  (wrapped `<details>` block via `wrap_issue_block`), "Copy full issue",
+  "Collect hardware bundle". Two issue templates in `.github/ISSUE_TEMPLATE/`.
   `RingGauge` canvas gauges: never name a field `self._w` on a `tk.Canvas`
   subclass — it clobbers the widget pathname.
 - **Roadmap:** this is meant to become a general gaming-laptop tool; right now

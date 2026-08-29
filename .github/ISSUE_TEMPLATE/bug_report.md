@@ -33,7 +33,7 @@ checks and tweaks simply won't apply.
 
 ### Debug report
 <!--
-Generate it: Toolkit -> "Diagnostics" page -> "Generate report" -> "Copy report".
+Generate it: Toolkit -> "Report a Bug" page -> "Generate report" -> "Copy report".
 Or a terminal:  sudo python3 /opt/tuxthrottle/tuxthrottle.py --debug
 Review it for your username / hostname, then paste it between the ``` fences.
 -->

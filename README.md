@@ -188,7 +188,7 @@ at the top with a "recount" button — the dnf figure is "as of the last
 metadata sync" because a full `dnf check-update` can take minutes on this
 box's mirrors.
 
-## The Diagnostics tab
+## The Bug Report tab
 
 One button collects a read-only **hardware + OS + toolkit-state report** for
 bug reports: OS/kernel/cmdline, DMI identity, CPU/GPU, thermal + fan state,
