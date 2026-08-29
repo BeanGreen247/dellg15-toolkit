@@ -1,4 +1,8 @@
-# Dell G15 Toolkit (Nobara Linux)
+# TuxThrottle
+
+<p align="center">
+  <img src="assets/icon.png" alt="TuxThrottle Logo" width="96"/>
+</p>
 
 A checkbox-driven GUI + tray monitor for Dell gaming laptops on Nobara Linux
 (dnf), built the same way as [WinUtil](https://winutil.christitus.com/)-style
@@ -47,7 +51,7 @@ was cross-checked against Fedora's dist-git (`src.fedoraproject.org`) to
 confirm it actually exists before being trusted — this caught one real
 error: `ttkbootstrap` is **not** packaged in Fedora/Nobara at all (404 on
 dist-git), `pip install --user ttkbootstrap` is the only install path,
-fixed in `dellg15_toolkit.py`'s own error message. `akmod-nvidia` lives in
+fixed in `tuxthrottle.py`'s own error message. `akmod-nvidia` lives in
 RPM Fusion's separate dist-git (unreachable from this check, but its name
 is standard/well-documented) rather than Fedora's own.
 
@@ -93,14 +97,14 @@ them.
 ## Install (system-wide, adds it to the KDE menu)
 
 ```bash
-cd DellG15Toolkit
+cd TuxThrottle
 sudo ./install.sh
 ```
 
-Installs to `/opt/dellg15-toolkit`, a launcher at
-`/usr/local/bin/dellg15-toolkit`, the flaming-gauge icon into the hicolor
+Installs to `/opt/tuxthrottle`, a launcher at
+`/usr/local/bin/tuxthrottle`, the Tux throttle-gauge icon into the hicolor
 theme, and a `.desktop` entry in `/usr/share/applications` — so **every user**
-on the machine can find "Dell G15 Toolkit" in the KDE launcher / KRunner
+on the machine can find "TuxThrottle" in the KDE launcher / KRunner
 search. It pulls the deps too (`python3-tkinter`, `ttkbootstrap` via pip
 system-wide, and — best effort — `python3-pyside6` and `python3-evdev`).
 
@@ -119,9 +123,9 @@ system-wide, and — best effort — `python3-pyside6` and `python3-evdev`).
 ## Running it from the source tree
 
 ```bash
-cd DellG15Toolkit
+cd TuxThrottle
 pip install --user ttkbootstrap   # one-time; dark theme + round-toggle switches + gauges
-python3 dellg15_toolkit.py
+python3 tuxthrottle.py
 ```
 
 It self-elevates via `pkexec` (falls back to `sudo`) since tweaks touch the
@@ -207,9 +211,9 @@ hardware support** issue.
 Terminal equivalents:
 
 ```bash
-sudo python3 /opt/dellg15-toolkit/dellg15_toolkit.py --debug        # full readable report
-sudo python3 /opt/dellg15-toolkit/dellg15_toolkit.py --report       # apply-status table only
-sudo python3 /opt/dellg15-toolkit/dellg15_toolkit.py --collect ~    # write the hardware bundle
+sudo python3 /opt/tuxthrottle/tuxthrottle.py --debug        # full readable report
+sudo python3 /opt/tuxthrottle/tuxthrottle.py --report       # apply-status table only
+sudo python3 /opt/tuxthrottle/tuxthrottle.py --collect ~    # write the hardware bundle
 ```
 
 ## Hardware-aware gating
@@ -223,20 +227,21 @@ principle DAMX uses, done via one detection pass (`sensors.has_nvidia_gpu()`
 
 ## Files
 
-- `dellg15_toolkit.py` — the checkbox GUI + in-window Dashboard tab (needs `ttkbootstrap`)
+- `tuxthrottle.py` — the checkbox GUI + in-window Dashboard tab (needs `ttkbootstrap`)
 - `tray_monitor.py` — the system-tray-only equivalent (needs `PySide6`)
 - `hotkey_listener.py` — the G-key → Game Mode binding (needs `python3-evdev`)
 - `sensors.py` — shared sensor reads + Game Mode logic, **no GUI dependency**, used by all three above so they never disagree on state
-- `dellg15_kbd.py` — AW-ELC RGB keyboard control: `openrgb` CLI wrapper for
+- `tuxthrottle_kbd.py` — AW-ELC RGB keyboard control: `openrgb` CLI wrapper for
   static/zone colours + firmware effects, plus stdlib software animation
   daemons (gradient / rainbow) that stream per-LED frames over a hand-rolled
   OpenRGB SDK socket client
 - `install.sh` / `uninstall.sh` — system install; uninstall removes the app
   (`uninstall.sh --purge` also undoes the tweaks' system bits)
-- `assets/` — `icon.svg` (a flaming tachometer redlined into "G15") and the
+- `assets/` — `icon.svg` (Tux in a redlined throttle gauge with an amber boost
+  flame) and the
   PNGs rendered from it, used as the window icon and tray icon. The
   **DesktopLauncher** tweak drops a `.desktop` entry into your app menu
-  using `assets/dellg15-toolkit.desktop` with real paths filled in.
+  using `assets/tuxthrottle.desktop` with real paths filled in.
 
 ## Tray monitor (`tray_monitor.py`)
 
@@ -258,13 +263,13 @@ Reading clocks/temps needs no privileges at all. Every toggle (tray, G-key,
 or the Dashboard switch) also raises a 10-second desktop notification —
 *Game Mode: ON* / *Game Mode: OFF*.
 
-## Keyboard tab (`dellg15_kbd.py`)
+## Keyboard tab (`tuxthrottle_kbd.py`)
 
 The 5515's 4-zone RGB keyboard is the Alienware **AW-ELC** (USB `187c:0550`)
 — no kernel driver, no `kbd_backlight` LED, and raw HID writes (feature
 *and* interrupt reports) are ACK'd but do nothing. What **does** work,
 verified on real hardware, is **OpenRGB** driving it as 16 logical zones, so
-`dellg15_kbd.py` is a thin wrapper around the `openrgb` CLI.
+`tuxthrottle_kbd.py` is a thin wrapper around the `openrgb` CLI.
 
 Two prerequisites:
 - **OpenRGB installed** (the `OpenRGB` app, Software tab).
@@ -288,12 +293,12 @@ and a **↻ Reset backlight** button (see "quirks" below).
   **slow ambient** effect on purpose — see the quirk below.
 
 ```bash
-python3 dellg15_kbd.py on --color 00aaff --brightness 80
-python3 dellg15_kbd.py zone 0 --color ff2200      # Left zone
-python3 dellg15_kbd.py effect spectrum --speed 80 # firmware Rainbow Cycle
-python3 dellg15_kbd.py gradient-wave --colors ff0000,00ff00,0000ff
-python3 dellg15_kbd.py rainbow-test               # no-hardware self-test
-python3 dellg15_kbd.py off
+python3 tuxthrottle_kbd.py on --color 00aaff --brightness 80
+python3 tuxthrottle_kbd.py zone 0 --color ff2200      # Left zone
+python3 tuxthrottle_kbd.py effect spectrum --speed 80 # firmware Rainbow Cycle
+python3 tuxthrottle_kbd.py gradient-wave --colors ff0000,00ff00,0000ff
+python3 tuxthrottle_kbd.py rainbow-test               # no-hardware self-test
+python3 tuxthrottle_kbd.py off
 ```
 
 **Quirks (learned the hard way):**
@@ -307,11 +312,11 @@ python3 dellg15_kbd.py off
   is what actually lights the backlight, `-b 0` turns it off.
 - **Persistence** is opt-in: the **KbdBacklightFix** tweak (Power tab) installs
   an OpenRGB SDK-server service + a boot/resume `apply-saved` that re-applies
-  `~/.config/dellg15-toolkit/kbd.json`. The state file resolves the invoking
+  `~/.config/tuxthrottle/kbd.json`. The state file resolves the invoking
   user via `PKEXEC_UID`/`SUDO_UID` (pkexec sets no `PKEXEC_USER`) so the GUI's
   saves land in your home dir, not `/root`.
 - **"Frozen" backlight** = the OpenRGB SDK server wedged after many changes;
-  the **↻ Reset backlight** button (or `dellg15_kbd.py reset`) restarts it and
+  the **↻ Reset backlight** button (or `tuxthrottle_kbd.py reset`) restarts it and
   re-applies the saved state.
 
 ### Dedicated key binding — confirmed working
@@ -345,8 +350,8 @@ OpenRGB is installed and the backlight is on.
 
 Default trigger is **one press** (matches Windows). `KEY_PERFORMANCE` fires
 as an instant down+up so a long-press can't be used; if a bare tap is too
-easy to hit by accident, set `DELLG15_HOTKEY_MODE=double` on the service for
-a double-tap trigger (window = `DELLG15_HOTKEY_DOUBLE_MS`, default 600 ms).
+easy to hit by accident, set `TUXTHROTTLE_HOTKEY_MODE=double` on the service for
+a double-tap trigger (window = `TUXTHROTTLE_HOTKEY_DOUBLE_MS`, default 600 ms).
 
 Install via the Toolkit GUI (Gaming tab):
 - **HotkeyListener** — installs `python3-evdev` and a `systemd --user`
@@ -395,7 +400,7 @@ Install via the Toolkit GUI (Gaming tab):
   **MangoHudGlobalToggle** (see "Global MangoHud" below). For Wine/Proton:
   **ProtonUp-Qt**, **Protontricks**, **Bottles**, and the Steam **Proton
   BattlEye / EasyAntiCheat Runtime** installers — see "GTA V Online" below.
-- **Keyboard backlight** — `dellg15_kbd.py` + the Keyboard tab, 4-zone
+- **Keyboard backlight** — `tuxthrottle_kbd.py` + the Keyboard tab, 4-zone
   colour/brightness via OpenRGB (needs the `OpenRGB` app **and** the
   backlight enabled in BIOS setup). See "Keyboard tab" above.
 - **Game Mode notifications** — pressing the G-key (or toggling from the
@@ -514,12 +519,12 @@ re-select and re-run it in the window between applying and rebooting.
 
 **Telling what really happened.** The check command is authoritative for the
 *current* state, but the tool also keeps an **apply ledger**
-(`~/.config/dellg15-toolkit/state.json`) of what it applied/undid and how it
+(`~/.config/tuxthrottle/state.json`) of what it applied/undid and how it
 went. Combined, an item reads as one of: **Applied / Not applied / Pending
 reboot / Check error** (the check couldn't even run) / **Reverted** (the tool
 applied it but the check now fails — something undid it) / **Apply failed**
 (the tool's last attempt errored). The footer's **≣ Status report** button
-(or `python3 dellg15_toolkit.py --report` on the terminal, run with `sudo`
+(or `python3 tuxthrottle.py --report` on the terminal, run with `sudo`
 for checks that need root) prints a full copyable table: every item, its
 state, the exact check command + exit code, and the toolkit's last action on
 it with a timestamp.

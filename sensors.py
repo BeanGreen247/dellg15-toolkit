@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sensor reads + Game Mode control — shared by dellg15_toolkit.py (GUI,
+"""Sensor reads + Game Mode control — shared by tuxthrottle.py (GUI,
 stdlib-only) and tray_monitor.py (PySide6). Deliberately has NO GUI
 dependency of its own so the checkbox Toolkit doesn't need PySide6 just to
 show live numbers.
@@ -307,7 +307,7 @@ def notify(summary: str, body: str = "") -> None:
         return
     try:
         subprocess.run(
-            [exe, "-a", "Dell G15 Toolkit", "-i", "input-keyboard", "-t", "10000",
+            [exe, "-a", "TuxThrottle", "-i", "input-keyboard", "-t", "10000",
              summary, body],
             capture_output=True, timeout=5,
         )

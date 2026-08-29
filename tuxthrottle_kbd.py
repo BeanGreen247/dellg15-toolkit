@@ -14,17 +14,17 @@ Prerequisites:
     Backlight). Nothing lights until that's on.
 
 CLI:
-    dellg15_kbd.py on  [--color RRGGBB] [--brightness 0-100]
-    dellg15_kbd.py off
-    dellg15_kbd.py zone <0-3> --color RRGGBB [--brightness 0-100]
-    dellg15_kbd.py effect <rainbow|spectrum|breathing|flashing> [--speed 0-100] [--brightness 0-100]
-    dellg15_kbd.py rainbow-wave [--cycle S] [--brightness 0-100] [--saturation F]
+    tuxthrottle_kbd.py on  [--color RRGGBB] [--brightness 0-100]
+    tuxthrottle_kbd.py off
+    tuxthrottle_kbd.py zone <0-3> --color RRGGBB [--brightness 0-100]
+    tuxthrottle_kbd.py effect <rainbow|spectrum|breathing|flashing> [--speed 0-100] [--brightness 0-100]
+    tuxthrottle_kbd.py rainbow-wave [--cycle S] [--brightness 0-100] [--saturation F]
                                 [--direction ltr|rtl] [--wavelength F] [--fps N]
                                 [--gamma F] [--seconds N]
-    dellg15_kbd.py rainbow-test          # verify the wave maths, no hardware
-    dellg15_kbd.py apply-saved
-    dellg15_kbd.py reset
-    dellg15_kbd.py info
+    tuxthrottle_kbd.py rainbow-test          # verify the wave maths, no hardware
+    tuxthrottle_kbd.py apply-saved
+    tuxthrottle_kbd.py reset
+    tuxthrottle_kbd.py info
 
 `rainbow` is a *software* per-LED spectrum wave (detached daemon streaming
 over the OpenRGB SDK socket) — the firmware "Rainbow Wave" mode is washed-out
@@ -125,7 +125,7 @@ def _openrgb() -> str:
 
 
 def _run_once(args: list[str], server: bool = True) -> str:
-    # server=True: talk to a running `openrgb --server` (dellg15-openrgb.service)
+    # server=True: talk to a running `openrgb --server` (tuxthrottle-openrgb.service)
     # — ~1s, devices stay initialised. server=False: standalone scan (~4s), the
     # fallback when no server is up.
     cmd = [_openrgb()] + ([] if server else ["--noautoconnect"]) + ["-d", DEVICE, *args]
@@ -166,8 +166,8 @@ def restart_server() -> bool:
     device) clears it. Tries the systemd unit first, then a plain pkill so it
     respawns / a later call falls back to the standalone --noautoconnect path.
     Returns True if it did something."""
-    for cmd in (["systemctl", "restart", "dellg15-openrgb"],
-                ["sudo", "-n", "systemctl", "restart", "dellg15-openrgb"]):
+    for cmd in (["systemctl", "restart", "tuxthrottle-openrgb"],
+                ["sudo", "-n", "systemctl", "restart", "tuxthrottle-openrgb"]):
         try:
             if subprocess.run(cmd, capture_output=True, timeout=15).returncode == 0:
                 time.sleep(2.5)
@@ -228,7 +228,7 @@ class _Sdk:
     def __init__(self, timeout: float = 4.0):
         self.sock = socket.create_connection((_SDK_HOST, _SDK_PORT), timeout)
         self.sock.settimeout(timeout)
-        self._send(0, _CMD_SET_CLIENT_NAME, b"dellg15-toolkit-fx\0")
+        self._send(0, _CMD_SET_CLIENT_NAME, b"tuxthrottle-fx\0")
         self._send(0, _CMD_PROTOCOL_VERSION, struct.pack("<I", 5))
         try:
             _, _, body = self._recv()
@@ -425,8 +425,8 @@ def stop_fx() -> bool:
             pass
         return False
     if pid == -1:
-        for pk in (["pkill", "-TERM", "-f", "dellg15.kbd.*rainbow-wave"],
-                   ["sudo", "-n", "pkill", "-TERM", "-f", "dellg15.kbd.*rainbow-wave"]):
+        for pk in (["pkill", "-TERM", "-f", "tuxthrottle.kbd.*rainbow-wave"],
+                   ["sudo", "-n", "pkill", "-TERM", "-f", "tuxthrottle.kbd.*rainbow-wave"]):
             try:
                 subprocess.run(pk, capture_output=True, timeout=5)
             except (OSError, subprocess.SubprocessError):
@@ -1061,12 +1061,12 @@ def _invoking_pw():
 
 
 def _state_path() -> str:
-    override = os.environ.get("DELLG15_KBD_STATE")
+    override = os.environ.get("TUXTHROTTLE_KBD_STATE")
     if override:
         return override
     pw = _invoking_pw()
     home = pw.pw_dir if pw else os.path.expanduser("~")
-    return os.path.join(home, ".config", "dellg15-toolkit", "kbd.json")
+    return os.path.join(home, ".config", "tuxthrottle", "kbd.json")
 
 
 def save_state(zone_colors: dict, brightness: int, mode: str = "zones",

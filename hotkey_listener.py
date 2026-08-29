@@ -15,8 +15,8 @@ real F9 press. Default behaviour mirrors Windows: **one press toggles
 G-Mode** (the "performance" platform_profile — on the G15 the firmware ramps
 the fan curve and raises the CPU/GPU power limits; balanced turns it back
 off). If you find a bare tap too easy to hit by accident, set
-DELLG15_HOTKEY_MODE=double for a double-tap trigger (two KEY_PERFORMANCE
-within DELLG15_HOTKEY_DOUBLE_MS — a long-press can't be used because
+TUXTHROTTLE_HOTKEY_MODE=double for a double-tap trigger (two KEY_PERFORMANCE
+within TUXTHROTTLE_HOTKEY_DOUBLE_MS — a long-press can't be used because
 KEY_PERFORMANCE fires as an instantaneous down+up).
 
 Runs as a systemd --user service (installed by the HotkeyListener tweak).
@@ -44,9 +44,9 @@ from sensors import toggle_game_mode_external  # noqa: E402
 TARGET_KEYCODE = ecodes.KEY_PERFORMANCE  # 701
 DEVICE_NAME_HINTS = ("AT Translated Set 2 keyboard",)
 
-MODE = os.environ.get("DELLG15_HOTKEY_MODE", "single").strip().lower()
+MODE = os.environ.get("TUXTHROTTLE_HOTKEY_MODE", "single").strip().lower()
 try:
-    DOUBLE_MS = int(os.environ.get("DELLG15_HOTKEY_DOUBLE_MS", "600"))
+    DOUBLE_MS = int(os.environ.get("TUXTHROTTLE_HOTKEY_DOUBLE_MS", "600"))
 except ValueError:
     DOUBLE_MS = 600
 

@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Something in the Dell G15 Toolkit doesn't work
+about: Something in TuxThrottle doesn't work
 title: "[bug] "
 labels: bug
 ---
@@ -34,7 +34,7 @@ checks and tweaks simply won't apply.
 ### Debug report
 <!--
 Generate it: Toolkit -> "Diagnostics" page -> "Generate report" -> "Copy report".
-Or a terminal:  sudo python3 /opt/dellg15-toolkit/dellg15_toolkit.py --debug
+Or a terminal:  sudo python3 /opt/tuxthrottle/tuxthrottle.py --debug
 Review it for your username / hostname, then paste it between the ``` fences.
 -->
 <details><summary>debug report</summary>
@@ -49,4 +49,4 @@ PASTE THE DEBUG REPORT HERE
 
 
 ### Toolkit version
-<!-- top line of the debug report, or: git -C /opt/dellg15-toolkit rev-parse --short HEAD -->
+<!-- top line of the debug report, or: git -C /opt/tuxthrottle rev-parse --short HEAD -->

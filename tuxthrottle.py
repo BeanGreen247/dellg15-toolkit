@@ -46,9 +46,9 @@ except ImportError:
 import sensors  # noqa: E402  (local module, no GUI deps)
 
 try:
-    import dellg15_kbd  # noqa: E402  (AW-ELC RGB keyboard, stdlib-only)
+    import tuxthrottle_kbd  # noqa: E402  (AW-ELC RGB keyboard, stdlib-only)
 except Exception:  # noqa: BLE001
-    dellg15_kbd = None
+    tuxthrottle_kbd = None
 
 CATEGORY_ORDER = ["Gaming", "GPU", "Power", "Performance", "Software", "Monitoring", "Streaming", "RGB"]
 THEME = "darkly"
@@ -100,7 +100,7 @@ def self_elevate():
             args.append("--preserve-env=" + ",".join(present))
         args += [sys.executable, script]
         os.execvp("sudo", args)
-    print("Need root. Run: sudo python3 dellg15_toolkit.py")
+    print("Need root. Run: sudo python3 tuxthrottle.py")
     sys.exit(1)
 
 
@@ -489,7 +489,7 @@ def _ledger_path() -> Path:
         home = Path(pwd.getpwnam(resolve_real_user()).pw_dir)
     except (KeyError, Exception):  # noqa: BLE001
         home = Path.home()
-    return home / ".config" / "dellg15-toolkit" / "state.json"
+    return home / ".config" / "tuxthrottle" / "state.json"
 
 
 def ledger_load() -> dict:
@@ -534,7 +534,7 @@ def format_status_report(items) -> str:
     """Plain-text table of every item's state + the check that decided it +
     the toolkit's last action. Used by the GUI dialog and `--report`."""
     rows = sorted(items, key=lambda i: (i.category, i.kind, i.content.lower()))
-    out = [f"Dell G15 Toolkit — status report   {time.strftime('%Y-%m-%d %H:%M:%S')}",
+    out = [f"TuxThrottle — status report   {time.strftime('%Y-%m-%d %H:%M:%S')}",
            "=" * 100]
     cur = None
     counts: dict[str, int] = {}
@@ -591,7 +591,7 @@ class ToolkitApp:
     def __init__(self, root: "tb.Window"):
         self.root = root
         self.user = resolve_real_user()
-        root.title("Dell G15 5515 Toolkit — Nobara Linux")
+        root.title("TuxThrottle — Nobara Linux")
         root.geometry("1080x760")  # fallback size if the WM ignores maximise
         _maximize(root)
         self._set_window_icon(root)
@@ -737,7 +737,7 @@ class ToolkitApp:
                 pass
         titlebox = tb.Frame(header)
         titlebox.pack(side="left")
-        tb.Label(titlebox, text="Dell G15 5515 Toolkit",
+        tb.Label(titlebox, text="TuxThrottle",
                  font=("Sans", 16, "bold")).pack(anchor="w")
         tb.Label(titlebox,
                  text="Nobara Linux · Ryzen 7 5800H + RTX 3050 Ti — this board only",
@@ -840,7 +840,7 @@ class ToolkitApp:
     def _toggle_log_popout(self):
         if self._pop_win is None:
             self._pop_win = tk.Toplevel(self.root)
-            self._pop_win.title("Dell G15 5515 Toolkit — Log")
+            self._pop_win.title("TuxThrottle — Log")
             self._pop_win.geometry("900x480")
             if getattr(self, "_icon_img", None) is not None:
                 try:
@@ -935,7 +935,7 @@ class ToolkitApp:
 
         import shutil as _sh
         have_openrgb = _sh.which("openrgb") is not None
-        detected = dellg15_kbd is not None and dellg15_kbd.Keyboard._find() is not None
+        detected = tuxthrottle_kbd is not None and tuxthrottle_kbd.Keyboard._find() is not None
         if not have_openrgb:
             tb.Label(
                 frame, bootstyle=WARNING, justify="left", wraplength=1000,
@@ -975,7 +975,7 @@ class ToolkitApp:
         self.kbd_zone_vars: dict[int, tk.StringVar] = {}
 
         # pre-fill from saved state if present
-        saved = dellg15_kbd.load_state()
+        saved = tuxthrottle_kbd.load_state()
         if saved:
             zc, br = saved
             self.kbd_brightness.set(br)
@@ -984,11 +984,11 @@ class ToolkitApp:
                 self.kbd_all_hex.set("#%02x%02x%02x" % (r, g, b))
                 for z, rgb in zc.items():
                     self.kbd_zone_vars.setdefault(z, tk.StringVar()).set("#%02x%02x%02x" % tuple(rgb))
-        _meta = dellg15_kbd.load_meta()
+        _meta = tuxthrottle_kbd.load_meta()
         self.kbd_speed.set(_meta.get("speed", 50))
         # if the saved mode is a gradient, restore its anchors into the swatches
         _g = _meta.get("gradient") or {}
-        for i, hexc in enumerate((_g.get("colors") or [])[:dellg15_kbd.ZONE_COUNT]):
+        for i, hexc in enumerate((_g.get("colors") or [])[:tuxthrottle_kbd.ZONE_COUNT]):
             self.kbd_zone_vars.setdefault(i, tk.StringVar()).set("#" + hexc.lower())
 
         # ---- brightness ----
@@ -1019,7 +1019,7 @@ class ToolkitApp:
         # ---- per-zone ----
         pz = tb.Labelframe(frame, text="Per-zone", padding=12)
         pz.pack(fill="x", pady=(0, 12))
-        for zi, zname in enumerate(dellg15_kbd.ZONE_NAMES):
+        for zi, zname in enumerate(tuxthrottle_kbd.ZONE_NAMES):
             row = tb.Frame(pz)
             row.pack(fill="x", pady=3)
             tb.Label(row, text=zname, width=10).pack(side="left")
@@ -1098,7 +1098,7 @@ class ToolkitApp:
 
         def work():
             try:
-                kb = dellg15_kbd.Keyboard()
+                kb = tuxthrottle_kbd.Keyboard()
                 try:
                     fn(kb)
                 finally:
@@ -1113,7 +1113,7 @@ class ToolkitApp:
 
     def _kbd_all_colors(self) -> dict[int, tuple[int, int, int]]:
         rgb = self._hex_to_rgb(self._safe_hex(self.kbd_all_hex.get()))
-        return {z: rgb for z in range(dellg15_kbd.ZONE_COUNT)}
+        return {z: rgb for z in range(tuxthrottle_kbd.ZONE_COUNT)}
 
     def _kbd_zone_colors(self) -> dict[int, tuple[int, int, int]]:
         return {z: self._hex_to_rgb(self._safe_hex(v.get()))
@@ -1124,7 +1124,7 @@ class ToolkitApp:
         hx = self._safe_hex(self.kbd_all_hex.get())
         colors = self._kbd_all_colors()
         self._kbd_run(lambda kb: (kb.set_all(hx, b),
-                                  dellg15_kbd.save_state(colors, b, mode="zones")),
+                                  tuxthrottle_kbd.save_state(colors, b, mode="zones")),
                       f"brightness {b}%")
 
     def _kbd_apply_all(self):
@@ -1134,22 +1134,22 @@ class ToolkitApp:
         for v in self.kbd_zone_vars.values():
             v.set(hx)
         self._kbd_run(lambda kb: (kb.set_all(hx, b),
-                                  dellg15_kbd.save_state(colors, b, mode="zones")),
+                                  tuxthrottle_kbd.save_state(colors, b, mode="zones")),
                       f"colour {hx} @ {b}%")
 
     def _kbd_apply_zone(self, z: int):
         b = self.kbd_brightness.get()
         colors = self._kbd_zone_colors()
         self._kbd_run(lambda kb: (kb.set_zones(colors, b),
-                                  dellg15_kbd.save_state(colors, b, mode="zones")),
-                      f"zone {dellg15_kbd.ZONE_NAMES[z]} -> {self._safe_hex(self.kbd_zone_vars[z].get())} @ {b}%")
+                                  tuxthrottle_kbd.save_state(colors, b, mode="zones")),
+                      f"zone {tuxthrottle_kbd.ZONE_NAMES[z]} -> {self._safe_hex(self.kbd_zone_vars[z].get())} @ {b}%")
 
     def _kbd_apply_effect(self, key: str):
         b = self.kbd_brightness.get()
         sp = self.kbd_speed.get()
         colors = self._kbd_all_colors()
         self._kbd_run(lambda kb: (kb.set_effect(key, sp, b),
-                                  dellg15_kbd.save_state(colors, b, mode=key, speed=sp)),
+                                  tuxthrottle_kbd.save_state(colors, b, mode=key, speed=sp)),
                       f"effect {key} @ speed {sp}, {b}%")
 
     def _kbd_apply_gradient(self):
@@ -1159,15 +1159,15 @@ class ToolkitApp:
         # duplicates so "all one colour" → a single-anchor comet, two distinct
         # → a two-stop gradient, etc.
         raw = [self._safe_hex(self.kbd_zone_vars[z].get()).lstrip("#").upper()
-               for z in range(dellg15_kbd.ZONE_COUNT)]
+               for z in range(tuxthrottle_kbd.ZONE_COUNT)]
         anchors = [c for i, c in enumerate(raw) if i == 0 or c != raw[i - 1]]
         block = {"colors": anchors, "wavelength": 1.0, "blend": "oklab",
                  "direction": "ltr", "min_value": 0.15, "max_value": 1.0,
                  "fps": 60, "smooth": 0.12, "dither": True, "ease": "linear"}
         colors = self._kbd_zone_colors()
         self._kbd_run(lambda kb: (
-            dellg15_kbd.start_gradient(anchors, sp, b),
-            dellg15_kbd.save_state(colors, b, mode="gradient", speed=sp,
+            tuxthrottle_kbd.start_gradient(anchors, sp, b),
+            tuxthrottle_kbd.save_state(colors, b, mode="gradient", speed=sp,
                                    gradient=block)),
             f"gradient [{', '.join('#' + c for c in anchors)}] @ speed {sp}")
 
@@ -1175,7 +1175,7 @@ class ToolkitApp:
         b = self.kbd_brightness.get()
         colors = self._kbd_zone_colors()
         self._kbd_run(lambda kb: (kb.set_zones(colors, b),
-                                  dellg15_kbd.save_state(colors, b, mode="zones")),
+                                  tuxthrottle_kbd.save_state(colors, b, mode="zones")),
                       f"solid colour @ {b}%")
 
     def _kbd_reset(self):
@@ -1854,7 +1854,7 @@ class ToolkitApp:
         self._diag_text.configure(height=28)
         self._diag_text.pack(fill="both", expand=True)
         self._set_diag("Click “Generate report”.\n\nTerminal equivalent:\n"
-                       "  sudo python3 /opt/dellg15-toolkit/dellg15_toolkit.py --debug\n")
+                       "  sudo python3 /opt/tuxthrottle/tuxthrottle.py --debug\n")
 
     def _to_clipboard(self, text: str):
         try:
@@ -1924,7 +1924,7 @@ class ToolkitApp:
             home = pwd.getpwnam(self.user).pw_dir
         except KeyError:
             home = os.path.expanduser("~")
-        name = f"dellg15-debug-{time.strftime('%Y%m%d-%H%M%S')}.txt"
+        name = f"tuxthrottle-debug-{time.strftime('%Y%m%d-%H%M%S')}.txt"
         path = filedialog.asksaveasfilename(parent=self.root, initialdir=home,
                                             initialfile=name, defaultextension=".txt")
         if not path:
@@ -2110,7 +2110,7 @@ class ToolkitApp:
         """Scrollable, copyable table of every item: state, the check that
         decided it (+ exit code), and the last thing the toolkit did to it."""
         win = tk.Toplevel(self.root)
-        win.title("Dell G15 Toolkit — status report")
+        win.title("TuxThrottle — status report")
         win.geometry("1040x640")
         win.transient(self.root)
         tb.Label(win, text="Status report", font=("Sans", 11, "bold"),
@@ -2376,16 +2376,16 @@ _DEBUG_CMDS = [
     ("── RGB KEYBOARD (OpenRGB) ──", None, 0),
     ("OpenRGB", "openrgb --version 2>/dev/null | head -1 || echo '(openrgb not installed)'", 4),
     ("OpenRGB devices", "openrgb --noautoconnect -l 2>/dev/null | grep -vE '<[a-z]|i2c|SMBus|help.openrgb' | head -40", 45),
-    ("kbd services", "for s in dellg15-openrgb.service dellg15-kbd.service; do "
+    ("kbd services", "for s in tuxthrottle-openrgb.service tuxthrottle-kbd.service; do "
      "printf '%-26s enabled=%-9s active=%s\\n' \"$s\" "
      "\"$(systemctl is-enabled $s 2>/dev/null)\" \"$(systemctl is-active $s 2>/dev/null)\"; done", 6),
     ("kbd saved state", "u=$(logname 2>/dev/null || echo \"${SUDO_USER:-$USER}\"); "
-     "h=$(getent passwd \"$u\" | cut -d: -f6); cat \"$h/.config/dellg15-toolkit/kbd.json\" 2>/dev/null "
+     "h=$(getent passwd \"$u\" | cut -d: -f6); cat \"$h/.config/tuxthrottle/kbd.json\" 2>/dev/null "
      "|| echo '(no kbd.json — colour not saved / KbdBacklightFix not used)'", 24),
     ("── TWEAK SERVICES / SUDOERS ──", None, 0),
-    ("dellg15 units", "systemctl list-unit-files 2>/dev/null | grep -E 'dellg15|hotkey' ; "
-     "systemctl --user list-unit-files 2>/dev/null | grep -E 'dellg15|hotkey'", 12),
-    ("sudoers drop-ins", "ls -l /etc/sudoers.d/ 2>/dev/null | grep -E 'dellg15|gamemode|claude' || echo '(none)'", 8),
+    ("tuxthrottle units", "systemctl list-unit-files 2>/dev/null | grep -E 'tuxthrottle|hotkey' ; "
+     "systemctl --user list-unit-files 2>/dev/null | grep -E 'tuxthrottle|hotkey'", 12),
+    ("sudoers drop-ins", "ls -l /etc/sudoers.d/ 2>/dev/null | grep -E 'tuxthrottle|gamemode|claude' || echo '(none)'", 8),
     ("── PACKAGES ──", None, 0),
     ("Kernels installed", "rpm -q kernel --qf '%{VERSION}-%{RELEASE}.%{ARCH}\\n' 2>/dev/null | sort -V", 10),
     ("NVIDIA packages", "rpm -qa 2>/dev/null | grep -iE 'nvidia|akmod-nvidia|cuda' | sort "
@@ -2408,7 +2408,7 @@ _DEBUG_CMDS = [
      "^ *#[0-9]+ +0x|libQt6|libKF6|libc\\.so|__libc_start' "
      "| awk '!seen[$0]++' | tail -35 || echo '(journalctl unavailable)'", 37),
     ("journal — kbd / fan / gpu units (this boot)", "journalctl -b --no-pager "
-     "-u 'dellg15-*' -u 'dellg15-*.service' 2>/dev/null | tail -25; "
+     "-u 'tuxthrottle-*' -u 'tuxthrottle-*.service' 2>/dev/null | tail -25; "
      "journalctl -b --no-pager 2>/dev/null | grep -iE "
      "'openrgb\\[|dell_smm|alienware_wmi|nvidia-persistenced|(nvidia|amdgpu).*(Xid|GPU has fallen|ring .* timeout)' "
      "| grep -viE 'audit\\[|sudo\\[|Mode Validation' | awk '!seen[$0]++' | tail -20 || echo '(none)'", 40),
@@ -2421,7 +2421,7 @@ def collect_debug_report(items=None, wrap: bool = False) -> str:
     the complete picture (dmesg, RAPL, privileged checks). `wrap=True` returns
     it inside a GitHub `<details>` + fenced block, ready to paste."""
     hdr = [
-        "Dell G15 Toolkit — debug report",
+        "TuxThrottle — debug report",
         f"generated {time.strftime('%Y-%m-%d %H:%M:%S %Z')}   toolkit {toolkit_version()}   "
         f"euid={os.geteuid()}",
         "REVIEW BEFORE PASTING — this contains your username, hostname and hardware IDs.",
@@ -2448,11 +2448,11 @@ def collect_debug_report(items=None, wrap: bool = False) -> str:
 
     body.append("\n\n── TOOLKIT: KEYBOARD DRIVER ──")
     try:
-        info = __import__("dellg15_kbd").info()
-        body.append("\n### dellg15_kbd info\n" +
+        info = __import__("tuxthrottle_kbd").info()
+        body.append("\n### tuxthrottle_kbd info\n" +
                     "\n".join(f"{k:16}: {v}" for k, v in info.items()))
     except Exception as exc:  # noqa: BLE001
-        body.append(f"\n### dellg15_kbd info\n(error: {exc})")
+        body.append(f"\n### tuxthrottle_kbd info\n(error: {exc})")
 
     body.append("\n\n── TOOLKIT: APPLY STATUS ──")
     if items is None:
@@ -2470,7 +2470,7 @@ def collect_debug_report(items=None, wrap: bool = False) -> str:
 
 def wrap_issue_block(report: str) -> str:
     """Wrap a raw report in a GitHub-ready collapsible fenced block."""
-    return ("<details><summary>debug report — Dell G15 Toolkit</summary>\n\n"
+    return ("<details><summary>debug report — TuxThrottle</summary>\n\n"
             "```\n" + report.replace("```", "``​`").rstrip() + "\n```\n\n</details>\n")
 
 
@@ -2498,7 +2498,7 @@ GITHUB_ISSUE_TEMPLATE = """\
 
 ### Debug report
 <!-- Toolkit → Diagnostics page → "Generate report" → "Copy report",
-     or a terminal:  sudo python3 /opt/dellg15-toolkit/dellg15_toolkit.py --debug
+     or a terminal:  sudo python3 /opt/tuxthrottle/tuxthrottle.py --debug
      Review it for your username/hostname, then paste between the ``` fences. -->
 <details><summary>debug report</summary>
 
@@ -2618,7 +2618,7 @@ def collect_hw_bundle(dest_dir: str | None = None) -> str:
     prod = run_cmd3("cat /sys/class/dmi/id/product_name 2>/dev/null")[2].strip() or "unknown"
     slug = re.sub(r"[^A-Za-z0-9]+", "-", prod).strip("-").lower() or "laptop"
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    dirname = f"dellg15-hwdump-{slug}-{stamp}"
+    dirname = f"tuxthrottle-hwdump-{slug}-{stamp}"
 
     try:
         home = pwd.getpwnam(resolve_real_user()).pw_dir
@@ -2641,7 +2641,7 @@ def collect_hw_bundle(dest_dir: str | None = None) -> str:
         fh.write(collect_debug_report())
     with open(os.path.join(work, "README-attach-this.txt"), "w") as fh:
         fh.write(
-            "Dell G15 Toolkit — hardware dump bundle\n"
+            "TuxThrottle — hardware dump bundle\n"
             f"machine: {prod}   collected: {stamp}   euid={os.geteuid()}\n\n"
             "WHAT THIS IS\n"
             "  Raw sysfs / DMI / evdev / hwmon / PCI / OpenRGB dumps + the readable\n"

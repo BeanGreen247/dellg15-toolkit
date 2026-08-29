@@ -13,9 +13,9 @@ marker comments), unmounts, and cleans up the /mnt dirs. It also tears down
 any older /run/media-style registration a previous version of this tool set
 up through nobara-automount.
 
-    sudo dellg15-automount --user <name> list
-    sudo dellg15-automount --user <name> enable-all
-    sudo dellg15-automount --user <name> disable-all
+    sudo tuxthrottle-automount --user <name> list
+    sudo tuxthrottle-automount --user <name> enable-all
+    sudo tuxthrottle-automount --user <name> disable-all
 """
 from __future__ import annotations
 
@@ -29,8 +29,8 @@ import sys
 
 FSTAB = "/etc/fstab"
 MNT = "/mnt"
-BEGIN = "# >>> dellg15-toolkit AutoMountDrives (managed) — edit above/below, not inside"
-END = "# <<< dellg15-toolkit AutoMountDrives"
+BEGIN = "# >>> tuxthrottle AutoMountDrives (managed) — edit above/below, not inside"
+END = "# <<< tuxthrottle AutoMountDrives"
 SUPPORTED = {"ext4", "ext3", "ext2", "xfs", "btrfs", "f2fs", "ntfs", "exfat", "vfat"}
 COMMON = "rw,noatime,nofail,x-systemd.device-timeout=10,x-gvfs-show"
 
@@ -139,7 +139,7 @@ def _read_fstab() -> tuple[str, str]:
 
 def _cleanup_legacy(user: str):
     """Undo a previous nobara-automount / run-media registration by this tool."""
-    marker = "/etc/nobara/automount/.dellg15-managed"
+    marker = "/etc/nobara/automount/.tuxthrottle-managed"
     try:
         uuids = [l.strip() for l in open(marker) if l.strip()]
     except OSError:
@@ -151,7 +151,7 @@ def _cleanup_legacy(user: str):
             os.rmdir(f"/run/media/{user}/{u}")
         except OSError:
             pass
-        for p in (f"/etc/udev/rules.d/99-dellg15-automount-{u}.rules",
+        for p in (f"/etc/udev/rules.d/99-tuxthrottle-automount-{u}.rules",
                   f"/etc/nobara/automount/{u}.env"):
             try:
                 os.remove(p)

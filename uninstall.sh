@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Uninstall the Dell G15 Toolkit (Nobara Linux).
+# Uninstall TuxThrottle (Nobara Linux).
 #
 # By default this removes **only the tool** — the /opt install, the launcher,
 # the icon, the menu entry and your per-user toolkit config. Everything the
@@ -53,33 +53,33 @@ run()  { c_info "$*"; "$@" >/dev/null 2>&1 || true; }
 urun() { [[ -n "$U" ]] && sudo -u "$U" XDG_RUNTIME_DIR="$URUN" "$@" >/dev/null 2>&1 || true; }
 
 echo
-c_info "Uninstalling the Dell G15 Toolkit${U:+ (user: $U)}$([[ $DO_PURGE -eq 1 ]] && echo '  [--purge]')"
+c_info "Uninstalling TuxThrottle${U:+ (user: $U)}$([[ $DO_PURGE -eq 1 ]] && echo '  [--purge]')"
 echo
 
 # ---- stop anything the tool has running --------------------------------
-pkill -f 'dellg15_kbd.py .*-wave' 2>/dev/null || true
-pkill -f 'dellg15_toolkit.py'     2>/dev/null || true
-[[ -n "$UHOME" && -f "$UHOME/.config/dellg15-toolkit/fx.pid" ]] && \
-    kill "$(cat "$UHOME/.config/dellg15-toolkit/fx.pid" 2>/dev/null)" 2>/dev/null || true
+pkill -f 'tuxthrottle_kbd.py .*-wave' 2>/dev/null || true
+pkill -f 'tuxthrottle.py'     2>/dev/null || true
+[[ -n "$UHOME" && -f "$UHOME/.config/tuxthrottle/fx.pid" ]] && \
+    kill "$(cat "$UHOME/.config/tuxthrottle/fx.pid" 2>/dev/null)" 2>/dev/null || true
 
 # ---- the app itself (/opt + launcher + icon + system menu entry) -------
 if [[ -x "$SRC/install.sh" ]]; then
     "$SRC/install.sh" --uninstall || true
 else
-    rm -rf /opt/dellg15-toolkit /usr/local/bin/dellg15-toolkit \
-           /usr/share/applications/dellg15-toolkit.desktop
+    rm -rf /opt/tuxthrottle /usr/local/bin/tuxthrottle \
+           /usr/share/applications/tuxthrottle.desktop
     for s in 16 24 32 48 64 128 256 512; do
-        rm -f "/usr/share/icons/hicolor/${s}x${s}/apps/dellg15-toolkit.png"
+        rm -f "/usr/share/icons/hicolor/${s}x${s}/apps/tuxthrottle.png"
     done
-    rm -f /usr/share/icons/hicolor/scalable/apps/dellg15-toolkit.svg
-    c_ok "removed /opt/dellg15-toolkit + launcher + icon + desktop entry"
+    rm -f /usr/share/icons/hicolor/scalable/apps/tuxthrottle.svg
+    c_ok "removed /opt/tuxthrottle + launcher + icon + desktop entry"
 fi
 
 # ---- per-user toolkit files ------------------------------------------
 if [[ -n "$UHOME" ]]; then
-    rm -rf "$UHOME/.config/dellg15-toolkit" \
-           "$UHOME/.local/share/applications/dellg15-toolkit.desktop"
-    c_ok "removed per-user config ($UHOME/.config/dellg15-toolkit) + menu entry"
+    rm -rf "$UHOME/.config/tuxthrottle" \
+           "$UHOME/.local/share/applications/tuxthrottle.desktop"
+    c_ok "removed per-user config ($UHOME/.config/tuxthrottle) + menu entry"
 fi
 
 if [[ $DO_PURGE -eq 0 ]]; then
@@ -95,28 +95,28 @@ fi
 echo
 c_info "--purge: removing tweak-installed system components…"
 
-for svc in dellg15-kbd.service dellg15-openrgb.service dellg15-cpu-perf.service; do
+for svc in tuxthrottle-kbd.service tuxthrottle-openrgb.service tuxthrottle-cpu-perf.service; do
     run systemctl disable --now "$svc"
 done
-urun systemctl --user disable --now dellg15-hotkey.service
+urun systemctl --user disable --now tuxthrottle-hotkey.service
 
 # automount: tear down its managed /etc/fstab block + /mnt dirs first
-if [[ -x /usr/local/bin/dellg15-automount && -n "$U" ]]; then
-    run /usr/local/bin/dellg15-automount --user "$U" disable-all
+if [[ -x /usr/local/bin/tuxthrottle-automount && -n "$U" ]]; then
+    run /usr/local/bin/tuxthrottle-automount --user "$U" disable-all
     c_ok "reverted AutoMountDrives (its managed /etc/fstab block + /mnt dirs)"
 fi
 
-rm -f /etc/systemd/system/dellg15-kbd.service \
-      /etc/systemd/system/dellg15-openrgb.service \
-      /etc/systemd/system/dellg15-cpu-perf.service \
-      /usr/lib/systemd/system-sleep/dellg15-kbd \
+rm -f /etc/systemd/system/tuxthrottle-kbd.service \
+      /etc/systemd/system/tuxthrottle-openrgb.service \
+      /etc/systemd/system/tuxthrottle-cpu-perf.service \
+      /usr/lib/systemd/system-sleep/tuxthrottle-kbd \
       /etc/systemd/zram-generator.conf.d/gaming.conf \
-      /etc/modprobe.d/dellg15-fan.conf \
-      /etc/sudoers.d/dellg15-gamemode-toggle
-rm -f /usr/local/bin/dellg15-kbd \
-      /usr/local/bin/dellg15-automount \
-      /usr/local/bin/dellg15-cpu-perf \
-      /usr/local/bin/dellg15-hotkey-listener.py \
+      /etc/modprobe.d/tuxthrottle-fan.conf \
+      /etc/sudoers.d/tuxthrottle-gamemode-toggle
+rm -f /usr/local/bin/tuxthrottle-kbd \
+      /usr/local/bin/tuxthrottle-automount \
+      /usr/local/bin/tuxthrottle-cpu-perf \
+      /usr/local/bin/tuxthrottle-hotkey-listener.py \
       /usr/local/bin/gaming-performance /usr/local/bin/gaming-balanced \
       /usr/local/bin/amdgpu-perf-high /usr/local/bin/amdgpu-perf-auto \
       /usr/local/bin/nvidia-max-perf \
@@ -124,7 +124,7 @@ rm -f /usr/local/bin/dellg15-kbd \
 c_ok "removed systemd units, sleep hook, zram/fan drop-ins, sudoers rule, helper scripts"
 
 if [[ -n "$UHOME" ]]; then
-    rm -f "$UHOME/.config/systemd/user/dellg15-hotkey.service" \
+    rm -f "$UHOME/.config/systemd/user/tuxthrottle-hotkey.service" \
           "$UHOME/.config/environment.d/mangohud.conf"
     urun systemctl --user daemon-reload
     c_ok "removed per-user hotkey unit + mangohud env drop-in"
@@ -149,14 +149,14 @@ fi
 
 # ---- optional: fstab btrfs-noatime ----------------------------
 if [[ $DO_FSTAB -eq 1 ]]; then
-    if [[ -f /etc/fstab.dellg15-bak ]]; then
-        mv -f /etc/fstab.dellg15-bak /etc/fstab
+    if [[ -f /etc/fstab.tuxthrottle-bak ]]; then
+        mv -f /etc/fstab.tuxthrottle-bak /etc/fstab
         mount -o remount / 2>/dev/null || true
-        c_ok "restored /etc/fstab from /etc/fstab.dellg15-bak (BtrfsNoatime)"
+        c_ok "restored /etc/fstab from /etc/fstab.tuxthrottle-bak (BtrfsNoatime)"
     else
-        c_info "no /etc/fstab.dellg15-bak — BtrfsNoatime wasn't applied"
+        c_info "no /etc/fstab.tuxthrottle-bak — BtrfsNoatime wasn't applied"
     fi
-elif [[ -f /etc/fstab.dellg15-bak ]]; then
+elif [[ -f /etc/fstab.tuxthrottle-bak ]]; then
     c_warn "BtrfsNoatime edited /etc/fstab — add --fstab to restore it"
 fi
 

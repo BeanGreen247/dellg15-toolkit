@@ -4,14 +4,14 @@
     "Description": "Finds every fixed internal partition with a mountable filesystem (ext4/btrfs/xfs/f2fs/ntfs/exfat/vfat) that isn't already handled, and adds a permanent /etc/fstab entry mounting it at a stable /mnt/<label> path with 'nofail' — the right place for a second games/data NVMe, so Steam libraries and symlinks never move. Skips the OS/boot/swap disks, anything already in fstab, LUKS, and removable media. NTFS uses the in-kernel ntfs3 driver with your uid/gid so games are writable. Reversible: undo unmounts and strips exactly the block it added (and migrates off any older /run/media setup a previous version made).",
     "category": "Performance",
     "risk": "advanced",
-    "check": "grep -q 'dellg15-toolkit AutoMountDrives' /etc/fstab",
+    "check": "grep -q 'tuxthrottle AutoMountDrives' /etc/fstab",
     "apply": [
-      "install -m 0755 {TOOLKIT_DIR}/dellg15_automount.py /usr/local/bin/dellg15-automount",
-      "/usr/local/bin/dellg15-automount --user {USER} enable-all"
+      "install -m 0755 {TOOLKIT_DIR}/tuxthrottle_automount.py /usr/local/bin/tuxthrottle-automount",
+      "/usr/local/bin/tuxthrottle-automount --user {USER} enable-all"
     ],
     "undo": [
-      "/usr/local/bin/dellg15-automount --user {USER} disable-all 2>/dev/null || true",
-      "rm -f /usr/local/bin/dellg15-automount"
+      "/usr/local/bin/tuxthrottle-automount --user {USER} disable-all 2>/dev/null || true",
+      "rm -f /usr/local/bin/tuxthrottle-automount"
     ]
   },
   "CstateFix": {
@@ -188,22 +188,22 @@
     "Description": "Installs a systemd user service that listens for the dedicated G-key (confirmed on the G15 5515 to send KEY_PERFORMANCE when Fn Lock is OFF) and toggles Game Mode on press — same effect as clicking the tray icon. Requires PowerProfileScripts/AmdgpuPerfScripts/NvidiaMaxPerf above to be installed first, and python3-evdev. Adds your user to the 'input' group so the service can read the keyboard device — log out and back in once after applying for that to take effect.",
     "category": "Gaming",
     "risk": "advanced",
-    "check": "sudo -u {USER} XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) systemctl --user is-enabled dellg15-hotkey.service 2>/dev/null | grep -q enabled && id -nG {USER} | grep -qw input",
+    "check": "sudo -u {USER} XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) systemctl --user is-enabled tuxthrottle-hotkey.service 2>/dev/null | grep -q enabled && id -nG {USER} | grep -qw input",
     "apply": [
       "dnf install -y python3-evdev",
       "usermod -aG input {USER}",
       "install -d -o {USER} -g {USER} /home/{USER}/.config/systemd/user",
-      "ln -sf {TOOLKIT_DIR}/hotkey_listener.py /usr/local/bin/dellg15-hotkey-listener.py",
+      "ln -sf {TOOLKIT_DIR}/hotkey_listener.py /usr/local/bin/tuxthrottle-hotkey-listener.py",
       "chmod +x {TOOLKIT_DIR}/hotkey_listener.py",
-      "printf '[Unit]\\nDescription=Dell G15 G-key Game Mode toggle\\n\\n[Service]\\nExecStart=/usr/bin/python3 /usr/local/bin/dellg15-hotkey-listener.py\\nRestart=on-failure\\nRestartSec=3\\n\\n[Install]\\nWantedBy=default.target\\n' > /home/{USER}/.config/systemd/user/dellg15-hotkey.service",
-      "chown {USER}:{USER} /home/{USER}/.config/systemd/user/dellg15-hotkey.service",
+      "printf '[Unit]\\nDescription=Dell G15 G-key Game Mode toggle\\n\\n[Service]\\nExecStart=/usr/bin/python3 /usr/local/bin/tuxthrottle-hotkey-listener.py\\nRestart=on-failure\\nRestartSec=3\\n\\n[Install]\\nWantedBy=default.target\\n' > /home/{USER}/.config/systemd/user/tuxthrottle-hotkey.service",
+      "chown {USER}:{USER} /home/{USER}/.config/systemd/user/tuxthrottle-hotkey.service",
       "sudo -u {USER} XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) systemctl --user daemon-reload",
-      "sudo -u {USER} XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) systemctl --user enable --now dellg15-hotkey.service"
+      "sudo -u {USER} XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) systemctl --user enable --now tuxthrottle-hotkey.service"
     ],
     "undo": [
-      "sudo -u {USER} XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) systemctl --user disable --now dellg15-hotkey.service 2>/dev/null || true",
-      "rm -f /home/{USER}/.config/systemd/user/dellg15-hotkey.service",
-      "rm -f /usr/local/bin/dellg15-hotkey-listener.py"
+      "sudo -u {USER} XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) systemctl --user disable --now tuxthrottle-hotkey.service 2>/dev/null || true",
+      "rm -f /home/{USER}/.config/systemd/user/tuxthrottle-hotkey.service",
+      "rm -f /usr/local/bin/tuxthrottle-hotkey-listener.py"
     ]
   },
   "PasswordlessGameModeToggle": {
@@ -211,27 +211,27 @@
     "Description": "Lets the tray icon and the G-key listener flip Game Mode without a password prompt every single press. Scoped ONLY to the five specific toggle scripts, not general root access. Skip this if you'd rather approve each toggle via a GUI polkit prompt.",
     "category": "Gaming",
     "risk": "advanced",
-    "check": "test -f /etc/sudoers.d/dellg15-gamemode-toggle",
+    "check": "test -f /etc/sudoers.d/tuxthrottle-gamemode-toggle",
     "apply": [
-      "printf '{USER} ALL=(root) NOPASSWD: /usr/local/bin/gaming-performance, /usr/local/bin/gaming-balanced, /usr/local/bin/amdgpu-perf-high, /usr/local/bin/amdgpu-perf-auto, /usr/local/bin/nvidia-max-perf\\n' > /etc/sudoers.d/dellg15-gamemode-toggle",
-      "chmod 0440 /etc/sudoers.d/dellg15-gamemode-toggle",
-      "visudo -c -f /etc/sudoers.d/dellg15-gamemode-toggle"
+      "printf '{USER} ALL=(root) NOPASSWD: /usr/local/bin/gaming-performance, /usr/local/bin/gaming-balanced, /usr/local/bin/amdgpu-perf-high, /usr/local/bin/amdgpu-perf-auto, /usr/local/bin/nvidia-max-perf\\n' > /etc/sudoers.d/tuxthrottle-gamemode-toggle",
+      "chmod 0440 /etc/sudoers.d/tuxthrottle-gamemode-toggle",
+      "visudo -c -f /etc/sudoers.d/tuxthrottle-gamemode-toggle"
     ],
-    "undo": ["rm -f /etc/sudoers.d/dellg15-gamemode-toggle"]
+    "undo": ["rm -f /etc/sudoers.d/tuxthrottle-gamemode-toggle"]
   },
   "RaplPowerPermissions": {
     "Content": "Fix CPU Power-Reading Permissions (RAPL)",
     "Description": "Linux locks CPU package power counters (RAPL, under /sys/class/powercap) to root-only by default since 2020 (a side-channel security mitigation) — without this, the Dashboard tab and the tray icon (which deliberately run unprivileged) can never show real CPU wattage, always 'n/a'. Adds a udev rule making them world-readable, the same fix MangoHud's own docs recommend for its power display. Note: Nobara 43 already ships these files world-readable, so this is usually a no-op there — apply it only if the Dashboard actually shows 'n/a' for CPU wattage. Trade-off: makes RAPL energy counters readable by any local user/process, a known but low-severity timing side-channel — standard practice on gaming-focused distros/tools, not enabled by default here.",
     "category": "Power",
     "risk": "advanced",
-    "check": "test -f /etc/udev/rules.d/90-dellg15-powercap-perms.rules",
+    "check": "test -f /etc/udev/rules.d/90-tuxthrottle-powercap-perms.rules",
     "apply": [
-      "printf 'SUBSYSTEM==\"powercap\", RUN+=\"/bin/chmod -R a+r /sys/class/powercap\"\\n' > /etc/udev/rules.d/90-dellg15-powercap-perms.rules",
+      "printf 'SUBSYSTEM==\"powercap\", RUN+=\"/bin/chmod -R a+r /sys/class/powercap\"\\n' > /etc/udev/rules.d/90-tuxthrottle-powercap-perms.rules",
       "udevadm control --reload-rules",
       "chmod -R a+r /sys/class/powercap 2>/dev/null || true"
     ],
     "undo": [
-      "rm -f /etc/udev/rules.d/90-dellg15-powercap-perms.rules",
+      "rm -f /etc/udev/rules.d/90-tuxthrottle-powercap-perms.rules",
       "udevadm control --reload-rules"
     ]
   },
@@ -276,35 +276,35 @@
   },
   "CpuMaxPerformance": {
     "Content": "Force CPU performance governor at boot",
-    "Description": "Installs a oneshot systemd service (dellg15-cpu-perf.service) that pins every core to the 'performance' governor and energy_performance_preference=performance on boot — the amd_pstate 'active' driver on the 5800H only exposes performance/powersave, so this is the max-clocks setting. NOTE: power-profiles-daemon rewrites the governor whenever you switch power profile (or use the Game Mode toggle), so this mainly helps if you do NOT switch profiles / don't use Game Mode. If you use Game Mode, that already covers it. Reversible.",
+    "Description": "Installs a oneshot systemd service (tuxthrottle-cpu-perf.service) that pins every core to the 'performance' governor and energy_performance_preference=performance on boot — the amd_pstate 'active' driver on the 5800H only exposes performance/powersave, so this is the max-clocks setting. NOTE: power-profiles-daemon rewrites the governor whenever you switch power profile (or use the Game Mode toggle), so this mainly helps if you do NOT switch profiles / don't use Game Mode. If you use Game Mode, that already covers it. Reversible.",
     "category": "Power",
     "risk": "advanced",
-    "check": "systemctl is-enabled dellg15-cpu-perf.service 2>/dev/null | grep -q enabled",
+    "check": "systemctl is-enabled tuxthrottle-cpu-perf.service 2>/dev/null | grep -q enabled",
     "apply": [
-      "cat > /usr/local/bin/dellg15-cpu-perf <<'SCRIPT'\n#!/usr/bin/env bash\nfor f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo performance > \"$f\"; done\nfor f in /sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference; do [ -e \"$f\" ] && echo performance > \"$f\"; done\nSCRIPT",
-      "chmod +x /usr/local/bin/dellg15-cpu-perf",
-      "cat > /etc/systemd/system/dellg15-cpu-perf.service <<'UNIT'\n[Unit]\nDescription=Force CPU performance governor (Dell G15 Toolkit)\nAfter=multi-user.target\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/usr/local/bin/dellg15-cpu-perf\n\n[Install]\nWantedBy=multi-user.target\nUNIT",
+      "cat > /usr/local/bin/tuxthrottle-cpu-perf <<'SCRIPT'\n#!/usr/bin/env bash\nfor f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo performance > \"$f\"; done\nfor f in /sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference; do [ -e \"$f\" ] && echo performance > \"$f\"; done\nSCRIPT",
+      "chmod +x /usr/local/bin/tuxthrottle-cpu-perf",
+      "cat > /etc/systemd/system/tuxthrottle-cpu-perf.service <<'UNIT'\n[Unit]\nDescription=Force CPU performance governor (TuxThrottle)\nAfter=multi-user.target\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/usr/local/bin/tuxthrottle-cpu-perf\n\n[Install]\nWantedBy=multi-user.target\nUNIT",
       "systemctl daemon-reload",
-      "systemctl enable --now dellg15-cpu-perf.service"
+      "systemctl enable --now tuxthrottle-cpu-perf.service"
     ],
     "undo": [
-      "systemctl disable --now dellg15-cpu-perf.service 2>/dev/null || true",
-      "rm -f /etc/systemd/system/dellg15-cpu-perf.service /usr/local/bin/dellg15-cpu-perf",
+      "systemctl disable --now tuxthrottle-cpu-perf.service 2>/dev/null || true",
+      "rm -f /etc/systemd/system/tuxthrottle-cpu-perf.service /usr/local/bin/tuxthrottle-cpu-perf",
       "systemctl daemon-reload"
     ]
   },
   "BtrfsNoatime": {
     "Content": "Mount root with noatime (fstab)",
-    "Description": "Stops the filesystem writing an access-time stamp on every file read — pure I/O reduction, safe on Btrfs (Nobara's default). Backs up /etc/fstab to /etc/fstab.dellg15-bak first, edits only the ' / ' Btrfs line, and remounts live. Undo restores the backup.",
+    "Description": "Stops the filesystem writing an access-time stamp on every file read — pure I/O reduction, safe on Btrfs (Nobara's default). Backs up /etc/fstab to /etc/fstab.tuxthrottle-bak first, edits only the ' / ' Btrfs line, and remounts live. Undo restores the backup.",
     "category": "Performance",
     "risk": "advanced",
     "check": "findmnt -no OPTIONS / | grep -qw noatime",
     "apply": [
-      "sed -i.dellg15-bak -E '/^[^#].*[[:space:]]\\/[[:space:]]+btrfs[[:space:]]/{/noatime/!s/(btrfs[[:space:]]+)([^[:space:]]+)/\\1noatime,\\2/}' /etc/fstab",
+      "sed -i.tuxthrottle-bak -E '/^[^#].*[[:space:]]\\/[[:space:]]+btrfs[[:space:]]/{/noatime/!s/(btrfs[[:space:]]+)([^[:space:]]+)/\\1noatime,\\2/}' /etc/fstab",
       "mount -o remount /"
     ],
     "undo": [
-      "[ -f /etc/fstab.dellg15-bak ] && mv -f /etc/fstab.dellg15-bak /etc/fstab || true",
+      "[ -f /etc/fstab.tuxthrottle-bak ] && mv -f /etc/fstab.tuxthrottle-bak /etc/fstab || true",
       "mount -o remount / || true"
     ]
   },
@@ -313,14 +313,14 @@
     "Description": "The NVMe scheduler is already 'none' on this system (correct for NVMe), so this only lowers read_ahead_kb to 128 (from 256) — less wasted prefetch on the small random reads typical of game assets. Tiny effect, fully reversible. (nr_requests is left alone: its max is per-device and some queues here reject a bump, which just logs a harmless udev error at boot.)",
     "category": "Performance",
     "risk": "advanced",
-    "check": "test -f /etc/udev/rules.d/60-dellg15-nvme.rules",
+    "check": "test -f /etc/udev/rules.d/60-tuxthrottle-nvme.rules",
     "apply": [
-      "printf 'ACTION==\"add|change\", KERNEL==\"nvme[0-9]n[0-9]\", ATTR{queue/read_ahead_kb}=\"128\"\\n' > /etc/udev/rules.d/60-dellg15-nvme.rules",
+      "printf 'ACTION==\"add|change\", KERNEL==\"nvme[0-9]n[0-9]\", ATTR{queue/read_ahead_kb}=\"128\"\\n' > /etc/udev/rules.d/60-tuxthrottle-nvme.rules",
       "udevadm control --reload-rules",
       "udevadm trigger --subsystem-match=block --action=change"
     ],
     "undo": [
-      "rm -f /etc/udev/rules.d/60-dellg15-nvme.rules",
+      "rm -f /etc/udev/rules.d/60-tuxthrottle-nvme.rules",
       "udevadm control --reload-rules"
     ]
   },
@@ -329,29 +329,29 @@
     "Description": "The AX200 has power-save ON by default, which adds latency spikes and occasional stutter to online play. Writes a NetworkManager drop-in (wifi.powersave=2) so it stays off across reconnects. Reversible.",
     "category": "Performance",
     "risk": "safe",
-    "check": "grep -qs 'wifi.powersave *= *2' /etc/NetworkManager/conf.d/20-dellg15-wifi-powersave.conf",
+    "check": "grep -qs 'wifi.powersave *= *2' /etc/NetworkManager/conf.d/20-tuxthrottle-wifi-powersave.conf",
     "apply": [
       "mkdir -p /etc/NetworkManager/conf.d",
-      "printf '[connection]\\nwifi.powersave = 2\\n' > /etc/NetworkManager/conf.d/20-dellg15-wifi-powersave.conf",
+      "printf '[connection]\\nwifi.powersave = 2\\n' > /etc/NetworkManager/conf.d/20-tuxthrottle-wifi-powersave.conf",
       "systemctl reload NetworkManager || systemctl restart NetworkManager || true"
     ],
     "undo": [
-      "rm -f /etc/NetworkManager/conf.d/20-dellg15-wifi-powersave.conf",
+      "rm -f /etc/NetworkManager/conf.d/20-tuxthrottle-wifi-powersave.conf",
       "systemctl reload NetworkManager || true"
     ]
   },
   "NetLatencySysctl": {
     "Content": "Network latency sysctls (BBR + fq + fastopen)",
-    "Description": "Writes /etc/sysctl.d/99-dellg15-net.conf: BBR congestion control + fq qdisc (better behaviour under load / on lossy Wi-Fi), TCP Fast Open, no slow-start-after-idle, bigger backlog and socket buffers. All stock kernel features on Nobara. Reversible.",
+    "Description": "Writes /etc/sysctl.d/99-tuxthrottle-net.conf: BBR congestion control + fq qdisc (better behaviour under load / on lossy Wi-Fi), TCP Fast Open, no slow-start-after-idle, bigger backlog and socket buffers. All stock kernel features on Nobara. Reversible.",
     "category": "Performance",
     "risk": "safe",
     "check": "[ \"$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)\" = bbr ]",
     "apply": [
-      "printf 'net.core.default_qdisc=fq\\nnet.ipv4.tcp_congestion_control=bbr\\nnet.ipv4.tcp_fastopen=3\\nnet.ipv4.tcp_slow_start_after_idle=0\\nnet.core.netdev_max_backlog=16384\\nnet.core.rmem_max=8388608\\nnet.core.wmem_max=8388608\\n' > /etc/sysctl.d/99-dellg15-net.conf",
+      "printf 'net.core.default_qdisc=fq\\nnet.ipv4.tcp_congestion_control=bbr\\nnet.ipv4.tcp_fastopen=3\\nnet.ipv4.tcp_slow_start_after_idle=0\\nnet.core.netdev_max_backlog=16384\\nnet.core.rmem_max=8388608\\nnet.core.wmem_max=8388608\\n' > /etc/sysctl.d/99-tuxthrottle-net.conf",
       "sysctl --system >/dev/null"
     ],
     "undo": [
-      "rm -f /etc/sysctl.d/99-dellg15-net.conf",
+      "rm -f /etc/sysctl.d/99-tuxthrottle-net.conf",
       "sysctl --system >/dev/null"
     ]
   },
@@ -373,38 +373,38 @@
     "Description": "Wine (esync/fsync), Proton, and shader compilers open huge numbers of file descriptors and memory maps. Sets a hard/soft nofile limit of 1048576 in /etc/security/limits.d and bumps fs.file-max, fs.inotify.max_user_watches, and vm.max_map_count via sysctl. Takes effect on next login for the nofile limit. Reversible.",
     "category": "Performance",
     "risk": "safe",
-    "check": "test -f /etc/security/limits.d/99-dellg15-gaming.conf",
+    "check": "test -f /etc/security/limits.d/99-tuxthrottle-gaming.conf",
     "apply": [
-      "printf '* soft nofile 1048576\\n* hard nofile 1048576\\n' > /etc/security/limits.d/99-dellg15-gaming.conf",
-      "printf 'fs.file-max=2097152\\nfs.inotify.max_user_watches=524288\\nvm.max_map_count=2147483642\\n' > /etc/sysctl.d/99-dellg15-gaming.conf",
+      "printf '* soft nofile 1048576\\n* hard nofile 1048576\\n' > /etc/security/limits.d/99-tuxthrottle-gaming.conf",
+      "printf 'fs.file-max=2097152\\nfs.inotify.max_user_watches=524288\\nvm.max_map_count=2147483642\\n' > /etc/sysctl.d/99-tuxthrottle-gaming.conf",
       "sysctl --system >/dev/null"
     ],
     "undo": [
-      "rm -f /etc/security/limits.d/99-dellg15-gaming.conf /etc/sysctl.d/99-dellg15-gaming.conf",
+      "rm -f /etc/security/limits.d/99-tuxthrottle-gaming.conf /etc/sysctl.d/99-tuxthrottle-gaming.conf",
       "sysctl --system >/dev/null"
     ]
   },
   "KbdBacklightFix": {
     "Content": "Keyboard Backlight: re-apply saved colour at boot/resume",
-    "Description": "On the G15 5515 the keyboard backlight is driven through OpenRGB (the AW-ELC has no kernel driver and ignores raw HID writes); the backlight must also be enabled in BIOS setup. This installs dellg15_kbd.py (an openrgb wrapper) to /usr/local/bin, a headless 'openrgb --server' service so colour changes apply in ~1s instead of ~4s, plus a systemd service + a systemd-sleep hook that re-apply ~/.config/dellg15-toolkit/kbd.json (set in the Keyboard tab) at boot and after resume, since the colour does not persist a power cycle on its own. Requires the OpenRGB app. Reversible.",
+    "Description": "On the G15 5515 the keyboard backlight is driven through OpenRGB (the AW-ELC has no kernel driver and ignores raw HID writes); the backlight must also be enabled in BIOS setup. This installs tuxthrottle_kbd.py (an openrgb wrapper) to /usr/local/bin, a headless 'openrgb --server' service so colour changes apply in ~1s instead of ~4s, plus a systemd service + a systemd-sleep hook that re-apply ~/.config/tuxthrottle/kbd.json (set in the Keyboard tab) at boot and after resume, since the colour does not persist a power cycle on its own. Requires the OpenRGB app. Reversible.",
     "category": "Power",
     "risk": "advanced",
-    "check": "test -x /usr/local/bin/dellg15-kbd && systemctl is-enabled dellg15-kbd.service 2>/dev/null | grep -q enabled && systemctl is-enabled dellg15-openrgb.service 2>/dev/null | grep -q enabled",
+    "check": "test -x /usr/local/bin/tuxthrottle-kbd && systemctl is-enabled tuxthrottle-kbd.service 2>/dev/null | grep -q enabled && systemctl is-enabled tuxthrottle-openrgb.service 2>/dev/null | grep -q enabled",
     "apply": [
-      "install -m 0755 {TOOLKIT_DIR}/dellg15_kbd.py /usr/local/bin/dellg15-kbd",
-      "cat > /etc/systemd/system/dellg15-openrgb.service <<'UNIT'\n[Unit]\nDescription=OpenRGB SDK server for the Dell G15 keyboard (Dell G15 Toolkit)\nAfter=multi-user.target systemd-udev-settle.service\n\n[Service]\nType=simple\nExecStart=/usr/bin/openrgb --server --noautoconnect\nExecStartPost=/bin/sh -c 'for i in $(seq 40); do ss -ltn 2>/dev/null | grep -q \":6742 \" && break; sleep 0.5; done; exit 0'\nRestart=on-failure\nRestartSec=3\nTimeoutStartSec=40\n\n[Install]\nWantedBy=multi-user.target\nUNIT",
-      "cat > /etc/systemd/system/dellg15-kbd.service <<'UNIT'\n[Unit]\nDescription=Re-apply Dell G15 keyboard backlight (Dell G15 Toolkit)\nAfter=multi-user.target systemd-udev-settle.service dellg15-openrgb.service\nWants=dellg15-openrgb.service\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nEnvironment=DELLG15_KBD_STATE=/home/{USER}/.config/dellg15-toolkit/kbd.json\nExecStart=/usr/local/bin/dellg15-kbd apply-saved\nTimeoutStartSec=150\n\n[Install]\nWantedBy=multi-user.target\nUNIT",
+      "install -m 0755 {TOOLKIT_DIR}/tuxthrottle_kbd.py /usr/local/bin/tuxthrottle-kbd",
+      "cat > /etc/systemd/system/tuxthrottle-openrgb.service <<'UNIT'\n[Unit]\nDescription=OpenRGB SDK server for the Dell G15 keyboard (TuxThrottle)\nAfter=multi-user.target systemd-udev-settle.service\n\n[Service]\nType=simple\nExecStart=/usr/bin/openrgb --server --noautoconnect\nExecStartPost=/bin/sh -c 'for i in $(seq 40); do ss -ltn 2>/dev/null | grep -q \":6742 \" && break; sleep 0.5; done; exit 0'\nRestart=on-failure\nRestartSec=3\nTimeoutStartSec=40\n\n[Install]\nWantedBy=multi-user.target\nUNIT",
+      "cat > /etc/systemd/system/tuxthrottle-kbd.service <<'UNIT'\n[Unit]\nDescription=Re-apply Dell G15 keyboard backlight (TuxThrottle)\nAfter=multi-user.target systemd-udev-settle.service tuxthrottle-openrgb.service\nWants=tuxthrottle-openrgb.service\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nEnvironment=TUXTHROTTLE_KBD_STATE=/home/{USER}/.config/tuxthrottle/kbd.json\nExecStart=/usr/local/bin/tuxthrottle-kbd apply-saved\nTimeoutStartSec=150\n\n[Install]\nWantedBy=multi-user.target\nUNIT",
       "mkdir -p /usr/lib/systemd/system-sleep",
-      "cat > /usr/lib/systemd/system-sleep/dellg15-kbd <<'HOOK'\n#!/usr/bin/env bash\nif [ \"$1\" = post ]; then\n  sleep 2\n  DELLG15_KBD_STATE=/home/{USER}/.config/dellg15-toolkit/kbd.json /usr/local/bin/dellg15-kbd apply-saved || true\nfi\nHOOK",
-      "chmod +x /usr/lib/systemd/system-sleep/dellg15-kbd",
+      "cat > /usr/lib/systemd/system-sleep/tuxthrottle-kbd <<'HOOK'\n#!/usr/bin/env bash\nif [ \"$1\" = post ]; then\n  sleep 2\n  TUXTHROTTLE_KBD_STATE=/home/{USER}/.config/tuxthrottle/kbd.json /usr/local/bin/tuxthrottle-kbd apply-saved || true\nfi\nHOOK",
+      "chmod +x /usr/lib/systemd/system-sleep/tuxthrottle-kbd",
       "systemctl daemon-reload",
-      "systemctl enable --now dellg15-openrgb.service || true",
-      "systemctl enable --now dellg15-kbd.service || true"
+      "systemctl enable --now tuxthrottle-openrgb.service || true",
+      "systemctl enable --now tuxthrottle-kbd.service || true"
     ],
     "undo": [
-      "systemctl disable --now dellg15-kbd.service 2>/dev/null || true",
-      "systemctl disable --now dellg15-openrgb.service 2>/dev/null || true",
-      "rm -f /etc/systemd/system/dellg15-kbd.service /etc/systemd/system/dellg15-openrgb.service /usr/lib/systemd/system-sleep/dellg15-kbd /usr/local/bin/dellg15-kbd",
+      "systemctl disable --now tuxthrottle-kbd.service 2>/dev/null || true",
+      "systemctl disable --now tuxthrottle-openrgb.service 2>/dev/null || true",
+      "rm -f /etc/systemd/system/tuxthrottle-kbd.service /etc/systemd/system/tuxthrottle-openrgb.service /usr/lib/systemd/system-sleep/tuxthrottle-kbd /usr/local/bin/tuxthrottle-kbd",
       "systemctl daemon-reload"
     ]
   },
@@ -413,16 +413,16 @@
     "Description": "Installs a .desktop entry (with the flaming-gauge icon) into your application menu / launcher so you can start the Toolkit without a terminal. Points at wherever this repo currently lives. Reversible.",
     "category": "Software",
     "risk": "safe",
-    "check": "test -f /home/{USER}/.local/share/applications/dellg15-toolkit.desktop",
+    "check": "test -f /home/{USER}/.local/share/applications/tuxthrottle.desktop",
     "apply": [
       "install -d -o {USER} -g {USER} /home/{USER}/.local/share/applications",
-      "sed 's#__TOOLKIT_DIR__#{TOOLKIT_DIR}#g' {TOOLKIT_DIR}/assets/dellg15-toolkit.desktop > /home/{USER}/.local/share/applications/dellg15-toolkit.desktop",
-      "chown {USER}:{USER} /home/{USER}/.local/share/applications/dellg15-toolkit.desktop",
-      "chmod +x /home/{USER}/.local/share/applications/dellg15-toolkit.desktop",
+      "sed 's#__TOOLKIT_DIR__#{TOOLKIT_DIR}#g' {TOOLKIT_DIR}/assets/tuxthrottle.desktop > /home/{USER}/.local/share/applications/tuxthrottle.desktop",
+      "chown {USER}:{USER} /home/{USER}/.local/share/applications/tuxthrottle.desktop",
+      "chmod +x /home/{USER}/.local/share/applications/tuxthrottle.desktop",
       "su - {USER} -c 'update-desktop-database ~/.local/share/applications 2>/dev/null || true'"
     ],
     "undo": [
-      "rm -f /home/{USER}/.local/share/applications/dellg15-toolkit.desktop",
+      "rm -f /home/{USER}/.local/share/applications/tuxthrottle.desktop",
       "su - {USER} -c 'update-desktop-database ~/.local/share/applications 2>/dev/null || true'"
     ]
   }

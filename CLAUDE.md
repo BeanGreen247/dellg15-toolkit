@@ -1,4 +1,4 @@
-# CLAUDE.md — Dell G15 5515 Toolkit
+# CLAUDE.md — TuxThrottle
 
 Context for AI assistants working on this repo. Human-facing docs are in `README.md`.
 
@@ -14,17 +14,17 @@ Edition** (Ryzen 7 5800H + RTX 3050 Ti Mobile) running **Nobara Linux** (Fedora
 
 | File | Role |
 |---|---|
-| `dellg15_toolkit.py` | the GUI. ttkbootstrap `darkly` re-skinned into a dark "gaming-BIOS" look with the KDE accent colour (`apply_bios_style` / `read_desktop_accent`). **Left sidebar nav** (`SidebarNav`, a drop-in for `tb.Notebook`), not a top tab strip. Pages: Dashboard, Keyboard, Fans, Presets, Updates, then one per tweak/app category (Gaming first). App-wide "busy" modal overlay with a two-bar (overall + current-task) progress display + elapsed timer (`_begin_busy` / `_poll_busy_queue`). Self-elevates via `pkexec`→`sudo`. |
+| `tuxthrottle.py` | the GUI. ttkbootstrap `darkly` re-skinned into a dark "gaming-BIOS" look with the KDE accent colour (`apply_bios_style` / `read_desktop_accent`). **Left sidebar nav** (`SidebarNav`, a drop-in for `tb.Notebook`), not a top tab strip. Pages: Dashboard, Keyboard, Fans, Presets, Updates, then one per tweak/app category (Gaming first). App-wide "busy" modal overlay with a two-bar (overall + current-task) progress display + elapsed timer (`_begin_busy` / `_poll_busy_queue`). Self-elevates via `pkexec`→`sudo`. |
 | `tray_monitor.py` | PySide6 system-tray equivalent + `--toggle`. |
 | `hotkey_listener.py` | `systemd --user` service, reads the G-key from evdev, toggles Game Mode. |
 | `sensors.py` | **shared, no GUI deps.** Sensor reads + `set_game_mode()` + `notify()` + `detect_model()` + **fan control** (`read_fans`, `get/set_fan_boost`, `*_platform_profile`, `get_pwm_state`, `set_pwm_manual`, `restore_fan_auto`) + `dgpu_is_awake()`. `which()` is `lru_cache`d. |
-| `dellg15_kbd.py` | AW-ELC RGB keyboard driver: an `openrgb` CLI wrapper for static/zone colours + firmware effects, **plus** stdlib software animation daemons (`rainbow_wave`, `gradient_wave`) that stream per-LED frames over a hand-rolled OpenRGB SDK socket client (`_Sdk`). Detached daemons tracked by `<statedir>/fx.pid` + `stop_fx()`. |
-| `dellg15_automount.py` | scans `lsblk`, adds `/etc/fstab` entries mounting fixed internal data disks at `/mnt/<label>` with `nofail`. |
+| `tuxthrottle_kbd.py` | AW-ELC RGB keyboard driver: an `openrgb` CLI wrapper for static/zone colours + firmware effects, **plus** stdlib software animation daemons (`rainbow_wave`, `gradient_wave`) that stream per-LED frames over a hand-rolled OpenRGB SDK socket client (`_Sdk`). Detached daemons tracked by `<statedir>/fx.pid` + `stop_fx()`. |
+| `tuxthrottle_automount.py` | scans `lsblk`, adds `/etc/fstab` entries mounting fixed internal data disks at `/mnt/<label>` with `nofail`. |
 | `config/tweaks.json`, `apps.json`, `presets.json` | the data. Tweaks have `check` / `check_pending` (staged-but-needs-reboot) / `apply` / `undo`. `{USER}` and `{TOOLKIT_DIR}` are substituted. |
-| `install.sh` | system-wide install → `/opt/dellg15-toolkit`, launcher, hicolor icon, `/usr/share/applications` desktop entry. Also stamps `/opt/dellg15-toolkit/.version` (git describe). `--uninstall` removes just the app. |
+| `install.sh` | system-wide install → `/opt/tuxthrottle`, launcher, hicolor icon, `/usr/share/applications` desktop entry. Also stamps `/opt/tuxthrottle/.version` (git describe). `--uninstall` removes just the app. |
 | `uninstall.sh` | remove the tool (default: app + per-user config, tweaks kept). `--purge` also undoes every tweak's system bits (services, helper scripts, sudoers, drop-ins); `--grub` / `--fstab` / `--pip` / `--all` for the boot-affecting extras. Never touches installed apps. |
 | `.github/ISSUE_TEMPLATE/` | GitHub bug-report template — asks for the output of the Diagnostics page / `--debug`. |
-| `assets/` | `icon.svg` (flaming tachometer on a wine plate) + rendered PNGs. |
+| `assets/` | `icon.svg` (Tux centred in a redlined throttle gauge, amber boost flame, graphite plate) + rendered PNGs. |
 
 ## Working on the real hardware
 
@@ -32,8 +32,8 @@ The actual laptop is reachable as **`ssh g15`** (SSH host alias; hostname
 `Ashblade`, user `bean`). Workflow used during development:
 
 ```bash
-rsync -az --exclude=.git ./ g15:~/DellG15Toolkit/     # push source
-ssh g15 'cd ~/DellG15Toolkit && sudo ./install.sh'    # system-install to /opt
+rsync -az --exclude=.git ./ g15:~/TuxThrottle/     # push source
+ssh g15 'cd ~/TuxThrottle && sudo ./install.sh'    # system-install to /opt
 ```
 
 - Passwordless sudo on the box is via `/etc/sudoers.d/claude-test` (`bean
@@ -76,15 +76,15 @@ ssh g15 'cd ~/DellG15Toolkit && sudo ./install.sh'    # system-install to /opt
   "Gradient wave" = the slow software daemon (1–6 OKLab anchor colours, or a
   1-anchor comet).
 - **Colour persistence** is opt-in via the `KbdBacklightFix` tweak (installs
-  `dellg15-openrgb.service` SDK server + `dellg15-kbd.service` `apply-saved` at
-  boot + a systemd-sleep hook). State: `~/.config/dellg15-toolkit/kbd.json`
-  (`mode`/`speed`/`zones`/optional `gradient` block). **`dellg15_kbd._state_path()`
+  `tuxthrottle-openrgb.service` SDK server + `tuxthrottle-kbd.service` `apply-saved` at
+  boot + a systemd-sleep hook). State: `~/.config/tuxthrottle/kbd.json`
+  (`mode`/`speed`/`zones`/optional `gradient` block). **`tuxthrottle_kbd._state_path()`
   must resolve the real user via `PKEXEC_UID`/`SUDO_UID` too** — pkexec sets no
   `PKEXEC_USER`, so a naive `~` lands in `/root` and the boot service never
   sees the GUI's saves (this was the "colour doesn't persist" bug).
 - **Backlight "freezes"** = the OpenRGB SDK server wedged after many mode
   changes (CLI still exits 0, hardware stuck). Fix: restart
-  `dellg15-openrgb` — `dellg15_kbd.restart_server()` / `reset()`, GUI "↻ Reset
+  `tuxthrottle-openrgb` — `tuxthrottle_kbd.restart_server()` / `reset()`, GUI "↻ Reset
   backlight" button.
 - **Fans (5515):** `hwmon/alienware_wmi` has `fan{1,2}_input` (RPM, ro),
   `fan{1,2}_label` = CPU/GPU Fan, and **`fan{1,2}_boost` 0–255 RW** — an
@@ -127,14 +127,14 @@ ssh g15 'cd ~/DellG15Toolkit && sudo ./install.sh'    # system-install to /opt
   `not_applied`, `pending`, `error`, `drifted`, `failed`, `unsupported`).
   `applied`/`pending`/`done` are derived read-only properties. The per-tweak
   `check` command is still authoritative for *current* state; the **apply
-  ledger** (`~/.config/dellg15-toolkit/state.json`, written by
+  ledger** (`~/.config/tuxthrottle/state.json`, written by
   `ledger_record()` from `_run_item_apply`/`_run_item_undo`) adds "we set this"
   → `drifted` (we applied it, check now fails) and `failed` (our last attempt
-  errored). "Status report" button / `python3 dellg15_toolkit.py --report`
+  errored). "Status report" button / `python3 tuxthrottle.py --report`
   print the full table (`format_status_report`).
-- Colour maths in `dellg15_kbd.py` is **stdlib only** (`colorsys` + a small
+- Colour maths in `tuxthrottle_kbd.py` is **stdlib only** (`colorsys` + a small
   sRGB↔linear↔OKLab↔OKLCH set) — no numpy/Pillow.
-- No-hardware self-tests: `dellg15_kbd.py rainbow-test` / `gradient-test`.
+- No-hardware self-tests: `tuxthrottle_kbd.py rainbow-test` / `gradient-test`.
 - Diagnostics: `collect_debug_report()` (module-level, `_DEBUG_CMDS` list +
   `_diag_fans`) assembles the readable hw/OS/toolkit dump — every shell probe
   runs as `timeout -k 2 12 bash -lc …`. `collect_hw_bundle()` (`_HW_BUNDLE_FILES`

@@ -36,10 +36,10 @@
     "Description": "DAMX's fan-control-tab equivalent \u2014 Dell's dell-smm-hwmon kernel driver plus i8kutils/i8kmon for manual or auto fan speed. Not confirmed supported on the G15 5515 specifically (dell-smm-hwmon uses a per-model whitelist, may need the 'force=1' module option) \u2014 best-effort like the RGB item.",
     "category": "Power",
     "manager": "shell",
-    "check": "test -f /etc/modprobe.d/dellg15-fan.conf",
+    "check": "test -f /etc/modprobe.d/tuxthrottle-fan.conf",
     "install": [
       "dnf install -y i8kutils",
-      "printf 'options dell-smm-hwmon force=1\\n' > /etc/modprobe.d/dellg15-fan.conf",
+      "printf 'options dell-smm-hwmon force=1\\n' > /etc/modprobe.d/tuxthrottle-fan.conf",
       "modprobe -r dell-smm-hwmon 2>/dev/null || true",
       "modprobe dell-smm-hwmon force=1 || true"
     ]

@@ -11,11 +11,11 @@ Game Mode toggle shells out through pkexec/sudo (see sensors.set_game_mode),
 since that needs root — the monitor itself never needs elevation.
 
 All sensor reads and the Game Mode toggle live in sensors.py (no GUI
-dependency), shared with dellg15_toolkit.py's in-app Dashboard tab.
+dependency), shared with tuxthrottle.py's in-app Dashboard tab.
 
 Requires: PySide6 (dnf install python3-pyside6, or: pip install --user PySide6)
 Reuses the gaming-performance/gaming-balanced, amdgpu-perf-high/auto, and
-nvidia-max-perf helper scripts installed by dellg15_toolkit.py's tweaks —
+nvidia-max-perf helper scripts installed by tuxthrottle.py's tweaks —
 install those first (Presets > Safe Baseline covers the power-profile ones;
 Competitive Gaming covers the GPU perf-state ones).
 """

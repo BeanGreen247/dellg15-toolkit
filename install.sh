@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 #
-# System-wide installer for the Dell G15 Toolkit (Nobara Linux).
+# System-wide installer for TuxThrottle (Nobara Linux).
 #
 #   sudo ./install.sh            # install for all users, add to the KDE menu
 #   sudo ./install.sh --uninstall
 #
-# Installs to /opt/dellg15-toolkit, a launcher at /usr/local/bin/dellg15-toolkit,
+# Installs to /opt/tuxthrottle, a launcher at /usr/local/bin/tuxthrottle,
 # a .desktop entry in /usr/share/applications (so every user can search for it
 # in KDE), and the icon into the hicolor theme.
 #
 set -euo pipefail
 
-APPID="dellg15-toolkit"
+APPID="tuxthrottle"
 LIBDIR="/opt/${APPID}"
 BIN="/usr/local/bin/${APPID}"
 DESKTOP="/usr/share/applications/${APPID}.desktop"
@@ -49,7 +49,7 @@ do_uninstall() {
 }
 
 do_install() {
-    [[ -f "$SRC/dellg15_toolkit.py" ]] || { c_err "run this from the toolkit source dir"; exit 1; }
+    [[ -f "$SRC/tuxthrottle.py" ]] || { c_err "run this from the toolkit source dir"; exit 1; }
 
     # ---- dependencies -------------------------------------------------------
     c_info "Checking dependencies…"
@@ -92,8 +92,8 @@ do_install() {
 
     cat > "$BIN" <<EOF
 #!/usr/bin/env bash
-# Dell G15 Toolkit launcher (self-elevates via pkexec/sudo)
-exec /usr/bin/python3 "${LIBDIR}/dellg15_toolkit.py" "\$@"
+# TuxThrottle launcher (self-elevates via pkexec/sudo)
+exec /usr/bin/python3 "${LIBDIR}/tuxthrottle.py" "\$@"
 EOF
     chmod 0755 "$BIN"
     c_ok "launcher: ${BIN}"
@@ -111,7 +111,7 @@ EOF
     cat > "$DESKTOP" <<EOF
 [Desktop Entry]
 Type=Application
-Name=Dell G15 Toolkit
+Name=TuxThrottle
 GenericName=Hardware & Gaming Tweaks
 Comment=Tweaks, drivers, RGB keyboard and gaming setup for the Dell G15 5515 on Nobara
 Exec=${APPID}
@@ -119,7 +119,7 @@ TryExec=${APPID}
 Icon=${APPID}
 Terminal=false
 Categories=Settings;HardwareSettings;
-Keywords=dell;g15;rgb;gamemode;performance;nvidia;tweak;keyboard;backlight;
+Keywords=tuxthrottle;tux;throttle;dell;g15;rgb;gamemode;performance;nvidia;tweak;keyboard;backlight;
 StartupNotify=true
 EOF
     chmod 0644 "$DESKTOP"
@@ -128,7 +128,7 @@ EOF
 
     refresh_caches
     echo
-    c_ok "Installed. Launch it from the KDE menu ('Dell G15 Toolkit') or run: ${APPID}"
+    c_ok "Installed. Launch it from the KDE menu ('TuxThrottle') or run: ${APPID}"
     c_ok "All users on this system can now find it."
 }
 
