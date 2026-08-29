@@ -667,7 +667,7 @@ class ToolkitApp:
             v.set(hx)
         b = self.kbd_brightness.get()
         colors = self._kbd_all_colors()
-        self._kbd_run(lambda kb: (kb.set_zones(colors, b),
+        self._kbd_run(lambda kb: (kb.set_all(hx, b),
                                   dellg15_kbd.save_state(colors, b)),
                       f"all zones {hx} @ {b}%")
 

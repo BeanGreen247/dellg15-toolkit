@@ -140,6 +140,14 @@ def set_zone(zone: int, color, brightness: int = 100) -> None:
 
 
 def set_zones(colors: dict, brightness: int = 100) -> None:
+    # When every zone is the same colour (the common case — "apply to all",
+    # presets, the boot re-assert), use the single rock-solid whole-keyboard
+    # command. The multi -z form is laggy and *intermittently blanks the
+    # keyboard* on this controller, so only use it for genuinely mixed colours.
+    hexes = {_hexify(c) for c in colors.values()}
+    if len(hexes) == 1:
+        set_all(next(iter(hexes)), brightness)
+        return
     args = ["-m", "Static", "-b", str(max(0, min(100, brightness)))]
     for pz, col in sorted(colors.items()):
         for lz in _physical_to_logical(pz):
