@@ -16,5 +16,11 @@
     "Description": "Safe Baseline plus recording/streaming software, balanced for playing and streaming at the same time.",
     "tweaks": ["CstateFix", "UsbAutosuspend", "MouseAccelFlat", "Swappiness", "ZramTune", "PowerProfileScripts", "ControllerUdev"],
     "apps": ["NvidiaDriver", "GameModeMangoHud", "LmSensors", "OBSStudio", "Discord", "Sunshine"]
+  },
+  "GameLaunchers": {
+    "Content": "Game Launchers",
+    "Description": "One click to install the full launcher stack: Steam, Lutris, Heroic (Epic/GOG), Prism Launcher (Minecraft), itch, plus Proton management (ProtonUp-Qt) and save backups (Ludusavi). Safe Baseline tweaks included.",
+    "tweaks": ["CstateFix", "UsbAutosuspend", "MouseAccelFlat", "Swappiness", "ZramTune", "PowerProfileScripts", "ControllerUdev"],
+    "apps": ["NvidiaDriver", "Steam", "Lutris", "Heroic", "PrismLauncher", "ItchIo", "ProtonUpQt", "Protontricks", "GameModeMangoHud", "Ludusavi", "LmSensors"]
   }
 }
