@@ -1806,19 +1806,20 @@ class ToolkitApp:
     def _build_diagnostics_tab(self):
         outer = tb.Frame(self.notebook)
         self.notebook.add(outer, text="Diagnostics")
-        frame = self._scroll_body(outer, pad=16)
+        frame = tb.Frame(outer, padding=16)      # NOT _scroll_body — the report
+        frame.pack(fill="both", expand=True)     # box scrolls itself and must be tall
         self._diag_q: queue.Queue = queue.Queue()
         self._diag_running = False
+        self._diag_raw = ""                      # unwrapped report, for Save
 
         tb.Label(
-            frame, wraplength=1150, justify="left", bootstyle=SECONDARY,
-            text="Collects hardware + OS + toolkit state for bug reports: kernel & "
-                 "DMI, CPU/GPU, thermal/fan, the keyboard / hotkey / media-key evdev "
-                 "map (/proc/bus/input/devices + capability bitmaps), OpenRGB, package "
-                 "versions, and filtered dmesg / journal errors. Everything is "
-                 "read-only. Review the output for your username / hostname before "
-                 "sharing it. Run the toolkit with sudo for the privileged bits "
-                 "(dmesg, RAPL).",
+            frame, wraplength=1200, justify="left", bootstyle=SECONDARY,
+            text="Collects hardware + OS + toolkit state for bug reports: kernel & DMI, "
+                 "CPU/GPU, thermal/fan, the keyboard / hotkey / media-key evdev map "
+                 "(/proc/bus/input/devices + capability bitmaps), OpenRGB, package "
+                 "versions, filtered dmesg / journal. All read-only, hard-timed-out. "
+                 "Run the toolkit with sudo for dmesg / RAPL. Review it for your "
+                 "username / hostname before sharing.",
         ).pack(anchor="w", pady=(0, 10))
 
         row = tb.Frame(frame)
@@ -1826,18 +1827,23 @@ class ToolkitApp:
         self._diag_btn = tb.Button(row, text="Generate report", bootstyle=SUCCESS,
                                    command=self._gen_diag)
         self._diag_btn.pack(side="left", padx=(0, 6))
-        tb.Button(row, text="Copy report", bootstyle=(SECONDARY, "outline"),
-                  command=lambda: self._to_clipboard(self._diag_text.get("1.0", "end"))
+        tb.Button(row, text="⧉ Copy for GitHub issue", bootstyle=INFO,
+                  command=lambda: self._to_clipboard(self._diag_text.get("1.0", "end-1c"))
                   ).pack(side="left", padx=4)
-        tb.Button(row, text="Save to file…", bootstyle=(SECONDARY, "outline"),
+        tb.Button(row, text="Copy full issue (template + report)", bootstyle=(INFO, "outline"),
+                  command=self._copy_full_issue).pack(side="left", padx=4)
+        tb.Button(row, text="Save .txt…", bootstyle=(SECONDARY, "outline"),
                   command=self._save_diag).pack(side="left", padx=4)
-        tb.Button(row, text="Copy GitHub issue template", bootstyle=(INFO, "outline"),
-                  command=lambda: self._to_clipboard(GITHUB_ISSUE_TEMPLATE)
-                  ).pack(side="left", padx=4)
 
-        self._diag_text = self._make_log_text(frame)
+        box = tb.Labelframe(
+            frame, padding=10, bootstyle=INFO,
+            text="  ⧉  GITHUB ISSUE BLOCK — “Copy for GitHub issue” copies exactly what's "
+                 "in here (a collapsible <details> block); paste it straight into the issue  ")
+        box.pack(fill="both", expand=True, pady=(4, 0))
+        self._diag_text = self._make_log_text(box)
+        self._diag_text.configure(height=28)
         self._diag_text.pack(fill="both", expand=True)
-        self._set_diag("Click “Generate report”.\n\nOr on a terminal:\n"
+        self._set_diag("Click “Generate report”.\n\nTerminal equivalent:\n"
                        "  sudo python3 /opt/dellg15-toolkit/dellg15_toolkit.py --debug\n")
 
     def _to_clipboard(self, text: str):
@@ -1855,6 +1861,15 @@ class ToolkitApp:
         self._diag_text.see("1.0")
         self._diag_text.configure(state="disabled")
 
+    def _copy_full_issue(self):
+        if not self._diag_raw:
+            self.status_var.set("Generate the report first.")
+            return
+        self._to_clipboard(GITHUB_ISSUE_TEMPLATE.replace(
+            "PASTE THE DEBUG REPORT HERE",
+            self._diag_raw.replace("```", "``​`").strip()))
+        self.status_var.set("Full issue (template + report) copied — paste it on GitHub.")
+
     def _gen_diag(self):
         if self._diag_running:
             return
@@ -1865,17 +1880,18 @@ class ToolkitApp:
 
         def work():
             try:
-                rep = collect_debug_report(items)
+                self._diag_raw = collect_debug_report(items, wrap=False)
+                rep = wrap_issue_block(self._diag_raw)
             except Exception as exc:  # noqa: BLE001
-                rep = f"debug report failed: {exc}"
+                self._diag_raw = rep = f"debug report failed: {exc}"
             self._diag_q.put(rep)
 
         threading.Thread(target=work, daemon=True).start()
 
     def _save_diag(self):
         from tkinter import filedialog
-        rep = self._diag_text.get("1.0", "end").strip()
-        if not rep or rep.startswith(("Click", "Collecting")):
+        rep = self._diag_raw.strip()
+        if not rep:
             self.status_var.set("Generate the report first.")
             return
         try:
@@ -2270,10 +2286,11 @@ _DEBUG_CMDS = [
     ("Firmware / DMI", "for f in sys_vendor product_name product_sku board_name board_version "
      "bios_vendor bios_version bios_date chassis_type; do "
      "printf '%-16s %s\\n' \"$f\" \"$(cat /sys/class/dmi/id/$f 2>/dev/null)\"; done", 16),
-    ("Desktop session", "u=$(logname 2>/dev/null || echo \"${SUDO_USER:-$USER}\"); "
-     "s=$(loginctl list-sessions --no-legend 2>/dev/null | awk -v u=\"$u\" '$3==u{print $1; exit}'); "
-     "[ -n \"$s\" ] && loginctl show-session \"$s\" -p Type -p Desktop -p Active -p Remote 2>/dev/null "
-     "|| echo \"session=${XDG_SESSION_TYPE:-unknown} desktop=${XDG_CURRENT_DESKTOP:-unknown}\"", 8),
+    ("Desktop session", "for s in $(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}'); do "
+     "t=$(loginctl show-session \"$s\" -p Type --value 2>/dev/null); "
+     "case \"$t\" in wayland|x11) loginctl show-session \"$s\" -p Name -p Type -p Desktop -p Active "
+     "-p Remote 2>/dev/null; break;; esac; done; "
+     "echo \"XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-} XDG_CURRENT_DESKTOP=${XDG_CURRENT_DESKTOP:-}\"", 10),
     ("Uptime / load", "uptime", 3),
     ("── CPU / MEMORY ──", None, 0),
     ("CPU", "lscpu 2>/dev/null | grep -E 'Model name|^CPU\\(s\\)|Thread|Core|Socket|CPU max|Vendor'; "
@@ -2302,8 +2319,8 @@ _DEBUG_CMDS = [
     ("── KEYBOARD / HOTKEYS / MEDIA KEYS ──", None, 0),
     ("Loaded modules", "lsmod | grep -E '^(dell|alienware|i8k|sparse_keymap|hid_|nvidia|amdgpu)' | sort", 30),
     ("Alienware USB LED controller", "lsusb 2>/dev/null | grep -iE '187c:|alienware' || echo '(187c:0550 AW-ELC not seen on USB)'", 4),
-    ("HID devices", "ls /sys/bus/hid/devices 2>/dev/null; echo; for h in /sys/bus/hid/devices/*; do "
-     "echo \"$(basename $h)  $(cat $h/../input/input*/name 2>/dev/null | head -1)\"; done", 20),
+    ("HID devices", "for h in /sys/bus/hid/devices/*; do [ -e \"$h\" ] || continue; "
+     "printf '%-24s %s\\n' \"$(basename $h)\" \"$(cat $h/input/input*/name 2>/dev/null | head -1)\"; done", 20),
     ("input devices (evdev + KEY capability bitmaps)", "cat /proc/bus/input/devices", 140),
     ("event device names", "for e in /dev/input/event*; do "
      "printf '%-22s %s\\n' \"$e\" \"$(cat /sys/class/input/$(basename $e)/device/name 2>/dev/null)\"; done", 30),
@@ -2313,35 +2330,58 @@ _DEBUG_CMDS = [
      "echo \"$e  $n\";; esac; done", 15),
     ("Fn-Lock / G-key note", "echo 'G-key = KEY_PERFORMANCE(701) on \"AT Translated Set 2 keyboard\" when Fn-Lock OFF, "
      "KEY_F9 when ON. Media keys (vol/mute) come via \"Dell WMI hotkeys\". Fn is an EC key and never reaches evdev.'", 4),
-    ("input group membership", "id; echo; getent group input", 6),
+    ("input group membership", "u=$(logname 2>/dev/null || echo \"${SUDO_USER:-}\"); "
+     "echo \"desktop user: $u\"; id \"$u\" 2>/dev/null; getent group input; "
+     "id -nG \"$u\" 2>/dev/null | tr ' ' '\\n' | grep -qx input "
+     "&& echo 'OK: user is in the input group' || echo 'WARN: user NOT in input group "
+     "(the G-key HotkeyListener needs it)'", 8),
     ("── RGB KEYBOARD (OpenRGB) ──", None, 0),
     ("OpenRGB", "openrgb --version 2>/dev/null | head -1 || echo '(openrgb not installed)'", 4),
     ("OpenRGB devices", "openrgb --noautoconnect -l 2>/dev/null | grep -vE '<[a-z]|i2c|SMBus|help.openrgb' | head -40", 45),
-    ("kbd services", "systemctl is-enabled dellg15-openrgb.service dellg15-kbd.service 2>&1; echo '---'; "
-     "systemctl is-active dellg15-openrgb.service dellg15-kbd.service 2>&1", 10),
-    ("kbd saved state", "cat ~/.config/dellg15-toolkit/kbd.json 2>/dev/null || echo '(no kbd.json)'", 24),
+    ("kbd services", "for s in dellg15-openrgb.service dellg15-kbd.service; do "
+     "printf '%-26s enabled=%-9s active=%s\\n' \"$s\" "
+     "\"$(systemctl is-enabled $s 2>/dev/null)\" \"$(systemctl is-active $s 2>/dev/null)\"; done", 6),
+    ("kbd saved state", "u=$(logname 2>/dev/null || echo \"${SUDO_USER:-$USER}\"); "
+     "h=$(getent passwd \"$u\" | cut -d: -f6); cat \"$h/.config/dellg15-toolkit/kbd.json\" 2>/dev/null "
+     "|| echo '(no kbd.json — colour not saved / KbdBacklightFix not used)'", 24),
     ("── TWEAK SERVICES / SUDOERS ──", None, 0),
     ("dellg15 units", "systemctl list-unit-files 2>/dev/null | grep -E 'dellg15|hotkey' ; "
      "systemctl --user list-unit-files 2>/dev/null | grep -E 'dellg15|hotkey'", 12),
     ("sudoers drop-ins", "ls -l /etc/sudoers.d/ 2>/dev/null | grep -E 'dellg15|gamemode|claude' || echo '(none)'", 8),
     ("── PACKAGES ──", None, 0),
     ("Kernels installed", "rpm -q kernel --qf '%{VERSION}-%{RELEASE}.%{ARCH}\\n' 2>/dev/null | sort -V", 10),
-    ("Relevant packages", "rpm -q akmod-nvidia xorg-x11-drv-nvidia-cuda openrgb gamemode mangohud "
-     "lm_sensors nobara-updater tlp auto-cpufreq 2>&1", 16),
+    ("NVIDIA packages", "rpm -qa 2>/dev/null | grep -iE 'nvidia|akmod-nvidia|cuda' | sort "
+     "|| echo '(no NVIDIA packages — driver may be from a -NV image or missing)'", 12),
+    ("Relevant packages", "rpm -q openrgb gamemode mangohud goverlay gamescope vkbasalt lm_sensors "
+     "nobara-updater tlp auto-cpufreq 2>&1 | sed 's/ is not installed/  — NOT installed/'", 14),
     ("Update tooling", "dnf --version 2>/dev/null | head -1; command -v nobara-sync >/dev/null && echo 'nobara-sync: present'; "
      "command -v flatpak >/dev/null && flatpak --version; command -v fwupdmgr >/dev/null && echo 'fwupd: present'", 6),
     ("── LOGS ──", None, 0),
-    ("dmesg (filtered)", "dmesg 2>/dev/null | grep -iE 'dell|alienware|aw-elc|187c|nvidia|amdgpu|"
-     "firmware bug|thermal|platform profile|pstate|MCE|hardware error' | tail -70 "
-     "|| echo '(dmesg not readable — run as root, or kernel.dmesg_restrict=1)'", 70),
-    ("journal errors (this boot)", "journalctl -b -p err --no-pager 2>/dev/null | tail -55 || echo '(journalctl unavailable)'", 55),
+    ("dmesg (filtered, deduped)", "dmesg 2>/dev/null "
+     "| grep -iE 'dell_|dell-|alienware|aw-elc|187c:0550|hid-generic 0003:187C|i8042|"
+     "firmware bug|thermal (throttl|event)|MCE|hardware error|"
+     "(nvidia|amdgpu|nouveau).*(error|fail|warn|timed? ?out|reset|hang|fault|Xid)|"
+     "platform.?profile|pstate' "
+     "| grep -viE 'Mode Validation Warning|Unknown Status failed|Console: switching|fbcon' "
+     "| sed -E 's/^\\[[0-9. ]+\\] //' | awk '!seen[$0]++' | tail -40 "
+     "|| echo '(dmesg not readable — run the toolkit with sudo, or kernel.dmesg_restrict=1)'", 42),
+    ("journal errors (this boot)", "journalctl -b -p err --no-pager 2>/dev/null "
+     "| grep -viE 'Module lib.*from rpm|^ *Module |drkonqi|KCrash|Stack trace|"
+     "^ *#[0-9]+ +0x|libQt6|libKF6|libc\\.so|__libc_start' "
+     "| awk '!seen[$0]++' | tail -35 || echo '(journalctl unavailable)'", 37),
+    ("journal — kbd / fan / gpu units (this boot)", "journalctl -b --no-pager "
+     "-u 'dellg15-*' -u 'dellg15-*.service' 2>/dev/null | tail -25; "
+     "journalctl -b --no-pager 2>/dev/null | grep -iE "
+     "'openrgb\\[|dell_smm|alienware_wmi|nvidia-persistenced|(nvidia|amdgpu).*(Xid|GPU has fallen|ring .* timeout)' "
+     "| grep -viE 'audit\\[|sudo\\[|Mode Validation' | awk '!seen[$0]++' | tail -20 || echo '(none)'", 40),
 ]
 
 
-def collect_debug_report(items=None) -> str:
+def collect_debug_report(items=None, wrap: bool = False) -> str:
     """Assemble a hardware + OS + toolkit-state report for bug reports. All
-    commands are read-only and best-effort. Run as root for the complete
-    picture (dmesg, RAPL, privileged checks)."""
+    commands are read-only, hard-timed-out and best-effort. Run as root for
+    the complete picture (dmesg, RAPL, privileged checks). `wrap=True` returns
+    it inside a GitHub `<details>` + fenced block, ready to paste."""
     hdr = [
         "Dell G15 Toolkit — debug report",
         f"generated {time.strftime('%Y-%m-%d %H:%M:%S %Z')}   toolkit {toolkit_version()}   "
@@ -2355,7 +2395,10 @@ def collect_debug_report(items=None) -> str:
             body.append(f"\n{title}")
             continue
         try:
-            out = cmd() if callable(cmd) else run_cmd3(cmd, timeout=25)[2]
+            if callable(cmd):
+                out = cmd()
+            else:  # hard cap via coreutils `timeout` so nothing can wedge
+                out = run_cmd3(f"timeout -k 2 12 bash -lc {shlex.quote(cmd)}", timeout=16)[2]
         except Exception as exc:              # noqa: BLE001
             out = f"(error: {exc})"
         out = out.strip() or "(no output)"
@@ -2383,7 +2426,14 @@ def collect_debug_report(items=None) -> str:
 
     body.append("\n── TOOLKIT: APPLY LEDGER (state.json) ──\n" +
                 json.dumps(ledger_load(), indent=2, sort_keys=True))
-    return "\n".join(hdr) + "\n".join(body) + "\n"
+    report = "\n".join(hdr) + "\n".join(body) + "\n"
+    return wrap_issue_block(report) if wrap else report
+
+
+def wrap_issue_block(report: str) -> str:
+    """Wrap a raw report in a GitHub-ready collapsible fenced block."""
+    return ("<details><summary>debug report — Dell G15 Toolkit</summary>\n\n"
+            "```\n" + report.replace("```", "``​`").rstrip() + "\n```\n\n</details>\n")
 
 
 GITHUB_ISSUE_TEMPLATE = """\
