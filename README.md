@@ -43,10 +43,11 @@ fixed in `dellg15_toolkit.py`'s own error message. `akmod-nvidia` lives in
 RPM Fusion's separate dist-git (unreachable from this check, but its name
 is standard/well-documented) rather than Fedora's own.
 
-**Status: not yet run against real hardware.** Everything here has been
-syntax-checked and GUI-smoke-tested on a different dev machine, but never
-against actual Nobara or this laptop's real `dnf`/`grubby`/sysfs — see
-"Known limitations" at the bottom.
+**Status: running on the real laptop.** The keyboard RGB (incl. the software
+gradient / firmware Rainbow Cycle effects), the Fans tab, the Updates tab,
+the sidebar UI and the tweak status checks have all been exercised on the
+actual Dell G15 5515 on Nobara. A few tweaks that need a reboot to fully
+verify (kernel-cmdline ones) are still best-effort — see "Known limitations".
 
 ## Tested hardware
 
@@ -114,13 +115,58 @@ carries that path through on `PYTHONPATH` when it re-execs, so the `--user`
 install is enough. (A system-wide `sudo pip install --break-system-packages
 ttkbootstrap` also works if you prefer.)
 
+## Layout
+
+The window is a **left sidebar nav** (gaming-BIOS style, ASUS/Acer-ish),
+re-skinned from ttkbootstrap `darkly` into a near-black palette that picks up
+your **KDE accent colour** automatically (with a WCAG contrast fallback if
+your accent would be unreadable on the dark panels). Pages: Dashboard,
+Keyboard, Fans, Presets, Updates, then one page per tweak/app category
+(Gaming first). Long operations (Apply Selected, presets, updates) put up a
+modal overlay with an **overall** progress bar, a **current-task** bar
+(showing "downloading / installing / …" parsed from the live output) and an
+elapsed timer.
+
 ## The Dashboard tab
 
-A live "system info" view like DAMX's monitoring dashboard, built into the
-main window (not just the tray icon): CPU temp/clock, dGPU temp/clock/util
-as gauges, iGPU/dGPU details as text, and a big round-toggle for Game Mode —
-same effect as the G-key or the tray icon, all sharing one source of truth
-(`sensors.py`) so they never disagree with each other.
+A live "system info" view like DAMX's monitoring dashboard: CPU temp/clock,
+dGPU temp/clock/util as gauges, iGPU/dGPU details as text, and a big
+round-toggle for Game Mode — same effect as the G-key or the tray icon, all
+sharing one source of truth (`sensors.py`). The dGPU reads skip `nvidia-smi`
+while the card is runtime-suspended so polling doesn't wake it.
+
+## The Fans tab
+
+DAMX's fan-control equivalent for this board:
+
+- **Thermal profile** — `balanced` / `performance` / `custom`
+  (`/sys/firmware/acpi/platform_profile`, same lever Game Mode uses).
+- **Per-fan boost** — sliders (0–100 % → `alienware_wmi/fanN_boost` 0–255) for
+  the CPU and GPU fans, with live RPM readouts. Boost only *adds* airflow on
+  top of the firmware curve, so it can't stall a fan.
+- **Presets** — Auto/silent, Cooler, Max cooling.
+- **Manual PWM** (advanced, behind a warning) — takes the EC off its curve via
+  `dell_smm` `pwmN`, floored so the fans never fully stop, with a "Restore
+  automatic" button.
+
+Nothing here persists a reboot yet.
+
+## The Updates tab
+
+Wraps Nobara's own updater plus the other package managers on the box:
+
+- **Everything** — "Check everything" and "Update everything (system +
+  Flatpak)" with a reboot prompt.
+- **System — dnf / nobara-sync** — check, update, apply known fixups, repair
+  (distro-sync), `dnf upgrade --refresh`, clean cache, and **Fix Fedora GPG
+  keys** (the `.fc44` / Fedora-44-key gotcha).
+- **Flatpak** and **Firmware (fwupd)** sections when those tools are present.
+
+Output streams live to the log console; a failure pops a scrollable detail
+dialog. A pending-update counter (`dnf --cacheonly` + flatpak + fwupd) shows
+at the top with a "recount" button — the dnf figure is "as of the last
+metadata sync" because a full `dnf check-update` can take minutes on this
+box's mirrors.
 
 ## Hardware-aware gating
 
@@ -137,7 +183,10 @@ principle DAMX uses, done via one detection pass (`sensors.has_nvidia_gpu()`
 - `tray_monitor.py` — the system-tray-only equivalent (needs `PySide6`)
 - `hotkey_listener.py` — the G-key → Game Mode binding (needs `python3-evdev`)
 - `sensors.py` — shared sensor reads + Game Mode logic, **no GUI dependency**, used by all three above so they never disagree on state
-- `dellg15_kbd.py` — AW-ELC RGB keyboard control (wraps the `openrgb` CLI)
+- `dellg15_kbd.py` — AW-ELC RGB keyboard control: `openrgb` CLI wrapper for
+  static/zone colours + firmware effects, plus stdlib software animation
+  daemons (gradient / rainbow) that stream per-LED frames over a hand-rolled
+  OpenRGB SDK socket client
 - `assets/` — `icon.svg` (a flaming tachometer redlined into "G15") and the
   PNGs rendered from it, used as the window icon and tray icon. The
   **DesktopLauncher** tweak drops a `.desktop` entry into your app menu
@@ -177,21 +226,47 @@ Two prerequisites:
   keys stay dark this is why — the firmware drives the backlight at POST and
   won't hand a *disabled* one to the OS.
 
-It's a **4-zone** board (Left / Middle / Right / Numpad), not per-key. The
-Keyboard tab gives a brightness slider, whole-keyboard colour + presets, and
-per-zone pickers. CLI:
+It's a **4-zone** board (Left / Middle / Right / Numpad) exposed by OpenRGB as
+16 logical LEDs, not per-key. The Keyboard tab gives a brightness slider,
+whole-keyboard colour + presets, per-zone pickers, a **Solid colour** button
+and a **↻ Reset backlight** button (see "quirks" below).
+
+**Effects.** Two useful ones on this hardware:
+
+- **Rainbow Cycle** — the controller's own *firmware* Spectrum Cycle: the
+  whole board sweeps the hue wheel, smoothly and fast, timed by the MCU. It's
+  uniform (no left-to-right travelling gradient).
+- **Gradient wave** — a *software* per-LED effect: 1–6 anchor colours (taken
+  from the four per-zone swatches), interpolated in OKLab and drifting sideways;
+  a single anchor gives a looping "comet" brightness pulse. This one is a
+  **slow ambient** effect on purpose — see the quirk below.
 
 ```bash
 python3 dellg15_kbd.py on --color 00aaff --brightness 80
 python3 dellg15_kbd.py zone 0 --color ff2200      # Left zone
+python3 dellg15_kbd.py effect spectrum --speed 80 # firmware Rainbow Cycle
+python3 dellg15_kbd.py gradient-wave --colors ff0000,00ff00,0000ff
+python3 dellg15_kbd.py rainbow-test               # no-hardware self-test
 python3 dellg15_kbd.py off
-python3 dellg15_kbd.py info
 ```
 
-The colour doesn't survive a power cycle on its own, so the
-**KbdBacklightFix** tweak (Power tab) installs a `systemd` service + a
-`systemd-sleep` hook that re-apply `~/.config/dellg15-toolkit/kbd.json` at
-boot and after resume.
+**Quirks (learned the hard way):**
+
+- **The controller only repaints ~2–4×/sec over USB.** The OpenRGB server
+  accepts frames instantly, but the device shows only a handful per second, so
+  a software wave *can't* move fast without visibly stepping. The software
+  gradient/rainbow daemons are therefore capped low and use long cycles; for a
+  smooth fast rainbow, use the firmware Rainbow Cycle.
+- **Brightness is inverted.** Every mode reports a degenerate range; `-b 100`
+  is what actually lights the backlight, `-b 0` turns it off.
+- **Persistence** is opt-in: the **KbdBacklightFix** tweak (Power tab) installs
+  an OpenRGB SDK-server service + a boot/resume `apply-saved` that re-applies
+  `~/.config/dellg15-toolkit/kbd.json`. The state file resolves the invoking
+  user via `PKEXEC_UID`/`SUDO_UID` (pkexec sets no `PKEXEC_USER`) so the GUI's
+  saves land in your home dir, not `/root`.
+- **"Frozen" backlight** = the OpenRGB SDK server wedged after many changes;
+  the **↻ Reset backlight** button (or `dellg15_kbd.py reset`) restarts it and
+  re-applies the saved state.
 
 ### Dedicated key binding — confirmed working
 
@@ -430,8 +505,11 @@ resolved from `PKEXEC_UID`/`SUDO_UID` since the whole app runs elevated.
 - No backup/snapshot system like the Windows tool's `state.json` — undo
   relies on each tweak's own `undo` commands being correct, not a generic
   "restore whatever was there before."
-- Runs commands sequentially on one background thread — a slow `dnf install`
-  blocks the rest of a batch/preset behind it (log still streams live).
-- Not tested against real Nobara/this laptop yet — `dnf`/`grubby`/etc. simply
-  aren't installed on the dev machine this was built on, so only the UI
-  layer and command-runner plumbing have been smoke-tested.
+- Apply/preset runs are still one item at a time (log streams live, the
+  overlay shows which item and the phase); the *status checks* on startup now
+  fan out over a thread pool.
+- The software keyboard gradient/rainbow can't be made buttery-smooth — the
+  AW-ELC controller's USB repaint rate is the ceiling. Use the firmware
+  Rainbow Cycle for smooth+fast.
+- Fan settings and (currently) the keyboard effect don't persist a reboot
+  unless the relevant tweak/service is installed.

@@ -14,11 +14,11 @@ Edition** (Ryzen 7 5800H + RTX 3050 Ti Mobile) running **Nobara Linux** (Fedora
 
 | File | Role |
 |---|---|
-| `dellg15_toolkit.py` | the GUI (ttkbootstrap `darkly`). Tabs: Dashboard, Keyboard, Presets, one per tweak/app category. Self-elevates via `pkexec`→`sudo`. |
+| `dellg15_toolkit.py` | the GUI. ttkbootstrap `darkly` re-skinned into a dark "gaming-BIOS" look with the KDE accent colour (`apply_bios_style` / `read_desktop_accent`). **Left sidebar nav** (`SidebarNav`, a drop-in for `tb.Notebook`), not a top tab strip. Pages: Dashboard, Keyboard, Fans, Presets, Updates, then one per tweak/app category (Gaming first). App-wide "busy" modal overlay with a two-bar (overall + current-task) progress display + elapsed timer (`_begin_busy` / `_poll_busy_queue`). Self-elevates via `pkexec`→`sudo`. |
 | `tray_monitor.py` | PySide6 system-tray equivalent + `--toggle`. |
 | `hotkey_listener.py` | `systemd --user` service, reads the G-key from evdev, toggles Game Mode. |
-| `sensors.py` | **shared, no GUI deps.** Sensor reads + `set_game_mode()` + `notify()` + `detect_model()`. Used by all three above. |
-| `dellg15_kbd.py` | standalone stdlib driver for the AW-ELC RGB keyboard (see quirks). |
+| `sensors.py` | **shared, no GUI deps.** Sensor reads + `set_game_mode()` + `notify()` + `detect_model()` + **fan control** (`read_fans`, `get/set_fan_boost`, `*_platform_profile`, `get_pwm_state`, `set_pwm_manual`, `restore_fan_auto`) + `dgpu_is_awake()`. `which()` is `lru_cache`d. |
+| `dellg15_kbd.py` | AW-ELC RGB keyboard driver: an `openrgb` CLI wrapper for static/zone colours + firmware effects, **plus** stdlib software animation daemons (`rainbow_wave`, `gradient_wave`) that stream per-LED frames over a hand-rolled OpenRGB SDK socket client (`_Sdk`). Detached daemons tracked by `<statedir>/fx.pid` + `stop_fx()`. |
 | `dellg15_automount.py` | scans `lsblk`, adds `/etc/fstab` entries mounting fixed internal data disks at `/mnt/<label>` with `nofail`. |
 | `config/tweaks.json`, `apps.json`, `presets.json` | the data. Tweaks have `check` / `check_pending` (staged-but-needs-reboot) / `apply` / `undo`. `{USER}` and `{TOOLKIT_DIR}` are substituted. |
 | `install.sh` | system-wide install → `/opt/dellg15-toolkit`, launcher, hicolor icon, `/usr/share/applications` desktop entry. `--uninstall` reverses it. |
@@ -52,22 +52,57 @@ ssh g15 'cd ~/DellG15Toolkit && sudo ./install.sh'    # system-install to /opt
   (hwmon) to 255/0 for the AWCC-style fan.
 - **RGB keyboard = OpenRGB only.** Alienware **AW-ELC** (USB `187c:0550`),
   `hid-generic`, no kernel driver, no SMBIOS keyboard tokens (`location=0xffff`
-  → no `kbd_backlight` LED, dead Fn key, `smbios-keyboard-ctl` → `Invalid
-  call 4/11`), mainline `alienware-wmi` has no RGB. Hand-rolled HID writes
-  (feature **and** interrupt reports) are ACK'd but never light up. What
-  works — verified live — is **OpenRGB** (`openrgb --noautoconnect -d "Dell G
-  Series LED Controller" -m Static -c RRGGBB -b 0-100`), which drives it as
-  16 logical zones. So `dellg15_kbd.py` is now a thin `openrgb` CLI wrapper
-  (keeps the old `Keyboard`/`_find`/`set_*` API as a shim). **Two
-  prerequisites:** OpenRGB installed, and the backlight **enabled in BIOS
-  setup** (it's off by default → firmware won't hand a disabled backlight to
-  the OS). 4-zone board (Left/Middle/Right/Numpad), not per-key; the 4
-  physical zones map to blocks of the 16 logical ones (even split; refine if
-  wrong). `KeyboardBacklightTimeout` tweak was removed (needed a
-  non-existent `kbd_backlight` LED).
+  → no `kbd_backlight` LED, dead Fn key), mainline `alienware-wmi` has no RGB.
+  Hand-rolled HID writes are ACK'd but never light up. What works — verified
+  live — is **OpenRGB** (`openrgb -d "Dell G Series LED Controller" -m Static
+  -c RRGGBB -b …`), 16 logical LEDs. **Prereqs:** OpenRGB installed + backlight
+  **enabled in BIOS setup** (off by default). 4 physical zones
+  (Left/Middle/Right/Numpad) = blocks of 4 logical LEDs.
+- **Keyboard brightness is inverted / degenerate.** Every mode reports
+  `brightness_min=100 / brightness_max=0`. Empirically **`-b 100` lights the
+  backlight**, lower values dim it, `-b 0` = off. (A "fix" that special-cased
+  `-b 0` for effects turned them off — reverted.)
+- **The controller repaints only ~2–4×/sec over USB.** The OpenRGB *server*
+  ingests 60 fps in microseconds, but the device shows a handful of frames/sec
+  — measured live. So a **software** per-LED wave (`rainbow_wave` /
+  `gradient_wave` streaming `UPDATE_LEDS` over `_Sdk`) can only be a **slow
+  ambient** effect: capped at `_HW_MAX_FPS` (5), frame-skip, ~24 s cycles.
+  For a **smooth, fast** rainbow use the **firmware Spectrum Cycle** mode
+  (`set_effect("spectrum", …)`) — it runs on the MCU. The firmware *Rainbow
+  Wave* mode is washed-out with dark gaps and takes no colour/direction —
+  unusable. The GUI "Rainbow Cycle" button = firmware Spectrum Cycle;
+  "Gradient wave" = the slow software daemon (1–6 OKLab anchor colours, or a
+  1-anchor comet).
+- **Colour persistence** is opt-in via the `KbdBacklightFix` tweak (installs
+  `dellg15-openrgb.service` SDK server + `dellg15-kbd.service` `apply-saved` at
+  boot + a systemd-sleep hook). State: `~/.config/dellg15-toolkit/kbd.json`
+  (`mode`/`speed`/`zones`/optional `gradient` block). **`dellg15_kbd._state_path()`
+  must resolve the real user via `PKEXEC_UID`/`SUDO_UID` too** — pkexec sets no
+  `PKEXEC_USER`, so a naive `~` lands in `/root` and the boot service never
+  sees the GUI's saves (this was the "colour doesn't persist" bug).
+- **Backlight "freezes"** = the OpenRGB SDK server wedged after many mode
+  changes (CLI still exits 0, hardware stuck). Fix: restart
+  `dellg15-openrgb` — `dellg15_kbd.restart_server()` / `reset()`, GUI "↻ Reset
+  backlight" button.
+- **Fans (5515):** `hwmon/alienware_wmi` has `fan{1,2}_input` (RPM, ro),
+  `fan{1,2}_label` = CPU/GPU Fan, and **`fan{1,2}_boost` 0–255 RW** — an
+  *additive* AWCC-style boost (can't slow a fan below the auto curve → the
+  safe lever). `hwmon/dell_smm` has `pwm{1,2}` + `pwm{1,2}_enable`
+  (0 full / 1 manual / 2 auto; reads "No data" in auto) — real manual control,
+  risky, floored at `sensors.PWM_FLOOR` (77). Thermal profile =
+  `/sys/firmware/acpi/platform_profile` (`balanced performance custom`). The
+  Fans tab exposes profile + boost sliders + presets, with manual PWM behind
+  a warning.
 - **`dnf` GPG**: Nobara serves some rawhide-based (`.fc44`) packages signed
   with the **Fedora 44** key, which ships on disk un-imported. Fix once with
-  `sudo rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-44-primary`.
+  `sudo rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-44-primary` (the
+  Updates tab has a "Fix Fedora GPG keys" button).
+- **Updates tab** wraps `nobara-sync` (check-updates / `cli` / install-updates
+  / install-fixups / repair) + per-manager sections (dnf, Flatpak, fwupd) +
+  an "Update everything". The pending-update counter uses `dnf -q --cacheonly
+  check-update` — a plain `dnf check-update` can take **3+ min** on this box's
+  mirrors, so the count is "as of last metadata sync" and self-corrects after
+  any check/update.
 - **RAPL** (`/sys/class/powercap/*/energy_uj`) is already world-readable on
   Nobara 43 — the `RaplPowerPermissions` tweak is usually a no-op there.
 - Nobara ships `nobara-automount` (transient `/run/media` model) — this repo
@@ -78,10 +113,14 @@ ssh g15 'cd ~/DellG15Toolkit && sudo ./install.sh'    # system-install to /opt
 
 ## Conventions
 
-- Commit messages: subject + body only. **No `Co-Authored-By` / attribution
-  trailers** (per the user's global rule).
-- Feature branches → merge to `main` (`--no-ff`), delete the branch.
+- Commit messages: **no `Co-Authored-By` / attribution / session trailers of
+  any kind** (per the user's global rule) — the message is just the change.
 - Helper `check`/`apply` scripts must `exit 0` on harmless noise — a non-zero
   exit from e.g. `nvidia-settings` used to surface as "Game Mode failed".
 - Tk is not thread-safe: worker threads hand results back via a `queue` + an
-  `after()` poller (see `status_queue` / `_poll_status_queue`).
+  `after()` poller (see `status_queue` / `_poll_status_queue` /
+  `_poll_busy_queue`). The keyboard software daemons run as **detached**
+  processes, not threads.
+- Colour maths in `dellg15_kbd.py` is **stdlib only** (`colorsys` + a small
+  sRGB↔linear↔OKLab↔OKLCH set) — no numpy/Pillow.
+- No-hardware self-tests: `dellg15_kbd.py rainbow-test` / `gradient-test`.
