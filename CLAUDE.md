@@ -136,10 +136,16 @@ ssh g15 'cd ~/DellG15Toolkit && sudo ./install.sh'    # system-install to /opt
   sRGB↔linear↔OKLab↔OKLCH set) — no numpy/Pillow.
 - No-hardware self-tests: `dellg15_kbd.py rainbow-test` / `gradient-test`.
 - Diagnostics: `collect_debug_report()` (module-level, `_DEBUG_CMDS` list +
-  `_diag_fans`) assembles the hw/OS/toolkit dump; the **Diagnostics** page and
-  `dellg15_toolkit.py --debug` / `--report` both use it. `_DEBUG_CMDS` is
-  where to add commands. `RRGB` canvas gauges: never name a field `self._w`
-  on a `tk.Canvas` subclass — it clobbers the widget pathname.
+  `_diag_fans`) assembles the readable hw/OS/toolkit dump — every shell probe
+  runs as `timeout -k 2 12 bash -lc …`. `collect_hw_bundle()` (`_HW_BUNDLE_FILES`
+  + `_decode_key_caps` which turns `/proc/bus/input/devices` `B: KEY=` bitmaps
+  into KEY_ names) writes a `.tar.gz` of raw dumps for onboarding a new laptop
+  model. CLI: `--debug` / `--report` / `--collect [dir]`. GUI **Diagnostics**
+  page: Generate report → "⧉ Copy for GitHub issue" (wrapped `<details>` block
+  via `wrap_issue_block`), "Copy full issue", "Collect hardware bundle". Two
+  issue templates in `.github/ISSUE_TEMPLATE/` (bug + hardware_support).
+  `RingGauge` canvas gauges: never name a field `self._w` on a `tk.Canvas`
+  subclass — it clobbers the widget pathname.
 - **Roadmap:** this is meant to become a general gaming-laptop tool; right now
   every `config/*.json` entry and hardware path assumes the G15 5515. When
   generalising, gate per-model (DMI) rather than assuming.

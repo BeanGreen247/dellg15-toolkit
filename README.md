@@ -194,11 +194,22 @@ keys sit on), OpenRGB device list, package versions, and filtered
 `dmesg` / `journalctl` errors — the same kind of dump used to bring the G-key
 up in the first place. Buttons: **Copy report**, **Save to file…**, and
 **Copy GitHub issue template** (pre-filled sections to paste on the tracker).
-Terminal equivalent:
+**Collect hardware bundle (.tar.gz)** does more: it writes a folder of *raw*
+dumps — full DMI, `lspci -vvv`, `lsusb -v`, `/proc/bus/input/devices` plus a
+**decoded per-device KEY-capability list** (every Fn / media / vendor key each
+evdev device can emit, no live `evtest` needed), the whole `/sys/class/hwmon`
+tree, ACPI/powercap, DRM/GPU, `openrgb -l --verbose`, and dmesg/journal — then
+tars it with a README. That's everything needed to add a new laptop model to
+`config/*.json` (which DMI strings to gate on, the fan/pwm hwmon paths, the
+key codes, the RGB controller layout). Attach the `.tar.gz` to a **New
+hardware support** issue.
+
+Terminal equivalents:
 
 ```bash
-sudo python3 /opt/dellg15-toolkit/dellg15_toolkit.py --debug     # full report
-sudo python3 /opt/dellg15-toolkit/dellg15_toolkit.py --report    # just the apply-status table
+sudo python3 /opt/dellg15-toolkit/dellg15_toolkit.py --debug        # full readable report
+sudo python3 /opt/dellg15-toolkit/dellg15_toolkit.py --report       # apply-status table only
+sudo python3 /opt/dellg15-toolkit/dellg15_toolkit.py --collect ~    # write the hardware bundle
 ```
 
 ## Hardware-aware gating
