@@ -20,9 +20,11 @@ Edition** (Ryzen 7 5800H + RTX 3050 Ti Mobile) running **Nobara Linux** (Fedora
 | `sensors.py` | **shared, no GUI deps.** Sensor reads + `set_game_mode()` + `notify()` + `detect_model()` + **fan control** (`read_fans`, `get/set_fan_boost`, `*_platform_profile`, `get_pwm_state`, `set_pwm_manual`, `restore_fan_auto`) + `dgpu_is_awake()`. `which()` is `lru_cache`d. |
 | `tuxthrottle_kbd.py` | AW-ELC RGB keyboard driver: an `openrgb` CLI wrapper for static/zone colours + firmware effects, **plus** stdlib software animation daemons (`rainbow_wave`, `gradient_wave`) that stream per-LED frames over a hand-rolled OpenRGB SDK socket client (`_Sdk`). Detached daemons tracked by `<statedir>/fx.pid` + `stop_fx()`. |
 | `tuxthrottle_automount.py` | scans `lsblk`, adds `/etc/fstab` entries mounting fixed internal data disks at `/mnt/<label>` with `nofail`. |
-| `config/tweaks.json`, `apps.json`, `presets.json` | the data. Tweaks have `check` / `check_pending` (staged-but-needs-reboot) / `apply` / `undo`. `{USER}` and `{TOOLKIT_DIR}` are substituted. |
+| `config/tweaks.json`, `apps.json`, `presets.json` | the data. Tweaks have `check` / `check_pending` (staged-but-needs-reboot) / `apply` / `undo`. Apps have `manager` (`dnf`/`flatpak`/`shell`), `package`, `check`, optional `install`, and — for cross-manager "already installed" detection — optional `provides` (extra shell probes), `binary` (`command -v`), `flatpak_id`. `{USER}` and `{TOOLKIT_DIR}` are substituted. |
 | `install.sh` | system-wide install → `/opt/tuxthrottle`, launcher, hicolor icon, `/usr/share/applications` desktop entry. Also stamps `/opt/tuxthrottle/.version` (git describe). `--uninstall` removes just the app. |
 | `uninstall.sh` | remove the tool (default: app + per-user config, tweaks kept). `--purge` also undoes every tweak's system bits (services, helper scripts, sudoers, drop-ins); `--grub` / `--fstab` / `--pip` / `--all` for the boot-affecting extras. Never touches installed apps. |
+| `verify-install.sh` | read-only post-install sanity check — run on the target (`sudo ./verify-install.sh`): no legacy residue, `/opt/tuxthrottle` intact, launcher + `--report` + module self-tests OK, GUI builds with "Report a Bug" wired, hw-bundle prefix. Prints `N passed, M failed`. |
+| `purge-legacy-dellg15.sh` | one-shot cleanup of a **pre-rebrand** install (`dellg15-*` units / bins / drop-ins / `~/.config/dellg15-toolkit` / menu entry). Only touches paths whose name contains `dellg15`; `--migrate-config` copies old `kbd.json`/`state.json` to `~/.config/tuxthrottle` first; `--dry-run` previews. Already run on g15. |
 | `.github/ISSUE_TEMPLATE/` | GitHub bug-report template — asks for the output of the Report a Bug page / `--debug`. |
 | `assets/` | `icon.svg` (Tux centred in a redlined throttle gauge, amber boost flame, graphite plate) + rendered PNGs. |
 
@@ -132,6 +134,17 @@ ssh g15 'cd ~/tuxthrottle && sudo ./install.sh'    # system-install to /opt
   → `drifted` (we applied it, check now fails) and `failed` (our last attempt
   errored). "Status report" button / `python3 tuxthrottle.py --report`
   print the full table (`format_status_report`).
+- **App-install detection** (`Item.__init__`, apps only): an app counts as
+  installed if present by *any* route — its own `check` OR-folded with each
+  `provides` probe, a `command -v {binary}`, and (for `manager: flatpak`) a
+  system-or-per-user probe of the app-id. `_run_item_apply` re-runs that check
+  right before installing and skips if it now passes, so Apply/Presets never
+  add a second, colliding copy. **Native rpm is preferred**: Heroic / Prism /
+  Protontricks / Minigalaxy / Bottles / Discord / Sunshine are `manager: dnf`
+  with the Flatpak id kept only as a probe. **Steam / OpenRGB / gamescope /
+  MangoHud / vkBasalt are native-only** — a Flatpak of these is *not* accepted
+  (sandbox breaks controller/udev, mods, `LD_PRELOAD` layers; SteamOS ships
+  Steam native too).
 - Colour maths in `tuxthrottle_kbd.py` is **stdlib only** (`colorsys` + a small
   sRGB↔linear↔OKLab↔OKLCH set) — no numpy/Pillow.
 - No-hardware self-tests: `tuxthrottle_kbd.py rainbow-test` / `gradient-test`.
