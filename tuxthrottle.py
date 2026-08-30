@@ -2049,7 +2049,56 @@ class ToolkitApp:
                   command=lambda: self._snapshot_rollback("last")).pack(anchor="w", pady=(0, 8))
         self._snap_list = tb.Frame(sf); self._snap_list.pack(fill="x")
 
+        gpf = tb.Labelframe(frame, text="Per-game auto-profiles", padding=12)
+        gpf.pack(fill="x", pady=6)
+        tb.Label(gpf, wraplength=1000, justify="left", bootstyle=SECONDARY, text=(
+            "When a listed process is running (match on the executable name — for "
+            "Proton games that's the Windows .exe), the daemon snapshots the "
+            "current state and applies the chosen profile, then restores it when "
+            "the game exits. Use \"*\" to match any Feral GameMode session. Needs "
+            "the “Fan-curve + AC-switch daemon” tweak enabled.")).pack(anchor="w", pady=(0, 8))
+        cfg = self._read_power_state("powerd.json").get("game_profiles", {})
+        self._gp_enabled = tk.BooleanVar(value=bool(cfg.get("enabled")))
+        tb.Checkbutton(gpf, text="Per-game auto-profiles enabled", variable=self._gp_enabled,
+                       bootstyle="round-toggle").pack(anchor="w")
+        self._gp_rows = []
+        grid = tb.Frame(gpf); grid.pack(anchor="w", pady=(8, 4))
+        tb.Label(grid, text="Process (exe name)", width=26, bootstyle=SECONDARY).grid(row=0, column=0)
+        tb.Label(grid, text="Profile", width=20, bootstyle=SECONDARY).grid(row=0, column=1)
+        items = list((cfg.get("match") or {}).items())
+        for r in range(4):
+            proc, prof = items[r] if r < len(items) else ("", "")
+            pv = tk.StringVar(value=proc); cv = tk.StringVar(value=prof)
+            tb.Entry(grid, textvariable=pv, width=26).grid(row=r + 1, column=0, padx=3, pady=2)
+            cb = tb.Combobox(grid, textvariable=cv, width=18, state="readonly")
+            cb.grid(row=r + 1, column=1, padx=3, pady=2)
+            self._gp_rows.append((pv, cv, cb))
+        drow = tb.Frame(gpf); drow.pack(anchor="w", pady=(4, 0))
+        tb.Label(drow, text="When no game runs →").pack(side="left")
+        self._gp_default = tk.StringVar(value=cfg.get("default") or "")
+        self._gp_default_cb = tb.Combobox(drow, textvariable=self._gp_default, width=18,
+                                          state="readonly")
+        self._gp_default_cb.pack(side="left", padx=6)
+        tb.Label(drow, text="(blank = roll back the pre-game snapshot)",
+                 bootstyle=SECONDARY).pack(side="left")
+        tb.Button(gpf, text="Save game map", bootstyle=SUCCESS,
+                  command=self._gameprof_save).pack(anchor="w", pady=(10, 0))
+
         self._profiles_refresh()
+
+    def _gameprof_save(self):
+        match = {pv.get().strip(): cv.get() for pv, cv, _ in self._gp_rows
+                 if pv.get().strip() and cv.get()}
+        merged = self._read_power_state("powerd.json") or {}
+        merged["game_profiles"] = {
+            "enabled": bool(self._gp_enabled.get()),
+            "poll_s": 6,
+            "match": match,
+            "default": self._gp_default.get().strip() or None,
+        }
+        self._write_power_state("powerd.json", merged)
+        self._log(f"[Profiles] game map saved ({'on' if self._gp_enabled.get() else 'off'}): "
+                  f"{match or '(empty)'} default={self._gp_default.get() or '(rollback)'}")
 
     def _profiles_refresh(self):
         for box in (self._prof_list, self._snap_list):
@@ -2063,6 +2112,10 @@ class ToolkitApp:
             self._prof_preview.configure(text=f"(capture preview failed: {exc})")
 
         names = tuxthrottle_profiles.list_profiles(self.user)
+        for _pv, _cv, cb in getattr(self, "_gp_rows", []):
+            cb.configure(values=[""] + names)
+        if getattr(self, "_gp_default_cb", None) is not None:
+            self._gp_default_cb.configure(values=[""] + names)
         if not names:
             tb.Label(self._prof_list, text="(no profiles yet)", bootstyle=SECONDARY).pack(anchor="w")
         for name in names:

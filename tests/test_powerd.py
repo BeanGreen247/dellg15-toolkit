@@ -87,3 +87,38 @@ def test_fancontroller_restores_on_disable(monkeypatch):
     fc.tick({"fan_curve": {"enabled": True, "sensor": "cpu", "points": CURVE}})
     fc.tick({"fan_curve": {"enabled": False}})
     assert calls["restore"] == 1
+
+
+def test_gameprofile_applies_on_hit_and_restores(monkeypatch):
+    events = []
+    monkeypatch.setattr(pd, "_running_procs", lambda: {"gta5.exe"})
+    monkeypatch.setattr(pd.profiles, "snapshot", lambda *a, **k: events.append("snapshot"))
+    monkeypatch.setattr(pd.profiles, "load_profile", lambda n, u=None: {"platform_profile": "performance"})
+    monkeypatch.setattr(pd.profiles, "apply_state",
+                        lambda st, u=None: events.append(("apply", st)) or [{"key": "platform_profile", "ok": True, "msg": ""}])
+    monkeypatch.setattr(pd.profiles, "rollback",
+                        lambda t, u=None: events.append(("rollback", t)) or [{"key": "-", "ok": True, "msg": ""}])
+    gc = pd.GameProfileController("bean")
+    cfg = {"game_profiles": {"enabled": True, "match": {"gta5.exe": "Gaming"}, "default": None}}
+    gc.tick(cfg)
+    assert gc._active_key == "gta5.exe"
+    assert "snapshot" in events and any(e[0] == "apply" for e in events if isinstance(e, tuple))
+    # game exits
+    monkeypatch.setattr(pd, "_running_procs", lambda: set())
+    gc.tick(cfg)
+    assert gc._active_key is None
+    assert any(e[0] == "rollback" for e in events if isinstance(e, tuple))
+
+
+def test_gameprofile_wildcard_needs_gamemode(monkeypatch):
+    monkeypatch.setattr(pd, "_running_procs", lambda: set())
+    monkeypatch.setattr(pd.sensors, "gamemode_status", lambda: {"active": True})
+    monkeypatch.setattr(pd.profiles, "snapshot", lambda *a, **k: None)
+    monkeypatch.setattr(pd.profiles, "load_profile", lambda n, u=None: {"platform_profile": "performance"})
+    applied = []
+    monkeypatch.setattr(pd.profiles, "apply_state",
+                        lambda st, u=None: applied.append(st) or [{"key": "x", "ok": True, "msg": ""}])
+    gc = pd.GameProfileController("bean")
+    gc.tick({"game_profiles": {"enabled": True, "match": {"*": "Performance"}, "default": None}})
+    assert gc._active_key == "*"
+    assert applied
