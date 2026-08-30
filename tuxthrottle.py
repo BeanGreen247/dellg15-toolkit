@@ -163,10 +163,12 @@ ACCENT_FALLBACK = "#3daee9"   # Breeze blue, if the desktop accent can't be read
 BIOS_PANEL = "#141a21"        # the surface — all widget backgrounds
 BIOS_SUNKEN = "#0b0e12"       # troughs / window ground (darker, so troughs read)
 BIOS_BG = BIOS_SUNKEN         # back-compat alias (busy overlay etc.)
-BIOS_PANEL_HI = "#1e2731"     # hover / selected nav row
+BIOS_PANEL_HI = "#212c38"     # hover / selected nav row / disclosure headers
 BIOS_FG = "#e6edf3"
-BIOS_MUTED = "#93a1b1"
-BIOS_BORDER = "#2a3340"
+BIOS_MUTED = "#a6b4c4"        # secondary text — lifted for legibility on the dark panel
+BIOS_BORDER = "#3c4a5b"       # card / labelframe hairline — clearly visible, not invisible
+BIOS_BORDER_HI = "#5a6b7e"    # stronger edge for the active / hovered card
+BIOS_CARD = "#1b2531"         # a subtle lift above BIOS_PANEL for raised panels / rows
 HELP_AMBER = "#e8a33d"         # the "support / bug report" accent (warm, != KDE accent)
 HELP_BANNER_BG = "#2a2314"     # dark amber tint behind the bug-report banner
 
@@ -263,10 +265,24 @@ def apply_bios_style(style: "tb.Style", accent: str) -> None:
         "TFrame": {"background": BIOS_PANEL},
         "TLabel": {"background": BIOS_PANEL, "foreground": BIOS_FG},
         "TLabelframe": {"background": BIOS_PANEL, "bordercolor": BIOS_BORDER,
-                        "darkcolor": BIOS_PANEL, "lightcolor": BIOS_PANEL,
-                        "relief": "flat"},
+                        "darkcolor": BIOS_BORDER, "lightcolor": BIOS_BORDER,
+                        "relief": "solid", "borderwidth": 1},
         "TLabelframe.Label": {"background": BIOS_PANEL, "foreground": accent_txt,
                               "font": ("Sans", 10, "bold")},
+        # a visible click-to-expand header bar (About "What's inside", etc.)
+        "Disclosure.TButton": {"background": BIOS_PANEL_HI, "foreground": accent_txt_hi,
+                               "bordercolor": BIOS_BORDER_HI, "focuscolor": "",
+                               "font": ("Sans", 10, "bold"), "anchor": "w",
+                               "relief": "solid", "borderwidth": 1,
+                               "padding": (12, 9)},
+        # a slightly raised surface for panels / rows that should stand off the page
+        "Card.TFrame": {"background": BIOS_CARD, "bordercolor": BIOS_BORDER,
+                        "darkcolor": BIOS_BORDER, "lightcolor": BIOS_BORDER,
+                        "relief": "solid", "borderwidth": 1},
+        "CardRow.TFrame": {"background": BIOS_CARD, "borderwidth": 0, "relief": "flat"},
+        "Card.TLabel": {"background": BIOS_CARD, "foreground": BIOS_FG},
+        "CardKey.TLabel": {"background": BIOS_CARD, "foreground": accent_txt_hi,
+                           "font": ("Sans", 10, "bold")},
         "TCheckbutton": {"background": BIOS_PANEL, "foreground": BIOS_FG},
         "TRadiobutton": {"background": BIOS_PANEL, "foreground": BIOS_FG},
         "TSeparator": {"background": BIOS_BORDER},
@@ -330,6 +346,13 @@ def apply_bios_style(style: "tb.Style", accent: str) -> None:
                       foreground=[("active", hover)])
         except Exception:  # noqa: BLE001
             pass
+    try:
+        style.map("Disclosure.TButton",
+                  background=[("active", _mix(BIOS_PANEL_HI, "#ffffff", 0.06))],
+                  bordercolor=[("active", accent)],
+                  foreground=[("active", hover)])
+    except Exception:  # noqa: BLE001
+        pass
     try:
         style.map("TNotebook.Tab",
                   background=[("selected", BIOS_PANEL_HI), ("active", BIOS_PANEL_HI)],
@@ -3152,11 +3175,11 @@ class ToolkitApp:
     def _toggle_about_features(self):
         self._about_open = not self._about_open
         if self._about_open:
-            self._about_body.pack(anchor="w", fill="x")
-            self._about_btn.configure(text="▾  What's inside")
+            self._about_body.pack(fill="x")
+            self._about_btn.configure(text="▾   What's inside  —  click to collapse")
         else:
             self._about_body.pack_forget()
-            self._about_btn.configure(text="▸  What's inside")
+            self._about_btn.configure(text="▸   What's inside  —  every section, expanded")
 
     def _build_about_tab(self):
         outer = tb.Frame(self.notebook)
@@ -3185,13 +3208,14 @@ class ToolkitApp:
             "general-purpose distro tool.")).pack(anchor="w", pady=(0, 10))
 
         # "What's inside" — a click-to-expand dropdown listing every section
-        feat = tb.Labelframe(frame, text="", padding=(4, 2))
-        feat.pack(fill="x", pady=6)
+        feat = tb.Frame(frame)
+        feat.pack(fill="x", pady=(4, 8))
         self._about_open = False
-        self._about_btn = tb.Button(feat, text="▸  What's inside", bootstyle=(SECONDARY, "link"),
-                                    takefocus=False, command=self._toggle_about_features)
-        self._about_btn.pack(anchor="w")
-        self._about_body = tb.Frame(feat, padding=(14, 4, 4, 8))
+        self._about_btn = tb.Button(feat, text="▸   What's inside  —  click to see every section",
+                                    style="Disclosure.TButton", takefocus=False,
+                                    command=self._toggle_about_features)
+        self._about_btn.pack(fill="x")
+        self._about_body = tb.Frame(feat, style="Card.TFrame", padding=(16, 12, 12, 12))
         for name, desc in (
             ("Dashboard", "live CPU / iGPU / dGPU clocks, temps, power; rolling history sparklines; session CSV log; Game Mode toggle"),
             ("Keyboard", "AW-ELC RGB — whole-keyboard solid colour, brightness, firmware Spectrum Cycle"),
@@ -3205,11 +3229,12 @@ class ToolkitApp:
             ("tuxthrottlectl", "headless CLI (status / get / set / profile / snapshot / rollback / gamemode, --json) for scripts, keybinds and ssh"),
             ("Report a Bug", "read-only hardware / OS dump for GitHub issues"),
         ):
-            row = tb.Frame(self._about_body); row.pack(anchor="w", fill="x", pady=1)
-            tb.Label(row, text=f"•  {name}", font=("Sans", 10, "bold"),
-                     width=16, anchor="w").pack(side="left", anchor="n")
+            row = tb.Frame(self._about_body, style="CardRow.TFrame")
+            row.pack(anchor="w", fill="x", pady=2)
+            tb.Label(row, text=f"▸  {name}", font=("Sans", 10, "bold"),
+                     width=16, anchor="w", style="CardKey.TLabel").pack(side="left", anchor="n")
             tb.Label(row, text=desc, wraplength=900, justify="left",
-                     bootstyle=SECONDARY).pack(side="left", anchor="n")
+                     style="Card.TLabel").pack(side="left", anchor="n")
 
         link = tb.Labelframe(frame, text="Project", padding=12)
         link.pack(fill="x", pady=6)
