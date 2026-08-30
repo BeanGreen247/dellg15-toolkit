@@ -1464,6 +1464,27 @@ class ToolkitApp:
                   bootstyle=(WARNING, "outline"),
                   command=self._saves_import_entry).pack(side="left")
 
+        tb.Separator(pf).pack(fill="x", pady=(10, 6))
+        tb.Label(pf, bootstyle=SECONDARY, wraplength=1100, justify="left",
+                 text="Save-game vault — a folder on a SEPARATE drive (not the OS/Steam "
+                      "drive) holding a copy of every game's saves as <vault>/<appid>/… . "
+                      "Export copies saves out of the prefix(es) into it; Import copies "
+                      "them back. Leave the AppID field blank to do every prefix at once. "
+                      "Close Steam before importing.").pack(anchor="w")
+        vrow = tb.Frame(pf); vrow.pack(anchor="w", fill="x", pady=(6, 2))
+        tb.Label(vrow, text="Vault folder:").pack(side="left")
+        self._vault_var = tk.StringVar(value=self._load_saves_vault())
+        tb.Entry(vrow, textvariable=self._vault_var, width=52).pack(side="left", padx=(4, 4))
+        tb.Button(vrow, text="Browse…", bootstyle=(SECONDARY, "outline"),
+                  command=self._vault_browse).pack(side="left")
+        vrow2 = tb.Frame(pf); vrow2.pack(anchor="w", fill="x", pady=(2, 0))
+        tb.Button(vrow2, text="List vault", bootstyle=(INFO, "outline"),
+                  command=lambda: self._vault_cmd("list")).pack(side="left")
+        tb.Button(vrow2, text="Export saves → vault", bootstyle=(WARNING, "outline"),
+                  command=lambda: self._vault_cmd("export")).pack(side="left", padx=6)
+        tb.Button(vrow2, text="Import saves ← vault", bootstyle=(WARNING, "outline"),
+                  command=lambda: self._vault_cmd("import")).pack(side="left")
+
         tb.Separator(outer).pack(fill="x")
 
         gnb = tb.Notebook(outer)
@@ -1648,9 +1669,14 @@ class ToolkitApp:
 
     # ---- Proton prefix relocation (general, any Steam appid) ----
 
-    def _prefix_helper_cmd(self, args: str) -> str:
+    def _user_py(self, script: str, args: str) -> str:
+        """`su - <user> -c 'python3 <BASE_DIR>/<script> <args>'` — run a helper
+        as the real user (the GUI itself is elevated)."""
         return (f"su - {shlex.quote(self.user)} -c "
-                f"{shlex.quote(f'python3 {BASE_DIR}/tuxthrottle_prefix_relocate.py {args}')}")
+                f"{shlex.quote(f'python3 {BASE_DIR}/{script} {args}')}")
+
+    def _prefix_helper_cmd(self, args: str) -> str:
+        return self._user_py("tuxthrottle_prefix_relocate.py", args)
 
     def _prefix_scan(self):
         self._run_stream("scan Steam prefixes for NTFS/exFAT problems",
@@ -1722,6 +1748,77 @@ class ToolkitApp:
         self._run_stream(f"import loose saves for AppID {appid}",
                          self._prefix_helper_cmd(f"--saves-import {appid}"),
                          tag="Prefix tools")
+
+    # ---- save-game vault (bulk export/import to a folder on another drive) ----
+
+    def _saves_vault_file(self) -> "Path":
+        try:
+            home = Path(pwd.getpwnam(self.user).pw_dir)
+        except (KeyError, Exception):  # noqa: BLE001
+            home = Path.home()
+        return home / ".config" / "tuxthrottle" / "saves_vault"
+
+    def _load_saves_vault(self) -> str:
+        try:
+            return self._saves_vault_file().read_text().strip()
+        except OSError:
+            return ""
+
+    def _save_saves_vault(self, path: str) -> None:
+        f = self._saves_vault_file()
+        try:
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(path.strip() + "\n")
+            if os.geteuid() == 0:
+                pw = pwd.getpwnam(self.user)
+                for p in (f, f.parent):
+                    try:
+                        os.chown(p, pw.pw_uid, pw.pw_gid)
+                    except OSError:
+                        pass
+        except (OSError, KeyError):
+            pass
+
+    def _vault_browse(self):
+        from tkinter import filedialog
+        try:
+            start = pwd.getpwnam(self.user).pw_dir
+        except KeyError:
+            start = os.path.expanduser("~")
+        d = filedialog.askdirectory(
+            parent=self.root, initialdir=start,
+            title="Pick a save-vault folder on a SEPARATE drive (not the OS/Steam drive)")
+        if d:
+            self._vault_var.set(d)
+            self._save_saves_vault(d)
+
+    def _vault_cmd(self, mode: str):
+        vault = (self._vault_var.get() or "").strip()
+        if not vault:
+            messagebox.showinfo(
+                "Pick a vault folder",
+                "Choose the save-vault folder first (Browse…). It has to be on a "
+                "separate drive — not the OS / Steam drive.")
+            return
+        self._save_saves_vault(vault)
+        appid = (self._prefix_appid_var.get() or "").strip()
+        who = appid if appid.isdigit() else "all"
+        who_txt = f"AppID {appid}" if appid.isdigit() else "EVERY prefix"
+        if mode in ("export", "import"):
+            if mode == "export":
+                detail = (f"Copy save data for {who_txt} FROM the prefix(es) INTO "
+                          f"the vault:\n{vault}\n\nExisting vault files are overwritten.")
+            else:
+                detail = (f"Copy save data for {who_txt} FROM the vault:\n{vault}\n"
+                          f"INTO the prefix(es).\n\nExisting prefix save files are "
+                          f"overwritten by the vault copy. Close Steam first.")
+            if not messagebox.askyesno(f"{mode.capitalize()} save vault", detail):
+                return
+        self._run_stream(
+            f"save vault {mode} ({who_txt})",
+            self._user_py("tuxthrottle_savevault.py",
+                          f"{mode} {shlex.quote(vault)} {who}"),
+            tag="Save vault")
 
     def _run_game_all(self, gid: str):
         """Run every step of a game that has a `run` command, in order,

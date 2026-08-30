@@ -227,6 +227,15 @@ copies stay put until you've confirmed the saves work. Backed by
 `tuxthrottle_prefix_relocate.py` (`--scan` / `--all` / `--saves-scan` /
 `--saves` / `--saves-all` / `--saves-import`), also usable standalone.
 
+A **save-game vault** row does bulk backup/restore: point it at a folder on
+a **separate drive** (not the OS/Steam drive — enforced), then **Export
+saves → vault** copies `Documents` / `Saved Games` / `AppData\Roaming` /
+`AppData\LocalLow` out of the prefix into `<vault>/<appid>/…`, and **Import
+saves ← vault** copies them back. Blank AppID field = every prefix at once;
+**List vault** shows what's stored. Backed by `tuxthrottle_savevault.py`
+(`list` / `export` / `import`); the vault path is remembered in
+`~/.config/tuxthrottle/saves_vault`.
+
 > **GTA V Online note:** the walkthrough gets you a working prefix and
 > **Story Mode**. GTA *Online* (Enhanced, Steam AppID 3240220) is **not**
 > playable on Linux — Rockstar does not allow-list Proton for its BattlEye,
