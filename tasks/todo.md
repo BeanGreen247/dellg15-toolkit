@@ -31,17 +31,31 @@
       buttons (`PROJECT_URL`, `_open_url` via `sudo -u {user} xdg-open`),
       hardware + MIT-license details. Verified on g15: 18 pages, verify-install 21/0.
 
-## Queued
-- [ ] Phase 2: Battery charge limit (core + tweak + slider)
-- [ ] Phase 3: NVIDIA power-limit slider (core + tweak + slider)
-- [ ] Phase 4: Feral GameMode bridge (`GameModeBridge` tweak + dashboard status)
-- [ ] Phase 5: Closed-loop fan curve (`tuxthrottle_powerd.py` + `FanCurveDaemon` tweak + Fans editor)
-- [ ] Phase 6: AC/battery auto profile switch (into powerd + Power&Limits dropdowns)
-- [ ] Phase 7: `tuxthrottlectl` CLI
-- [ ] Phase 8: Hybrid graphics mode switch (GPU tab, EnvyControl wrapper)
+## Done (cont.)
+- [x] Phase 5: Closed-loop fan curve — `tuxthrottle_powerd.py` (stdlib daemon:
+      temp→curve→additive fanN_boost, hysteresis, restores auto on SIGTERM),
+      `FanCurveDaemon` tweak (systemd unit runs it from {TOOLKIT_DIR}), Fans-tab
+      editor (5-point table + live curve canvas + sensor/hysteresis + Save).
+      VERIFIED on g15: `once` mode read 58C→52% boost, applied, restored to [0,0].
+- [x] Phase 6: AC/battery auto-switch — folded into `tuxthrottle_powerd.py`
+      (watches AC*/online, applies Quiet/Balanced/Performance bundle =
+      platform_profile + ryzenadj preset). Power&Limits section: enable toggle +
+      On-AC / On-battery comboboxes + Save (merges into powerd.json).
+- [x] Phase 7: `tuxthrottlectl` — stdlib argparse CLI over sensors.py
+      (status / get / set profile|tdp|fan-boost|battery|nvpl|gpumode / gamemode,
+      --json, non-zero exit on failure). install.sh/uninstall.sh manage the
+      /usr/local/bin/tuxthrottlectl launcher. VERIFIED on g15.
+- [x] Phase 8: Hybrid graphics — `sensors.gpu_mode_get/set` (EnvyControl wrapper),
+      Power&Limits section (integrated/hybrid/nvidia radios + Apply + logout
+      warning); hidden with an "install EnvyControl" note when it's absent
+      (that path confirmed on g15). Also `tuxthrottlectl get/set gpumode`.
 
-## Post
-- [ ] Deploy to g15 + relaunch, `--report` clean, GUI smoke
-- [ ] verify-install.sh green
-- [ ] README + CLAUDE.md updated
+## Post (polish — do last)
+- [ ] README: add Power & Limits + the 6 new tweaks + tuxthrottlectl to the tables
+- [ ] CLAUDE.md: fold in the 3 hw findings (STAPM floor / no battery sysfs /
+      NVPL firmware-locked) + `tuxthrottle_powerd.py` + `tuxthrottlectl.py` +
+      the new tweaks in the layout table
+- [ ] Battery threshold on the 5515 via libsmbios/smbios-battery-ctl (optional)
+- [ ] Older backlog: Updates stale-count → timestamp/spinner; auto-hide RAPL
+      tweak on Nobara 43; delete dead rainbow_wave/gradient_wave code
 - [ ] Update memory `tuxthrottle-improvement-backlog`
