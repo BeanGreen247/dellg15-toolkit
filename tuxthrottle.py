@@ -1444,7 +1444,9 @@ class ToolkitApp:
         row = tb.Frame(pf); row.pack(anchor="w", fill="x", pady=(8, 0))
         tb.Button(row, text="Scan Steam prefixes", bootstyle=(INFO, "outline"),
                   command=self._prefix_scan).pack(side="left")
-        tb.Label(row, text="   AppID:").pack(side="left")
+        tb.Button(row, text="Migrate all at-risk prefixes", bootstyle=(WARNING, "outline"),
+                  command=self._prefix_migrate_all).pack(side="left", padx=6)
+        tb.Label(row, text="   or one — AppID:").pack(side="left")
         self._prefix_appid_var = tk.StringVar()
         tb.Entry(row, textvariable=self._prefix_appid_var, width=12).pack(side="left", padx=(2, 6))
         tb.Button(row, text="Relocate this prefix", bootstyle=(WARNING, "outline"),
@@ -1641,6 +1643,18 @@ class ToolkitApp:
     def _prefix_scan(self):
         self._run_stream("scan Steam prefixes for NTFS/exFAT problems",
                          self._prefix_helper_cmd("--scan"), tag="Prefix tools")
+
+    def _prefix_migrate_all(self):
+        if not messagebox.askyesno(
+            "Migrate all at-risk prefixes",
+            "Move every Proton prefix that's on an NTFS/exFAT drive onto your "
+            "Linux drive (symlink left in place). Game files aren't touched.\n\n"
+            "Close Steam and all games first. Run “Scan Steam prefixes” beforehand "
+            "if you want to see the list.",
+        ):
+            return
+        self._run_stream("migrate all at-risk Proton prefixes",
+                         self._prefix_helper_cmd("--all"), tag="Prefix tools")
 
     def _prefix_relocate_entry(self):
         appid = (self._prefix_appid_var.get() or "").strip()

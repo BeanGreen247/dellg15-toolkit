@@ -19,6 +19,8 @@ Usage:
                                                               # 1 if it needs moving
     python3 tuxthrottle_prefix_relocate.py --scan             # list every prefix
                                                               # and its status
+    python3 tuxthrottle_prefix_relocate.py --all              # relocate every
+                                                              # at-risk prefix
 
 Run it as the real user (not root); close Steam / the game first.
 """
@@ -114,9 +116,10 @@ def steam_running() -> bool:
         return False
 
 
-def do_scan(root: Path) -> int:
+def all_prefixes(root: Path) -> list[tuple[str, str, str, Path]]:
+    """(appid, name, status, library) for every compatdata prefix, deduped."""
     seen: set[str] = set()
-    rows: list[tuple[str, str, str, str]] = []
+    rows: list[tuple[str, str, str, Path]] = []
     for lib in all_libraries(root):
         cd = lib / "steamapps" / "compatdata"
         if not cd.is_dir():
@@ -127,7 +130,12 @@ def do_scan(root: Path) -> int:
             seen.add(entry.name)
             status, _ = classify(lib, entry.name)
             rows.append((entry.name, appid_name(root, entry.name) or "?",
-                         status, str(lib)))
+                         status, lib))
+    return rows
+
+
+def do_scan(root: Path) -> int:
+    rows = all_prefixes(root)
     if not rows:
         print("no Proton prefixes found.")
         return 0
@@ -142,10 +150,42 @@ def do_scan(root: Path) -> int:
     print()
     if need:
         print(f"{need} prefix(es) NEED FIX — run:  "
-              f"python3 tuxthrottle_prefix_relocate.py <appid>   (Steam closed)")
+              f"python3 tuxthrottle_prefix_relocate.py <appid>   (or --all)   "
+              f"(Steam closed)")
     else:
         print("all prefixes are fine.")
     return 0
+
+
+class RelocateError(RuntimeError):
+    pass
+
+
+def relocate_one(root: Path, appid: str, lib: Path | None = None) -> None:
+    """Move compatdata/<appid> off a colon-hostile filesystem and symlink it
+    back. Raises RelocateError on any blocker."""
+    if lib is None:
+        lib = library_for_appid(root, appid)
+    if lib is None:
+        raise RelocateError(f"appid {appid} not found in any Steam library")
+    status, src = classify(lib, appid)
+    dst = root / "steamapps" / "compatdata" / appid
+    if status != "needs-fix":
+        raise RelocateError(f"{appid}: status is '{status}', not moving")
+    if src.resolve() == dst.resolve():
+        raise RelocateError(
+            f"{appid}: its library ({lib}) is the bad filesystem AND the main "
+            f"Steam library — move the game to a Linux drive instead")
+    if not src.exists():
+        raise RelocateError(f"{appid}: {src} vanished")
+    if dst.exists() or dst.is_symlink():
+        raise RelocateError(f"{appid}: {dst} already exists — clear it first")
+    name = appid_name(root, appid) or appid
+    print(f"moving prefix for {name}:\n  {src}\n    ->  {dst}")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), str(dst))
+    os.symlink(str(dst), str(src))
+    print(f"  done — {src} is now a symlink to {dst}")
 
 
 def do_one(root: Path, appid: str, check: bool) -> int:
@@ -156,8 +196,6 @@ def do_one(root: Path, appid: str, check: bool) -> int:
         return 0
 
     status, src = classify(lib, appid)
-    dst = root / "steamapps" / "compatdata" / appid
-
     if status == "symlink":
         print(f"OK — prefix already relocated: {src} -> {os.readlink(src)}")
         return 0
@@ -169,7 +207,6 @@ def do_one(root: Path, appid: str, check: bool) -> int:
               f"no relocation needed.")
         return 0
 
-    # status == needs-fix
     if check:
         print(f"NEEDS FIX — {src} is on a filesystem that rejects ':' in "
               f"filenames; Proton can't build drive-letter links there.")
@@ -177,25 +214,40 @@ def do_one(root: Path, appid: str, check: bool) -> int:
 
     if steam_running():
         sys.exit("Steam is running — close Steam (and the game) first, then retry.")
-    if src.resolve() == dst.resolve():
-        sys.exit(f"the game's own library ({lib}) is the bad filesystem and it "
-                 f"is also the main Steam library — move the game to a Linux "
-                 f"drive instead.")
-    if not src.exists():
-        sys.exit(f"{src} vanished — aborting")
-    if dst.exists() or dst.is_symlink():
-        sys.exit(f"{dst} already exists — move or remove it first, then retry")
-
-    name = appid_name(root, appid)
-    print(f"moving prefix for {name or appid}:")
-    print(f"  {src}\n    ->  {dst}")
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(src), str(dst))
-    os.symlink(str(dst), str(src))
-    print(f"done — {src} is now a symlink to {dst}")
+    try:
+        relocate_one(root, appid, lib)
+    except RelocateError as exc:
+        sys.exit(str(exc))
     print("re-launch the game from Steam; the prefix will finish building on "
           "the Linux drive.")
     return 0
+
+
+def do_all(root: Path) -> int:
+    targets = [(a, n, lib) for a, n, st, lib in all_prefixes(root)
+               if st == "needs-fix"]
+    if not targets:
+        print("no prefixes need relocating — nothing to do.")
+        return 0
+    print(f"{len(targets)} prefix(es) to relocate:")
+    for a, n, _ in targets:
+        print(f"  {a}  {n}")
+    print()
+    if steam_running():
+        sys.exit("Steam is running — close Steam (and every game) first, then retry.")
+    ok = 0
+    fails: list[str] = []
+    for appid, _name, lib in targets:
+        try:
+            relocate_one(root, appid, lib)
+            ok += 1
+        except (RelocateError, OSError) as exc:
+            print(f"  SKIP {appid}: {exc}")
+            fails.append(str(exc))
+    print(f"\nrelocated {ok}/{len(targets)}."
+          + (f"  {len(fails)} skipped." if fails else ""))
+    print("re-launch each game from Steam; prefixes rebuild on the Linux drive.")
+    return 1 if fails else 0
 
 
 def main() -> int:
@@ -205,10 +257,13 @@ def main() -> int:
     root = steam_root()
     if "--scan" in sys.argv:
         return do_scan(root)
+    if "--all" in sys.argv:
+        return do_all(root)
 
     args = [a for a in sys.argv[1:] if not a.startswith("-")]
     if not args or not args[0].isdigit():
-        sys.exit("usage: tuxthrottle_prefix_relocate.py <appid> [--check] | --scan")
+        sys.exit("usage: tuxthrottle_prefix_relocate.py <appid> [--check] "
+                 "| --scan | --all")
     return do_one(root, args[0], "--check" in sys.argv)
 
 
