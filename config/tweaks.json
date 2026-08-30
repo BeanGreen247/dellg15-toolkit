@@ -537,6 +537,28 @@
       "systemctl daemon-reload"
     ]
   },
+  "StateResume": {
+    "Content": "Re-apply power state after suspend/resume + at boot",
+    "Description": "TDP / battery / NVIDIA limits set directly (by a profile or the Power & Limits tab) don't always survive a suspend/resume or a reboot. This installs a systemd-sleep hook + a boot service that run 'tuxthrottle_profiles.py reassert' — re-applying exactly the last state the tool applied (recorded in ~/.config/tuxthrottle/active_state.json). No-op until you apply a profile or a limit. Reversible.",
+    "category": "Power",
+    "risk": "safe",
+    "check": "test -x /usr/lib/systemd/system-sleep/tuxthrottle-reassert && systemctl is-enabled tuxthrottle-reassert.service 2>/dev/null | grep -q enabled",
+    "reinstall_if": ["/etc/systemd/system/tuxthrottle-reassert.service"],
+    "apply": [
+      "chmod +x {TOOLKIT_DIR}/tuxthrottle_profiles.py",
+      "mkdir -p /usr/lib/systemd/system-sleep",
+      "cat > /usr/lib/systemd/system-sleep/tuxthrottle-reassert <<'HOOK'\n#!/usr/bin/env bash\n[ \"$1\" = post ] && /usr/bin/python3 {TOOLKIT_DIR}/tuxthrottle_profiles.py reassert --user {USER} || true\nHOOK",
+      "chmod +x /usr/lib/systemd/system-sleep/tuxthrottle-reassert",
+      "cat > /etc/systemd/system/tuxthrottle-reassert.service <<'UNIT'\n[Unit]\nDescription=Re-apply last TuxThrottle power state at boot\nAfter=multi-user.target\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/usr/bin/python3 {TOOLKIT_DIR}/tuxthrottle_profiles.py reassert --user {USER}\n\n[Install]\nWantedBy=multi-user.target\nUNIT",
+      "systemctl daemon-reload",
+      "systemctl enable --now tuxthrottle-reassert.service || true"
+    ],
+    "undo": [
+      "systemctl disable --now tuxthrottle-reassert.service 2>/dev/null || true",
+      "rm -f /etc/systemd/system/tuxthrottle-reassert.service /usr/lib/systemd/system-sleep/tuxthrottle-reassert",
+      "systemctl daemon-reload"
+    ]
+  },
   "DellBatteryThreshold": {
     "Content": "Dell battery threshold (libsmbios)",
     "Description": "The G15 5515 has no kernel charge_control_end_threshold, but Dell firmware supports a 'custom' charge interval stored in NVRAM. This installs libsmbios (smbios-battery-ctl); the Power & Limits tab then sets the stop-charging percentage through it and it persists in firmware across reboots — no service needed. Undo removes the package only; any interval you set stays in firmware until you set it back to 100 %/standard.",
