@@ -13,6 +13,7 @@ packaged in Fedora/Nobara's repos, pip is the only install path) for the
 themed dark UI + round-toggle switches + gauge widgets on the Dashboard tab.
 """
 import configparser
+import csv
 import glob
 import json
 import os
@@ -27,6 +28,7 @@ import sys
 import threading
 import time
 import webbrowser
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 import tkinter as tk
 from pathlib import Path
@@ -380,6 +382,61 @@ class RingGauge(tk.Canvas):
         except (TypeError, ValueError):
             self._value = 0.0
         self._draw()
+
+
+class HistoryChart(tk.Canvas):
+    """A rolling sparkline — `push(value)` appends and redraws. Keeps the last
+    `samples` points; auto-scales Y with a small headroom. Used for the
+    Dashboard history strip."""
+
+    def __init__(self, master, *, caption="", unit="", samples=90, color=None,
+                 height=64):
+        super().__init__(master, height=height, bg="#0e1116",
+                         highlightthickness=0, bd=0)
+        self._buf = deque(maxlen=samples)
+        self._color = color or ACCENT_FALLBACK
+        self._caption = caption
+        self._unit = unit
+        self.bind("<Configure>", lambda _e: self._draw())
+
+    def push(self, value):
+        try:
+            self._buf.append(float(value))
+        except (TypeError, ValueError):
+            self._buf.append(0.0)
+        self._draw()
+
+    def _draw(self):
+        self.delete("all")
+        w = self.winfo_width() or 300
+        h = int(self["height"])
+        pad = 4
+        vals = list(self._buf)
+        cap = self._caption + (f"  {vals[-1]:.0f}{self._unit}" if vals else "")
+        self.create_text(6, 8, text=cap, anchor="w", fill=BIOS_MUTED,
+                         font=("Sans", 8))
+        if len(vals) < 2:
+            return
+        lo, hi = min(vals), max(vals)
+        if hi - lo < 1e-6:
+            lo, hi = lo - 1, hi + 1
+        span = (hi - lo) * 1.15
+        base = lo - (hi - lo) * 0.075
+        n = len(vals)
+        step = (w - 2 * pad) / max(1, self._buf.maxlen - 1)
+        x0 = w - pad - (n - 1) * step
+        pts = []
+        for i, v in enumerate(vals):
+            x = x0 + i * step
+            y = h - pad - (v - base) / span * (h - 2 * pad - 10) - 2
+            pts += [x, y]
+        self.create_line(*pts, fill=self._color, width=1.6, smooth=False)
+        self.create_line(pts[0], h - pad, *pts, pts[-2], h - pad,
+                         fill=self._color, width=0, stipple="gray12")
+        self.create_text(w - 6, h - 6, text=f"{lo:.0f}", anchor="se",
+                         fill="#39404a", font=("Sans", 7))
+        self.create_text(w - 6, 8, text=f"{hi:.0f}", anchor="ne",
+                         fill="#39404a", font=("Sans", 7))
 
 
 class SidebarNav(tb.Frame):
@@ -800,6 +857,7 @@ class ToolkitApp:
         self.dash_running = False
         self._fan_live = False
         self._power_live = False
+        self._close_csv_log()
         if self._pop_win is not None:
             try:
                 self._pop_win.destroy()
@@ -1067,13 +1125,39 @@ class ToolkitApp:
         self.rapl_warning.pack(anchor="w", pady=(0, 12))
 
         details = tb.Labelframe(frame, text="Details", padding=12)
-        details.pack(fill="x", pady=(0, 20))
+        details.pack(fill="x", pady=(0, 12))
         self.dash_cpu_label = tb.Label(details, text="CPU: …", font=("Monospace", 10))
         self.dash_cpu_label.pack(anchor="w")
         self.dash_igpu_label = tb.Label(details, text="iGPU: …", font=("Monospace", 10))
         self.dash_igpu_label.pack(anchor="w")
         self.dash_dgpu_label = tb.Label(details, text="dGPU: …", font=("Monospace", 10))
         self.dash_dgpu_label.pack(anchor="w")
+
+        # rolling history strip
+        hist = tb.Labelframe(frame, text="History  (rolling ~3 min)", padding=12)
+        hist.pack(fill="x", pady=(0, 12))
+        hgrid = tb.Frame(hist); hgrid.pack(fill="x")
+        self._hist_charts = {}
+        for i, (key, cap, unit, col) in enumerate([
+            ("cpu_temp",  "CPU °C",   "",  acc),
+            ("cpu_power", "CPU W",    "",  acc),
+            ("dgpu_temp", "dGPU °C",  "",  "#d29922"),
+            ("dgpu_power","dGPU W",   "",  "#d29922"),
+        ]):
+            c = HistoryChart(hgrid, caption=cap, unit=unit, color=col, samples=90)
+            c.grid(row=i // 2, column=i % 2, sticky="ew", padx=6, pady=4)
+            hgrid.columnconfigure(i % 2, weight=1)
+            self._hist_charts[key] = c
+        logrow = tb.Frame(hist); logrow.pack(anchor="w", pady=(6, 0))
+        self._csv_logging = tk.BooleanVar(value=False)
+        tb.Checkbutton(logrow, text="Log this session to CSV",
+                       variable=self._csv_logging, bootstyle="round-toggle",
+                       command=self._toggle_csv_log).pack(side="left")
+        self._csv_path_lbl = tb.Label(logrow, text="", bootstyle=SECONDARY,
+                                      font=("Monospace", 8))
+        self._csv_path_lbl.pack(side="left", padx=10)
+        self._csv_file = None
+        self._csv_writer = None
 
         toggle_frame = tb.Labelframe(frame, text="Game Mode", padding=16)
         toggle_frame.pack(fill="x")
@@ -3289,9 +3373,63 @@ class ToolkitApp:
                 self._suppress_gamemode_signal = True
                 self.gamemode_var.set(gamemode)
                 self._suppress_gamemode_signal = False
+
+                for k, v in (("cpu_temp", cpu_temp), ("cpu_power", cpu_power),
+                             ("dgpu_temp", dgpu_temp), ("dgpu_power", dgpu_power)):
+                    ch = self._hist_charts.get(k)
+                    if ch is not None and v is not None:
+                        ch.push(v)
+                if self._csv_writer is not None:
+                    try:
+                        self._csv_writer.writerow([
+                            time.strftime("%Y-%m-%d %H:%M:%S"), cpu_temp, cpu_freq,
+                            cpu_power, igpu_clock, igpu_temp, dgpu_clock, dgpu_temp,
+                            dgpu_util, dgpu_power])
+                        self._csv_file.flush()
+                    except (OSError, ValueError):
+                        pass
         except queue.Empty:
             pass
         self.root.after(300, self._poll_dash_queue)
+
+    def _toggle_csv_log(self):
+        if self._csv_logging.get():
+            try:
+                d = Path(pwd.getpwnam(self.user).pw_dir) / ".local/share/tuxthrottle/sessions"
+                d.mkdir(parents=True, exist_ok=True)
+                p = d / f"session-{time.strftime('%Y%m%d-%H%M%S')}.csv"
+                self._csv_file = open(p, "w", newline="")
+                self._csv_writer = csv.writer(self._csv_file)
+                self._csv_writer.writerow(
+                    ["timestamp", "cpu_temp_c", "cpu_freq_ghz", "cpu_power_w",
+                     "igpu_clock_mhz", "igpu_temp_c", "dgpu_clock_mhz",
+                     "dgpu_temp_c", "dgpu_util_pct", "dgpu_power_w"])
+                if os.geteuid() == 0:
+                    pw = pwd.getpwnam(self.user)
+                    home = Path(pw.pw_dir)
+                    for q in (p, d, d.parent, d.parent.parent):
+                        try:
+                            if q != home and str(q).startswith(str(home)):
+                                os.chown(q, pw.pw_uid, pw.pw_gid)
+                        except OSError:
+                            pass
+                self._csv_path_lbl.configure(text=str(p))
+                self._log(f"[Dashboard] logging session to {p}")
+            except OSError as exc:
+                self._csv_logging.set(False)
+                self._log(f"[Dashboard] CSV log failed: {exc}")
+        else:
+            self._close_csv_log()
+
+    def _close_csv_log(self):
+        if getattr(self, "_csv_file", None) is not None:
+            try:
+                self._csv_file.close()
+            except OSError:
+                pass
+        self._csv_file = self._csv_writer = None
+        if hasattr(self, "_csv_path_lbl"):
+            self._csv_path_lbl.configure(text="(stopped)")
 
     def _on_gamemode_toggle(self):
         if self._suppress_gamemode_signal:

@@ -53,30 +53,56 @@ do_install() {
 
     # ---- dependencies -------------------------------------------------------
     c_info "Checking dependencies…"
+    command -v python3 >/dev/null 2>&1 || { c_err "python3 not found — install it first"; exit 1; }
+    if ! command -v dnf >/dev/null 2>&1; then
+        c_err "dnf not found. TuxThrottle targets Nobara / Fedora; every tweak and"
+        c_err "the dependency install below use dnf. Aborting."
+        exit 1
+    fi
+
+    # tkinter — the GUI toolkit base
     if ! python3 -c 'import tkinter' 2>/dev/null; then
         c_info "installing python3-tkinter"
         dnf install -y -q python3-tkinter || { c_err "could not install python3-tkinter"; exit 1; }
     fi
+
+    # ttkbootstrap — only via pip (not packaged for Fedora/Nobara). Make sure
+    # pip itself is present first, or the install below dies with "No module
+    # named pip" on a minimal system.
     if ! python3 -c 'import ttkbootstrap' 2>/dev/null; then
+        if ! python3 -m pip --version >/dev/null 2>&1; then
+            c_info "installing python3-pip (needed to fetch ttkbootstrap)"
+            dnf install -y -q python3-pip || { c_err "could not install python3-pip"; exit 1; }
+        fi
         c_info "installing ttkbootstrap (pip, system-wide — it isn't packaged for Fedora/Nobara)"
         python3 -m pip install --break-system-packages --root-user-action=ignore -q ttkbootstrap \
+            || python3 -m pip install --root-user-action=ignore -q ttkbootstrap \
             || { c_err "ttkbootstrap install failed — the GUI needs it"; exit 1; }
     fi
     python3 -c 'import ttkbootstrap' 2>/dev/null && c_ok "ttkbootstrap OK" || { c_err "ttkbootstrap still not importable"; exit 1; }
-    # optional extras
+
+    # optional extras — a failure here is a warning, not a stop
     python3 -c 'import PySide6' 2>/dev/null || dnf install -y -q python3-pyside6 \
         || c_warn "python3-pyside6 not installed — the tray monitor (tray_monitor.py) won't run"
     python3 -c 'import evdev'   2>/dev/null || dnf install -y -q python3-evdev \
         || c_warn "python3-evdev not installed — the G-key HotkeyListener tweak won't run"
+    # desktop plumbing used at the end of this script (non-fatal if missing)
+    command -v desktop-file-validate >/dev/null 2>&1 || command -v update-desktop-database >/dev/null 2>&1 \
+        || dnf install -y -q desktop-file-utils 2>/dev/null \
+        || c_warn "desktop-file-utils missing — the menu entry still installs, just unvalidated"
 
     # ---- files ------------------------------------------------------------
     c_info "Installing to ${LIBDIR}"
     rm -rf "$LIBDIR"
     install -d "$LIBDIR"
     if command -v rsync >/dev/null 2>&1; then
-        rsync -a --exclude='.git' --exclude='__pycache__' --exclude='install.sh' "$SRC"/ "$LIBDIR"/
+        rsync -a --exclude='.git' --exclude='.github' --exclude='__pycache__' \
+              --exclude='.pytest_cache' --exclude='tests' --exclude='tasks' \
+              --exclude='install.sh' "$SRC"/ "$LIBDIR"/
     else
-        cp -a "$SRC"/. "$LIBDIR"/ && rm -rf "$LIBDIR/.git" "$LIBDIR/install.sh"
+        cp -a "$SRC"/. "$LIBDIR"/
+        rm -rf "$LIBDIR/.git" "$LIBDIR/.github" "$LIBDIR/.pytest_cache" \
+               "$LIBDIR/tests" "$LIBDIR/tasks" "$LIBDIR/install.sh"
     fi
     find "$LIBDIR" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
     chmod -R a+rX "$LIBDIR"
