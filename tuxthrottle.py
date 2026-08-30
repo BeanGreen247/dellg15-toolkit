@@ -54,6 +54,8 @@ try:
 except Exception:  # noqa: BLE001
     tuxthrottle_kbd = None
 
+import tuxthrottle_profiles  # noqa: E402  (stdlib, imports sensors)
+
 try:
     from tuxthrottle_powerd import interp as fancurve_interp  # noqa: E402
 except Exception:  # noqa: BLE001
@@ -930,6 +932,7 @@ class ToolkitApp:
         self._build_keyboard_tab()
         self._build_fan_tab()
         self._build_power_tab()
+        self._build_profiles_tab()
         self._build_presets_tab()
         self._build_updates_tab()
         if self.games:
@@ -1922,6 +1925,141 @@ class ToolkitApp:
                     text=f"now: {bat['current']} %" if bat["current"] is not None else "now: — %")
             except tk.TclError:
                 pass
+
+    # ---------- Profiles + snapshots tab ----------
+
+    def _build_profiles_tab(self):
+        outer = tb.Frame(self.notebook)
+        self.notebook.add(outer, text="Profiles")
+        frame = self._scroll_body(outer, pad=16)
+
+        tb.Label(frame, wraplength=1100, justify="left", bootstyle=SECONDARY, text=(
+            "A profile is a named snapshot of the whole power surface — thermal "
+            "profile, CPU TDP, battery limit, NVIDIA limit, fan curve, "
+            "auto-switch, keyboard colour. Applying one (or the tweak “Apply "
+            "Selected”, or a rollback) first drops an automatic snapshot here, so "
+            "there is always a known-good state to return to if something "
+            "misbehaves.")).pack(anchor="w", pady=(0, 12))
+
+        cap = tb.Labelframe(frame, text="Capture current state", padding=12)
+        cap.pack(fill="x", pady=6)
+        crow = tb.Frame(cap); crow.pack(anchor="w")
+        self._prof_name = tk.StringVar()
+        tb.Entry(crow, textvariable=self._prof_name, width=28).pack(side="left")
+        tb.Button(crow, text="Save as profile", bootstyle=SUCCESS,
+                  command=self._profile_save).pack(side="left", padx=8)
+        self._prof_preview = tb.Label(cap, bootstyle=SECONDARY, font=("Monospace", 9),
+                                      justify="left")
+        self._prof_preview.pack(anchor="w", pady=(8, 0))
+
+        pf = tb.Labelframe(frame, text="Saved profiles", padding=12)
+        pf.pack(fill="x", pady=6)
+        self._prof_list = tb.Frame(pf); self._prof_list.pack(fill="x")
+
+        sf = tb.Labelframe(frame, text="Snapshots — automatic rollback points", padding=12)
+        sf.pack(fill="x", pady=6)
+        tb.Button(sf, text="↩  Roll back to the latest snapshot", bootstyle=(WARNING, "outline"),
+                  command=lambda: self._snapshot_rollback("last")).pack(anchor="w", pady=(0, 8))
+        self._snap_list = tb.Frame(sf); self._snap_list.pack(fill="x")
+
+        self._profiles_refresh()
+
+    def _profiles_refresh(self):
+        for box in (self._prof_list, self._snap_list):
+            for w in box.winfo_children():
+                w.destroy()
+        try:
+            preview = tuxthrottle_profiles.capture_state(self.user)
+            keys = ", ".join(k for k in preview if k != "captured") or "(nothing readable)"
+            self._prof_preview.configure(text=f"will capture: {keys}")
+        except Exception as exc:  # noqa: BLE001
+            self._prof_preview.configure(text=f"(capture preview failed: {exc})")
+
+        names = tuxthrottle_profiles.list_profiles(self.user)
+        if not names:
+            tb.Label(self._prof_list, text="(no profiles yet)", bootstyle=SECONDARY).pack(anchor="w")
+        for name in names:
+            r = tb.Frame(self._prof_list); r.pack(fill="x", pady=2)
+            tb.Label(r, text=name, width=26, anchor="w",
+                     font=("Sans", 10, "bold")).pack(side="left")
+            tb.Button(r, text="Apply", bootstyle=SUCCESS, width=7,
+                      command=lambda n=name: self._profile_apply(n, False)).pack(side="left", padx=2)
+            tb.Button(r, text="Apply +GPU", bootstyle=(WARNING, "outline"), width=11,
+                      command=lambda n=name: self._profile_apply(n, True)).pack(side="left", padx=2)
+            tb.Button(r, text="Delete", bootstyle=(DANGER, "outline"), width=7,
+                      command=lambda n=name: self._profile_delete(n)).pack(side="left", padx=2)
+
+        snaps = tuxthrottle_profiles.list_snapshots(self.user)[:15]
+        if not snaps:
+            tb.Label(self._snap_list, text="(no snapshots yet)", bootstyle=SECONDARY).pack(anchor="w")
+        for s in snaps:
+            r = tb.Frame(self._snap_list); r.pack(fill="x", pady=1)
+            tb.Label(r, text=f"{s['captured']}   {s['label']}", width=44, anchor="w",
+                     font=("Monospace", 9)).pack(side="left")
+            tb.Button(r, text="Roll back", bootstyle=(WARNING, "outline"), width=10,
+                      command=lambda p=s["path"]: self._snapshot_rollback(p)).pack(side="left", padx=2)
+
+    def _profile_save(self):
+        name = (self._prof_name.get() or "").strip()
+        if not name:
+            messagebox.showinfo("Name needed", "Type a name for the profile first.")
+            return
+        try:
+            st = tuxthrottle_profiles.capture_state(self.user)
+            tuxthrottle_profiles.save_profile(name, st, self.user)
+            self._log(f"[Profiles] saved '{name}': "
+                      + ", ".join(k for k in st if k != 'captured'))
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[Profiles] save failed: {exc}")
+        self._prof_name.set("")
+        self._profiles_refresh()
+
+    def _profile_delete(self, name: str):
+        if not messagebox.askyesno("Delete profile", f"Delete profile '{name}'?"):
+            return
+        tuxthrottle_profiles.delete_profile(name, self.user)
+        self._log(f"[Profiles] deleted '{name}'")
+        self._profiles_refresh()
+
+    def _profile_apply(self, name: str, with_gpu: bool):
+        extra = "\n\nThis will ALSO switch hybrid-graphics mode (needs a logout)." if with_gpu else ""
+        if not messagebox.askyesno(
+                "Apply profile",
+                f"Apply profile '{name}'? A snapshot is taken first so you can roll "
+                f"back.{extra}"):
+            return
+        threading.Thread(target=self._profile_apply_worker,
+                         args=(name, with_gpu), daemon=True).start()
+
+    def _profile_apply_worker(self, name: str, with_gpu: bool):
+        try:
+            tuxthrottle_profiles.snapshot(self.user, label=f"pre-apply-{name}")
+            st = tuxthrottle_profiles.load_profile(name, self.user)
+            rows = tuxthrottle_profiles.apply_state(st, self.user, with_gpu_mode=with_gpu)
+            for r in rows:
+                self._log(f"[Profiles] {name}: {r['key']} "
+                          + ("ok" if r["ok"] else f"FAILED — {r['msg']}")
+                          + (f" ({r['msg']})" if r["ok"] and r["msg"] else ""))
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[Profiles] apply '{name}' failed: {exc}")
+        self.root.after(0, self._profiles_refresh)
+
+    def _snapshot_rollback(self, target: str):
+        if not messagebox.askyesno(
+                "Roll back", "Restore this saved state? The current state is "
+                "snapshotted first, so this is itself undoable."):
+            return
+        threading.Thread(target=self._rollback_worker, args=(target,), daemon=True).start()
+
+    def _rollback_worker(self, target: str):
+        try:
+            rows = tuxthrottle_profiles.rollback(target, self.user)
+            for r in rows:
+                self._log(f"[Profiles] rollback: {r['key']} "
+                          + ("ok" if r["ok"] else f"FAILED — {r['msg']}"))
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[Profiles] rollback failed: {exc}")
+        self.root.after(0, self._profiles_refresh)
 
     def _build_category_tab(self, category: str):
         outer = tb.Frame(self.notebook)
@@ -3371,6 +3509,12 @@ class ToolkitApp:
         threading.Thread(target=self._apply_worker, args=(selected_ids,), daemon=True).start()
 
     def _apply_worker(self, item_ids: list[str]):
+        # always leave a rollback point before a bulk change
+        try:
+            snap = tuxthrottle_profiles.snapshot(label="pre-apply-selected")
+            self._log(f"[snapshot] pre-apply rollback point: {snap.name}")
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[snapshot] couldn't capture a rollback point: {exc}")
         n_skipped = 0
         done = 0
         for item_id in item_ids:
