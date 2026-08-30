@@ -26,7 +26,8 @@
     ],
     "undo": [
       "grubby --update-kernel=ALL --remove-args=\"processor.max_cstate=1\""
-    ]
+    ],
+    "recommended": true
   },
   "IdleNomwait": {
     "Content": "Alt Freeze Fix (idle=nomwait)",
@@ -69,7 +70,8 @@
     "undo": [
       "rm -f /etc/udev/rules.d/50-usb-no-autosuspend.rules",
       "udevadm control --reload-rules"
-    ]
+    ],
+    "recommended": true
   },
   "MouseAccelFlat": {
     "Content": "Flat Mouse Pointer Acceleration",
@@ -83,7 +85,8 @@
     ],
     "undo": [
       "rm -f /etc/X11/xorg.conf.d/50-mouse-accel.conf"
-    ]
+    ],
+    "recommended": true
   },
   "Swappiness": {
     "Content": "Lower Swappiness (vm.swappiness=10)",
@@ -98,7 +101,8 @@
     "undo": [
       "rm -f /etc/sysctl.d/99-gaming-swappiness.conf",
       "sysctl --system"
-    ]
+    ],
+    "recommended": true
   },
   "ZramTune": {
     "Content": "Tune zram Size (RAM / 2, zstd)",
@@ -115,7 +119,8 @@
     "undo": [
       "rm -f /etc/systemd/zram-generator.conf.d/gaming.conf",
       "systemctl daemon-reload"
-    ]
+    ],
+    "recommended": true
   },
   "BalooDisable": {
     "Content": "Disable KDE Baloo File Indexer",
@@ -128,7 +133,8 @@
     ],
     "undo": [
       "su - {USER} -c 'balooctl6 enable 2>/dev/null || balooctl enable 2>/dev/null'"
-    ]
+    ],
+    "recommended": true
   },
   "PowerProfileScripts": {
     "Content": "Install gaming-performance / gaming-balanced Scripts",
@@ -143,7 +149,8 @@
     ],
     "undo": [
       "rm -f /usr/local/bin/gaming-performance /usr/local/bin/gaming-balanced"
-    ]
+    ],
+    "recommended": true
   },
   "TlpEnable": {
     "Content": "Enable TLP Power Management",
@@ -190,7 +197,8 @@
     ],
     "undo": [
       "rm -f /usr/local/bin/nvidia-max-perf"
-    ]
+    ],
+    "recommended": true
   },
   "ControllerUdev": {
     "Content": "Game Controller udev Rules",
@@ -292,7 +300,8 @@
     ],
     "undo": [
       "grubby --update-kernel=ALL --remove-args=\"sysrq_always_enabled=1 split_lock_detect=off split_lock_mitigate=0 nowatchdog nosoftlockup timer_migration=0 preempt=full threadirqs ignore_rlimit_data audit=0\""
-    ]
+    ],
+    "recommended": true
   },
   "Ipv6DisableCmdline": {
     "Content": "Kernel Boot Param: disable IPv6",
@@ -343,7 +352,8 @@
     "undo": [
       "[ -f /etc/fstab.tuxthrottle-bak ] && mv -f /etc/fstab.tuxthrottle-bak /etc/fstab || true",
       "mount -o remount / || true"
-    ]
+    ],
+    "recommended": true
   },
   "NvmeIoTune": {
     "Content": "NVMe I/O queue tuning (udev)",
@@ -359,7 +369,8 @@
     "undo": [
       "rm -f /etc/udev/rules.d/60-tuxthrottle-nvme.rules",
       "udevadm control --reload-rules"
-    ]
+    ],
+    "recommended": true
   },
   "WifiPowersaveOff": {
     "Content": "Disable Wi-Fi Power Saving",
@@ -375,7 +386,8 @@
     "undo": [
       "rm -f /etc/NetworkManager/conf.d/20-tuxthrottle-wifi-powersave.conf",
       "systemctl reload NetworkManager || true"
-    ]
+    ],
+    "recommended": true
   },
   "NetLatencySysctl": {
     "Content": "Network latency sysctls (BBR + fq + fastopen)",
@@ -390,7 +402,8 @@
     "undo": [
       "rm -f /etc/sysctl.d/99-tuxthrottle-net.conf",
       "sysctl --system >/dev/null"
-    ]
+    ],
+    "recommended": true
   },
   "DnfSpeed": {
     "Content": "Speed up dnf (parallel downloads + fastestmirror)",
@@ -403,7 +416,8 @@
     ],
     "undo": [
       "sed -i '/^max_parallel_downloads=10$/d;/^fastestmirror=True$/d' /etc/dnf/dnf.conf"
-    ]
+    ],
+    "recommended": true
   },
   "GamingResourceLimits": {
     "Content": "Raise file-descriptor / map-count / inotify limits",
@@ -419,7 +433,8 @@
     "undo": [
       "rm -f /etc/security/limits.d/99-tuxthrottle-gaming.conf /etc/sysctl.d/99-tuxthrottle-gaming.conf",
       "sysctl --system >/dev/null"
-    ]
+    ],
+    "recommended": true
   },
   "KbdBacklightFix": {
     "Content": "Keyboard Backlight: re-apply saved colour at boot/resume",
@@ -447,7 +462,8 @@
       "systemctl disable --now tuxthrottle-openrgb.service 2>/dev/null || true",
       "rm -f /etc/systemd/system/tuxthrottle-kbd.service /etc/systemd/system/tuxthrottle-openrgb.service /usr/lib/systemd/system-sleep/tuxthrottle-kbd /usr/local/bin/tuxthrottle-kbd",
       "systemctl daemon-reload"
-    ]
+    ],
+    "recommended": true
   },
   "KdeAnimationsOff": {
     "Content": "KDE: disable window animations + eye-candy effects",
@@ -460,7 +476,8 @@
     ],
     "undo": [
       "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file kdeglobals --group KDE --key AnimationDurationFactor --delete; kwriteconfig6 --file kwinrc --group Plugins --key blurEnabled --delete; kwriteconfig6 --file kwinrc --group Plugins --key contrastEnabled --delete; kwriteconfig6 --file kwinrc --group Plugins --key wobblywindowsEnabled --delete; kwriteconfig6 --file kwinrc --group Plugins --key kwin4_effect_fadingpopupsEnabled --delete; kwriteconfig6 --file kwinrc --group Plugins --key kwin4_effect_loginEnabled --delete; kwriteconfig6 --file kwinrc --group Plugins --key kwin4_effect_logoutEnabled --delete; kwriteconfig6 --file kwinrc --group Plugins --key kwin4_effect_morphingpopupsEnabled --delete; kwriteconfig6 --file kwinrc --group Plugins --key kwin4_effect_translucencyEnabled --delete; kwriteconfig6 --file kwinrc --group Plugins --key slideEnabled --delete; kwriteconfig6 --file kwinrc --group Plugins --key slidingpopupsEnabled --delete; kwriteconfig6 --file kwinrc --group Plugins --key minimizeanimationEnabled --delete; kwriteconfig6 --file kwinrc --group Plugins --key magiclampEnabled --delete; kwriteconfig6 --file kwinrc --group Plugins --key glideEnabled --delete; kwriteconfig6 --file kwinrc --group Plugins --key scaleEnabled --delete; kwriteconfig6 --file kwinrc --group Plugins --key fallapartEnabled --delete; kwriteconfig6 --file kwinrc --group Plugins --key sheetEnabled --delete; { qdbus-qt6 org.kde.KWin /KWin reconfigure || qdbus org.kde.KWin /KWin reconfigure || dbus-send --session --type=method_call --dest=org.kde.KWin /KWin org.kde.KWin.reconfigure; } 2>/dev/null || true; { qdbus-qt6 org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect \"blur\" || dbus-send --session --type=method_call --dest=org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect string:\"blur\"; } >/dev/null 2>&1 || true; { qdbus-qt6 org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect \"contrast\" || dbus-send --session --type=method_call --dest=org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect string:\"contrast\"; } >/dev/null 2>&1 || true; { qdbus-qt6 org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect \"kwin4_effect_fadingpopups\" || dbus-send --session --type=method_call --dest=org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect string:\"kwin4_effect_fadingpopups\"; } >/dev/null 2>&1 || true; { qdbus-qt6 org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect \"kwin4_effect_login\" || dbus-send --session --type=method_call --dest=org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect string:\"kwin4_effect_login\"; } >/dev/null 2>&1 || true; { qdbus-qt6 org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect \"kwin4_effect_logout\" || dbus-send --session --type=method_call --dest=org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect string:\"kwin4_effect_logout\"; } >/dev/null 2>&1 || true; { qdbus-qt6 org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect \"kwin4_effect_morphingpopups\" || dbus-send --session --type=method_call --dest=org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect string:\"kwin4_effect_morphingpopups\"; } >/dev/null 2>&1 || true; { qdbus-qt6 org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect \"slide\" || dbus-send --session --type=method_call --dest=org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect string:\"slide\"; } >/dev/null 2>&1 || true; { qdbus-qt6 org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect \"slidingpopups\" || dbus-send --session --type=method_call --dest=org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect string:\"slidingpopups\"; } >/dev/null 2>&1 || true; { qdbus-qt6 org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect \"minimizeanimation\" || dbus-send --session --type=method_call --dest=org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect string:\"minimizeanimation\"; } >/dev/null 2>&1 || true'"
-    ]
+    ],
+    "recommended": true
   },
   "KwinGamingCompositor": {
     "Content": "KDE: KWin compositor tuned for games",
@@ -473,7 +490,8 @@
     ],
     "undo": [
       "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; for k in GLCore WindowsBlockCompositing LatencyPolicy HiddenPreviews GLTextureFilter; do kwriteconfig6 --file kwinrc --group Compositing --key $k --delete; done; { qdbus-qt6 org.kde.KWin /KWin reconfigure || qdbus org.kde.KWin /KWin reconfigure || dbus-send --session --type=method_call --dest=org.kde.KWin /KWin org.kde.KWin.reconfigure; } 2>/dev/null || true'"
-    ]
+    ],
+    "recommended": true
   },
   "KdeActivitiesRecentOff": {
     "Content": "KDE: stop Activities usage-journaling + recent-docs",
@@ -486,7 +504,8 @@
     ],
     "undo": [
       "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file kactivitymanagerd-pluginsrc --group Plugins --key org.kde.ActivityManager.ResourceScoringEnabled --delete; kwriteconfig6 --file kdeglobals --group RecentDocuments --key UseRecentDocuments --delete; kquitapp6 kactivitymanagerd 2>/dev/null || true'"
-    ]
+    ],
+    "recommended": true
   },
   "KdeThumbnailIoLimit": {
     "Content": "KDE: limit Dolphin thumbnail I/O",
@@ -499,7 +518,8 @@
     ],
     "undo": [
       "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; for k in MaximumSize EnableRemoteFolderThumbnail MaximumRemoteSize; do kwriteconfig6 --file kiorc --group Thumbnail --key $k --delete; done'"
-    ]
+    ],
+    "recommended": true
   },
   "KdeLaunchFeedbackOff": {
     "Content": "KDE: no launch feedback (bouncing cursor / taskbar)",
@@ -512,7 +532,8 @@
     ],
     "undo": [
       "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file klaunchrc --group FeedbackStyle --key BusyCursor --delete; kwriteconfig6 --file klaunchrc --group FeedbackStyle --key TaskbarButton --delete'"
-    ]
+    ],
+    "recommended": true
   },
   "KdeSplashOff": {
     "Content": "KDE: disable the Plasma splash screen",
@@ -525,7 +546,8 @@
     ],
     "undo": [
       "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file ksplashrc --group KSplash --key Engine --delete; kwriteconfig6 --file ksplashrc --group KSplash --key Theme --delete'"
-    ]
+    ],
+    "recommended": true
   },
   "KdeScreenEdgesOff": {
     "Content": "KDE: disable all screen-edge (hot corner) actions",
@@ -538,7 +560,8 @@
     ],
     "undo": [
       "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; for e in Top Bottom Left Right TopLeft TopRight BottomLeft BottomRight; do kwriteconfig6 --file kwinrc --group ElectricBorders --key $e --delete; done; kwriteconfig6 --file kwinrc --group Effect-overview --key BorderActivate --delete; kwriteconfig6 --file kwinrc --group Effect-overview --key BorderActivateAll --delete; kwriteconfig6 --file kwinrc --group Effect-windowview --key BorderActivateAll --delete; kwriteconfig6 --file kwinrc --group Effect-windowview --key BorderActivateClass --delete; kwriteconfig6 --file kwinrc --group Effect-desktopgrid --key BorderActivate --delete; kwriteconfig6 --file kwinrc --group TabBox --key BorderActivate --delete; kwriteconfig6 --file kwinrc --group TabBox --key BorderAlternativeActivate --delete; { qdbus-qt6 org.kde.KWin /KWin reconfigure || qdbus org.kde.KWin /KWin reconfigure || dbus-send --session --type=method_call --dest=org.kde.KWin /KWin org.kde.KWin.reconfigure; } 2>/dev/null || true'"
-    ]
+    ],
+    "recommended": true
   },
   "KdeClockSeconds": {
     "Content": "KDE: show seconds on the panel clock",
@@ -551,7 +574,8 @@
     ],
     "undo": [
       "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus python3 {TOOLKIT_DIR}/tuxthrottle_kde_panel.py clock-seconds off"
-    ]
+    ],
+    "recommended": true
   },
   "KdeClassicMenu": {
     "Content": "KDE: classic Application Menu (old start menu)",
@@ -564,7 +588,8 @@
     ],
     "undo": [
       "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus python3 {TOOLKIT_DIR}/tuxthrottle_kde_panel.py classic-menu off"
-    ]
+    ],
+    "recommended": true
   },
   "DesktopLauncher": {
     "Content": "Add to the application menu",
@@ -612,7 +637,8 @@
       "systemctl disable --now tuxthrottle-tdp.service 2>/dev/null || true",
       "rm -f /etc/systemd/system/tuxthrottle-tdp.service /usr/lib/systemd/system-sleep/tuxthrottle-tdp /usr/local/bin/tuxthrottle-tdp /etc/sudoers.d/tuxthrottle-tdp",
       "systemctl daemon-reload"
-    ]
+    ],
+    "recommended": true
   },
   "BatteryChargeLimit": {
     "Content": "Battery charge-limit persistence",
@@ -665,7 +691,7 @@
   "GameModeBridge": {
     "Content": "Feral GameMode \u2192 Game Mode bridge",
     "Description": "Installs Feral gamemode and wires its start/end hooks to the gaming-performance / gaming-balanced scripts, so launching any game with 'gamemoderun %command%' (or a Lutris/Heroic/Steam that requests GameMode) automatically flips the performance platform_profile + fan slam, and drops back when you quit. Also sets a sensible renice/softrealtime. Requires the PowerProfileScripts tweak first. Reversible.",
-    "category": "Gaming",
+    "category": "Power",
     "risk": "safe",
     "check": "command -v gamemoded >/dev/null 2>&1 && grep -q 'gaming-performance' /etc/gamemode.ini 2>/dev/null",
     "apply": [
@@ -675,7 +701,8 @@
     ],
     "undo": [
       "rm -f /etc/gamemode.ini"
-    ]
+    ],
+    "recommended": true
   },
   "FanCurveDaemon": {
     "Content": "Fan-curve + AC-switch daemon",
@@ -696,7 +723,8 @@
       "systemctl disable --now tuxthrottle-powerd.service 2>/dev/null || true",
       "rm -f /etc/systemd/system/tuxthrottle-powerd.service",
       "systemctl daemon-reload"
-    ]
+    ],
+    "recommended": true
   },
   "StateResume": {
     "Content": "Re-apply power state after suspend/resume + at boot",
@@ -720,7 +748,8 @@
       "systemctl disable --now tuxthrottle-reassert.service 2>/dev/null || true",
       "rm -f /etc/systemd/system/tuxthrottle-reassert.service /usr/lib/systemd/system-sleep/tuxthrottle-reassert",
       "systemctl daemon-reload"
-    ]
+    ],
+    "recommended": true
   },
   "DellBatteryThreshold": {
     "Content": "Dell battery threshold (libsmbios)",
@@ -733,6 +762,7 @@
     ],
     "undo": [
       "dnf remove -y libsmbios || true"
-    ]
+    ],
+    "recommended": true
   }
 }

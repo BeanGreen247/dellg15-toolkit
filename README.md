@@ -539,6 +539,17 @@ Install via the Toolkit GUI (Gaming tab):
 
 ## What's in it
 
+Every tweak/app category page has an **★ Apply section recommendations**
+button on the right of its title — it applies the developer's curated picks
+for *that* section (snapshot taken first, kernel-cmdline items flagged for a
+reboot), and only appears when something's still unapplied. It's on the far
+side of the header so it can't be fat-fingered instead of a nav click.
+Recommended-by-default: `CstateFix` (Stability); the safe Performance set +
+the curated kernel cmdline; `PowerProfileScripts` / `RyzenAdjTDP` /
+`FanCurveDaemon` / `StateResume` / `GameModeBridge` / `KbdBacklightFix`
+(Power); `NvidiaDriver` / `nvidia-max-perf` (GPU); all 9 **KDE (Desktop GUI
+Tweaks)**.
+
 - **Presets tab** — Safe Baseline, Competitive Gaming, Streaming Rig: one
   button applies a curated bundle.
 - **Stability** — the C-state freeze fix (and the alternative `idle=nomwait`),

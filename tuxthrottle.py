@@ -521,13 +521,21 @@ class SidebarNav(tb.Frame):
 
         right = tb.Frame(self)
         right.pack(side="left", fill="both", expand=True)
-        self._header = tb.Label(right, text="", style="Header.TLabel",
-                                anchor="w", padding=(24, 18, 24, 14))
-        self._header.pack(fill="x")
+        header_row = tb.Frame(right)
+        header_row.pack(fill="x")
+        self._header = tb.Label(header_row, text="", style="Header.TLabel",
+                                anchor="w", padding=(24, 18, 12, 14))
+        self._header.pack(side="left")
+        # right-hand slot for a per-page action (ToolkitApp drops the
+        # "Apply section recommendations" button here) — kept well clear of the
+        # title so it can't be fat-fingered instead of a nav click
+        self._header_actions = tb.Frame(header_row)
+        self._header_actions.pack(side="right", padx=(0, 20))
         tb.Separator(right).pack(fill="x")
         self._stack = tb.Frame(right)
         self._stack.pack(fill="both", expand=True)
 
+        self.on_select = None       # ToolkitApp callback: fn(page_text)
         self._pages: list = []      # (text, frame, button)
         self._current = None
 
@@ -579,6 +587,11 @@ class SidebarNav(tb.Frame):
             else:
                 f.pack_forget()
         self._current = frame
+        if callable(self.on_select):
+            try:
+                self.on_select(self._header.cget("text"))
+            except Exception:  # noqa: BLE001
+                pass
 
     def _reveal(self, btn):
         """If the selected button lives in the scrollable list and is off-screen,
@@ -622,6 +635,7 @@ class Item:
         self.description = data.get("Description", "")
         self.category = data.get("category", "Other")
         self.risk = data.get("risk", "safe")
+        self.recommended = bool(data.get("recommended"))  # dev's curated pick
         self.requires_vendor = data.get("requires_vendor")  # "nvidia" | "amd" | None
         self.hw_supported = True  # set by ToolkitApp after GPU detection
         self.hidden = False       # set by _apply_vendor_gate for no-op-on-this-box items
@@ -1050,6 +1064,16 @@ class ToolkitApp:
         # scrollable list): About, then the "gather logs for a GitHub issue" page
         self._build_about_tab()
         self._build_diagnostics_tab()
+
+        # per-section "apply the developer's picks" button, right side of the
+        # page title — only shows on a tweak/app category page that still has
+        # unapplied recommendations
+        self._rec_btn = tb.Button(
+            self.notebook._header_actions,  # noqa: SLF001
+            text="★  Apply section recommendations", bootstyle=(SUCCESS, "outline"),
+            takefocus=False, command=self._on_apply_recommended)
+        self.notebook.on_select = self._on_nav_page
+        self._on_nav_page(self.notebook.tab(0))
 
         # ---- footer: actions + status ----
         tb.Separator(self.root).pack(fill="x", padx=16)
@@ -3632,6 +3656,10 @@ class ToolkitApp:
             pass
         if drained:
             self._apply_status_to_widgets()
+            # states changed → the section-recommendations button may need to
+            # hide (all applied) or update its count
+            if hasattr(self, "notebook"):
+                self._on_nav_page(self.notebook._header.cget("text"))  # noqa: SLF001
         self.root.after(200, self._poll_status_queue)
 
     def _apply_status_to_widgets(self):
@@ -3800,6 +3828,78 @@ class ToolkitApp:
             self._log(f"[skipped {n_skipped} already-applied/installed item(s)]")
         self._log("=== Done. Click Refresh Status to confirm. ===")
         self._busy_queue.put("Done — refresh to confirm.")
+        threading.Thread(target=self._refresh_all_status, daemon=True).start()
+
+    # ---------- per-section "developer-recommended" apply ----------
+
+    def _recommended_for(self, category: str, pending_only: bool = False) -> list["Item"]:
+        out = []
+        for it in self.items.values():
+            if (it.recommended and it.category == category
+                    and it.hw_supported and not it.hidden):
+                if pending_only and it.done:
+                    continue
+                out.append(it)
+        return out
+
+    def _on_nav_page(self, page_text: str):
+        """Show the 'Apply section recommendations' button only on a category
+        page that still has unapplied dev picks."""
+        btn = getattr(self, "_rec_btn", None)
+        if btn is None:
+            return
+        pending = self._recommended_for(page_text or "", pending_only=True)
+        if pending:
+            btn.configure(text=f"★  Apply the {len(pending)} recommended for {page_text}")
+            if not btn.winfo_ismapped():
+                btn.pack(side="right")
+            self._rec_target = page_text
+        elif btn.winfo_ismapped():
+            btn.pack_forget()
+
+    def _on_apply_recommended(self):
+        if self._busy:
+            messagebox.showinfo("Busy", "An operation is already running — check the log.")
+            return
+        cat = getattr(self, "_rec_target", None)
+        pending = self._recommended_for(cat or "", pending_only=True)
+        if not pending:
+            messagebox.showinfo("Nothing to do",
+                                f"The recommended items for {cat} are already applied.")
+            return
+        reboot = any("cmdline" in i.id.lower() or "grubby" in " ".join(i.apply_cmds).lower()
+                     for i in pending)
+        lines = "\n".join(f"  •  {i.content}" for i in pending)
+        msg = (f"Apply the developer's recommended {len(pending)} item(s) for "
+               f"“{cat}”?\n\n{lines}\n\nA snapshot is taken first so you can roll "
+               f"back from the Profiles tab.")
+        if reboot:
+            msg += "\n\n⚠ Some of these change kernel boot params — reboot to finish."
+        if not messagebox.askyesno("Apply section recommendations", msg):
+            return
+        ids = [i.id for i in pending]
+        self._begin_busy(f"Applying recommended — {cat}", steps=max(1, len(ids)))
+        threading.Thread(target=self._apply_ids_worker,
+                         args=(ids, f"recommended-{cat}"), daemon=True).start()
+
+    def _apply_ids_worker(self, item_ids: list[str], label: str):
+        try:
+            snap = tuxthrottle_profiles.snapshot(label=f"pre-{label}")
+            self._log(f"[snapshot] pre-apply rollback point: {snap.name}")
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[snapshot] couldn't capture a rollback point: {exc}")
+        done = 0
+        for item_id in item_ids:
+            item = self.items.get(item_id)
+            if not item or item.done or not item.hw_supported:
+                continue
+            self._progress(overall=done,
+                           step=f"{'Installing' if item.kind == 'app' else 'Applying'} {item.content}")
+            self._run_item_apply(item)
+            done += 1
+        self._progress(overall=done)
+        self._log(f"=== Applied {done} recommended item(s). Refresh Status to confirm. ===")
+        self._busy_queue.put(f"{label}: {done} applied — refresh to confirm.")
         threading.Thread(target=self._refresh_all_status, daemon=True).start()
 
     def _on_apply_preset(self, preset_id: str):
