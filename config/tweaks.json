@@ -451,54 +451,54 @@
   },
   "KdeAnimationsOff": {
     "Content": "KDE: disable window animations + eye-candy effects",
-    "Description": "Sets AnimationDurationFactor=0 and turns off the KWin eye-candy effect plugins (blur, background contrast, wobbly windows, fade/slide/translucency/morphing popups, minimize animation, magic lamp, glide, scale, fall-apart, sheet). Instant window response, zero compositor overhead \u2014 the single biggest desktop-latency win for gaming. Overview / Present Windows / desktop grid navigation is left ON. Applied for your user; KWin reconfigures live, a couple of effects need a re-login. Reversible (removes the keys so KWin returns to its defaults).",
+    "Description": "Sets AnimationDurationFactor=0 and turns off the KWin eye-candy effect plugins (blur, background contrast, wobbly windows, fade/slide/translucency/morphing popups, minimize animation, magic lamp, glide, scale, fall-apart, sheet). Instant window response, zero compositor overhead \u2014 the single biggest desktop-latency win for gaming. Overview / Present Windows / desktop grid navigation is left ON. Applied for your user; KWin reconfigures live, a couple of effects need a re-login. Reversible (removes the keys so KWin returns to its defaults). Applied live to the running session (kwriteconfig6 + KWin reconfigure with your session D-Bus).",
     "category": "KDE (Desktop GUI Tweaks)",
     "risk": "safe",
-    "check": "grep -qs 'AnimationDurationFactor=0' /home/{USER}/.config/kdeglobals",
+    "check": "[ \"$(sudo -u {USER} -H kreadconfig6 --file kdeglobals --group KDE --key AnimationDurationFactor 2>/dev/null)\" = \"0\" ]",
     "apply": [
-      "su - {USER} -c 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; for fx in blur contrast wobblywindows kwin4_effect_fadingpopups kwin4_effect_login kwin4_effect_logout kwin4_effect_morphingpopups kwin4_effect_translucency slide slidingpopups minimizeanimation magiclamp glide scale fallapart sheet; do kwriteconfig6 --file kwinrc --group Plugins --key ${fx}Enabled false; done; kwriteconfig6 --file kdeglobals --group KDE --key AnimationDurationFactor 0; qdbus6 org.kde.KWin /KWin reconfigure 2>/dev/null || true'"
+      "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; for fx in blur contrast wobblywindows kwin4_effect_fadingpopups kwin4_effect_login kwin4_effect_logout kwin4_effect_morphingpopups kwin4_effect_translucency slide slidingpopups minimizeanimation magiclamp glide scale fallapart sheet; do kwriteconfig6 --file kwinrc --group Plugins --key ${fx}Enabled false; done; kwriteconfig6 --file kdeglobals --group KDE --key AnimationDurationFactor 0; { qdbus-qt6 org.kde.KWin /KWin reconfigure || qdbus org.kde.KWin /KWin reconfigure || dbus-send --session --type=method_call --dest=org.kde.KWin /KWin org.kde.KWin.reconfigure; } 2>/dev/null || true'"
     ],
     "undo": [
-      "su - {USER} -c 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; for fx in blur contrast wobblywindows kwin4_effect_fadingpopups kwin4_effect_login kwin4_effect_logout kwin4_effect_morphingpopups kwin4_effect_translucency slide slidingpopups minimizeanimation magiclamp glide scale fallapart sheet; do kwriteconfig6 --file kwinrc --group Plugins --key ${fx}Enabled --delete; done; kwriteconfig6 --file kdeglobals --group KDE --key AnimationDurationFactor --delete; qdbus6 org.kde.KWin /KWin reconfigure 2>/dev/null || true'"
+      "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; for fx in blur contrast wobblywindows kwin4_effect_fadingpopups kwin4_effect_login kwin4_effect_logout kwin4_effect_morphingpopups kwin4_effect_translucency slide slidingpopups minimizeanimation magiclamp glide scale fallapart sheet; do kwriteconfig6 --file kwinrc --group Plugins --key ${fx}Enabled --delete; done; kwriteconfig6 --file kdeglobals --group KDE --key AnimationDurationFactor --delete; { qdbus-qt6 org.kde.KWin /KWin reconfigure || qdbus org.kde.KWin /KWin reconfigure || dbus-send --session --type=method_call --dest=org.kde.KWin /KWin org.kde.KWin.reconfigure; } 2>/dev/null || true'"
     ]
   },
   "KwinGamingCompositor": {
     "Content": "KDE: KWin compositor tuned for games",
-    "Description": "kwinrc/Compositing: OpenGL backend + GLCore (best on modern Mesa/NVIDIA), WindowsBlockCompositing=true so a fullscreen game bypasses the compositor for direct rendering, LatencyPolicy=Low for snappier input, HiddenPreviews=5 (don't keep minimised windows in VRAM), GLTextureFilter=1 (bilinear \u2014 trilinear is wasted on desktop compositing). Applied for your user; KWin reconfigures live. Reversible.",
+    "Description": "kwinrc/Compositing: OpenGL backend + GLCore (best on modern Mesa/NVIDIA), WindowsBlockCompositing=true so a fullscreen game bypasses the compositor for direct rendering, LatencyPolicy=Low for snappier input, HiddenPreviews=5 (don't keep minimised windows in VRAM), GLTextureFilter=1 (bilinear \u2014 trilinear is wasted on desktop compositing). Applied for your user; KWin reconfigures live. Reversible. Applied live to the running session (kwriteconfig6 + KWin reconfigure with your session D-Bus).",
     "category": "KDE (Desktop GUI Tweaks)",
     "risk": "safe",
-    "check": "grep -qs 'WindowsBlockCompositing=true' /home/{USER}/.config/kwinrc",
+    "check": "[ \"$(sudo -u {USER} -H kreadconfig6 --file kwinrc --group Compositing --key WindowsBlockCompositing 2>/dev/null)\" = \"true\" ]",
     "apply": [
-      "su - {USER} -c 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file kwinrc --group Compositing --key Backend OpenGL; kwriteconfig6 --file kwinrc --group Compositing --key GLCore true; kwriteconfig6 --file kwinrc --group Compositing --key WindowsBlockCompositing true; kwriteconfig6 --file kwinrc --group Compositing --key LatencyPolicy Low; kwriteconfig6 --file kwinrc --group Compositing --key HiddenPreviews 5; kwriteconfig6 --file kwinrc --group Compositing --key GLTextureFilter 1; qdbus6 org.kde.KWin /KWin reconfigure 2>/dev/null || true'"
+      "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file kwinrc --group Compositing --key Backend OpenGL; kwriteconfig6 --file kwinrc --group Compositing --key GLCore true; kwriteconfig6 --file kwinrc --group Compositing --key WindowsBlockCompositing true; kwriteconfig6 --file kwinrc --group Compositing --key LatencyPolicy Low; kwriteconfig6 --file kwinrc --group Compositing --key HiddenPreviews 5; kwriteconfig6 --file kwinrc --group Compositing --key GLTextureFilter 1; { qdbus-qt6 org.kde.KWin /KWin reconfigure || qdbus org.kde.KWin /KWin reconfigure || dbus-send --session --type=method_call --dest=org.kde.KWin /KWin org.kde.KWin.reconfigure; } 2>/dev/null || true'"
     ],
     "undo": [
-      "su - {USER} -c 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; for k in GLCore WindowsBlockCompositing LatencyPolicy HiddenPreviews GLTextureFilter; do kwriteconfig6 --file kwinrc --group Compositing --key $k --delete; done; qdbus6 org.kde.KWin /KWin reconfigure 2>/dev/null || true'"
+      "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; for k in GLCore WindowsBlockCompositing LatencyPolicy HiddenPreviews GLTextureFilter; do kwriteconfig6 --file kwinrc --group Compositing --key $k --delete; done; { qdbus-qt6 org.kde.KWin /KWin reconfigure || qdbus org.kde.KWin /KWin reconfigure || dbus-send --session --type=method_call --dest=org.kde.KWin /KWin org.kde.KWin.reconfigure; } 2>/dev/null || true'"
     ]
   },
   "KdeActivitiesRecentOff": {
     "Content": "KDE: stop Activities + recent-documents tracking",
-    "Description": "Disables the KActivityManager background service (it journals to disk even when you use no virtual Activities) and KDE's recent-documents history (every opened file gets written to ~/.local/share/recently-used.xbel). Small but constant CPU / disk-I/O / D-Bus chatter removed. Applied for your user; takes effect on next login. Reversible.",
+    "Description": "Disables the KActivityManager background service (it journals to disk even when you use no virtual Activities) and KDE's recent-documents history (every opened file gets written to ~/.local/share/recently-used.xbel). Small but constant CPU / disk-I/O / D-Bus chatter removed. Applied for your user; takes effect on next login. Reversible. Applied live to the running session (kwriteconfig6 + KWin reconfigure with your session D-Bus).",
     "category": "KDE (Desktop GUI Tweaks)",
     "risk": "safe",
-    "check": "grep -qs 'enabled=false' /home/{USER}/.config/kactivitymanagerdrc",
+    "check": "[ \"$(sudo -u {USER} -H kreadconfig6 --file kactivitymanagerdrc --group main --key enabled 2>/dev/null)\" = \"false\" ]",
     "apply": [
-      "su - {USER} -c 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file kactivitymanagerdrc --group main --key enabled false; kwriteconfig6 --file kdeglobals --group RecentDocuments --key UseRecentDocuments false'"
+      "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file kactivitymanagerdrc --group main --key enabled false; kwriteconfig6 --file kdeglobals --group RecentDocuments --key UseRecentDocuments false; kquitapp6 kactivitymanagerd 2>/dev/null || true'"
     ],
     "undo": [
-      "su - {USER} -c 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file kactivitymanagerdrc --group main --key enabled --delete; kwriteconfig6 --file kdeglobals --group RecentDocuments --key UseRecentDocuments --delete'"
+      "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file kactivitymanagerdrc --group main --key enabled --delete; kwriteconfig6 --file kdeglobals --group RecentDocuments --key UseRecentDocuments --delete; kquitapp6 kactivitymanagerd 2>/dev/null || true'"
     ]
   },
   "KdeThumbnailIoLimit": {
     "Content": "KDE: limit Dolphin thumbnail I/O",
-    "Description": "kiorc/Thumbnail: caps the max file size Dolphin will generate a thumbnail for (5 MB), disables thumbnailing of remote (SFTP/SMB) folders entirely, and sets MaximumRemoteSize=0. Stops a directory browse from turning into a seek+read of every large media file \u2014 noticeable on HDDs and network mounts. Applied for your user. Reversible.",
+    "Description": "kiorc/Thumbnail: caps the max file size Dolphin will generate a thumbnail for (5 MB), disables thumbnailing of remote (SFTP/SMB) folders entirely, and sets MaximumRemoteSize=0. Stops a directory browse from turning into a seek+read of every large media file \u2014 noticeable on HDDs and network mounts. Applied for your user. Reversible. Takes effect on next login (no running consumer to reload).",
     "category": "KDE (Desktop GUI Tweaks)",
     "risk": "safe",
-    "check": "grep -qs 'EnableRemoteFolderThumbnail=false' /home/{USER}/.config/kiorc",
+    "check": "[ \"$(sudo -u {USER} -H kreadconfig6 --file kiorc --group Thumbnail --key EnableRemoteFolderThumbnail 2>/dev/null)\" = \"false\" ]",
     "apply": [
-      "su - {USER} -c 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file kiorc --group Thumbnail --key MaximumSize 5242880; kwriteconfig6 --file kiorc --group Thumbnail --key EnableRemoteFolderThumbnail false; kwriteconfig6 --file kiorc --group Thumbnail --key MaximumRemoteSize 0'"
+      "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file kiorc --group Thumbnail --key MaximumSize 5242880; kwriteconfig6 --file kiorc --group Thumbnail --key EnableRemoteFolderThumbnail false; kwriteconfig6 --file kiorc --group Thumbnail --key MaximumRemoteSize 0'"
     ],
     "undo": [
-      "su - {USER} -c 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; for k in MaximumSize EnableRemoteFolderThumbnail MaximumRemoteSize; do kwriteconfig6 --file kiorc --group Thumbnail --key $k --delete; done'"
+      "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; for k in MaximumSize EnableRemoteFolderThumbnail MaximumRemoteSize; do kwriteconfig6 --file kiorc --group Thumbnail --key $k --delete; done'"
     ]
   },
   "KdeLaunchFeedbackOff": {
@@ -506,38 +506,38 @@
     "Description": "klaunchrc/FeedbackStyle: BusyCursor=false (no spinning/watch cursor while an app loads) and TaskbarButton=false (no bouncing taskbar button on every launch). Pure cosmetic-latency removal. Applied for your user; takes effect on next login. Reversible.",
     "category": "KDE (Desktop GUI Tweaks)",
     "risk": "safe",
-    "check": "grep -qs 'BusyCursor=false' /home/{USER}/.config/klaunchrc",
+    "check": "[ \"$(sudo -u {USER} -H kreadconfig6 --file klaunchrc --group FeedbackStyle --key BusyCursor 2>/dev/null)\" = \"false\" ]",
     "apply": [
-      "su - {USER} -c 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file klaunchrc --group FeedbackStyle --key BusyCursor false; kwriteconfig6 --file klaunchrc --group FeedbackStyle --key TaskbarButton false'"
+      "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file klaunchrc --group FeedbackStyle --key BusyCursor false; kwriteconfig6 --file klaunchrc --group FeedbackStyle --key TaskbarButton false'"
     ],
     "undo": [
-      "su - {USER} -c 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file klaunchrc --group FeedbackStyle --key BusyCursor --delete; kwriteconfig6 --file klaunchrc --group FeedbackStyle --key TaskbarButton --delete'"
+      "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file klaunchrc --group FeedbackStyle --key BusyCursor --delete; kwriteconfig6 --file klaunchrc --group FeedbackStyle --key TaskbarButton --delete'"
     ]
   },
   "KdeSplashOff": {
     "Content": "KDE: disable the Plasma splash screen",
-    "Description": "ksplashrc: Engine=none, Theme=None \u2014 the desktop appears as soon as it's ready instead of waiting on the splash animation. Shaves a second or two off every login. Applied for your user. Reversible.",
+    "Description": "ksplashrc: Engine=none, Theme=None \u2014 the desktop appears as soon as it's ready instead of waiting on the splash animation. Shaves a second or two off every login. Applied for your user. Reversible. Takes effect on next login (no running consumer to reload).",
     "category": "KDE (Desktop GUI Tweaks)",
     "risk": "safe",
-    "check": "grep -qs 'Engine=none' /home/{USER}/.config/ksplashrc",
+    "check": "[ \"$(sudo -u {USER} -H kreadconfig6 --file ksplashrc --group KSplash --key Engine 2>/dev/null)\" = \"none\" ]",
     "apply": [
-      "su - {USER} -c 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file ksplashrc --group KSplash --key Engine none; kwriteconfig6 --file ksplashrc --group KSplash --key Theme None'"
+      "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file ksplashrc --group KSplash --key Engine none; kwriteconfig6 --file ksplashrc --group KSplash --key Theme None'"
     ],
     "undo": [
-      "su - {USER} -c 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file ksplashrc --group KSplash --key Engine --delete; kwriteconfig6 --file ksplashrc --group KSplash --key Theme --delete'"
+      "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file ksplashrc --group KSplash --key Engine --delete; kwriteconfig6 --file ksplashrc --group KSplash --key Theme --delete'"
     ]
   },
   "KdeScreenEdgesOff": {
     "Content": "KDE: disable all screen-edge (hot corner) actions",
-    "Description": "kwinrc/ElectricBorders: sets every edge and corner to None so a mouse flick into a corner mid-game can't trigger Overview / Desktop Grid / window tiling. Edge-swipe for virtual-desktop switching is unaffected. Applied for your user; KWin reconfigures live. Reversible.",
+    "Description": "kwinrc/ElectricBorders: sets every edge and corner to None so a mouse flick into a corner mid-game can't trigger Overview / Desktop Grid / window tiling. Edge-swipe for virtual-desktop switching is unaffected. Applied for your user; KWin reconfigures live. Reversible. Applied live to the running session (kwriteconfig6 + KWin reconfigure with your session D-Bus).",
     "category": "KDE (Desktop GUI Tweaks)",
     "risk": "safe",
-    "check": "grep -qs 'TopLeft=None' /home/{USER}/.config/kwinrc",
+    "check": "[ \"$(sudo -u {USER} -H kreadconfig6 --file kwinrc --group ElectricBorders --key TopLeft 2>/dev/null)\" = \"None\" ]",
     "apply": [
-      "su - {USER} -c 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; for e in Top Bottom Left Right TopLeft TopRight BottomLeft BottomRight; do kwriteconfig6 --file kwinrc --group ElectricBorders --key $e None; done; qdbus6 org.kde.KWin /KWin reconfigure 2>/dev/null || true'"
+      "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; for e in Top Bottom Left Right TopLeft TopRight BottomLeft BottomRight; do kwriteconfig6 --file kwinrc --group ElectricBorders --key $e None; done; { qdbus-qt6 org.kde.KWin /KWin reconfigure || qdbus org.kde.KWin /KWin reconfigure || dbus-send --session --type=method_call --dest=org.kde.KWin /KWin org.kde.KWin.reconfigure; } 2>/dev/null || true'"
     ],
     "undo": [
-      "su - {USER} -c 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; for e in Top Bottom Left Right TopLeft TopRight BottomLeft BottomRight; do kwriteconfig6 --file kwinrc --group ElectricBorders --key $e --delete; done; qdbus6 org.kde.KWin /KWin reconfigure 2>/dev/null || true'"
+      "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; for e in Top Bottom Left Right TopLeft TopRight BottomLeft BottomRight; do kwriteconfig6 --file kwinrc --group ElectricBorders --key $e --delete; done; { qdbus-qt6 org.kde.KWin /KWin reconfigure || qdbus org.kde.KWin /KWin reconfigure || dbus-send --session --type=method_call --dest=org.kde.KWin /KWin org.kde.KWin.reconfigure; } 2>/dev/null || true'"
     ]
   },
   "DesktopLauncher": {
