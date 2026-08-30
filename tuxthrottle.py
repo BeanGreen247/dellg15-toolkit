@@ -1460,6 +1460,9 @@ class ToolkitApp:
         tb.Button(row2, text="Move all stray saves into their prefixes",
                   bootstyle=(WARNING, "outline"),
                   command=self._saves_move_all).pack(side="left", padx=6)
+        tb.Button(row2, text="Import loose saves for AppID above",
+                  bootstyle=(WARNING, "outline"),
+                  command=self._saves_import_entry).pack(side="left")
 
         tb.Separator(outer).pack(fill="x")
 
@@ -1699,6 +1702,26 @@ class ToolkitApp:
             return
         self._run_stream("move all stray saves into their prefixes",
                          self._prefix_helper_cmd("--saves-all"), tag="Prefix tools")
+
+    def _saves_import_entry(self):
+        appid = (self._prefix_appid_var.get() or "").strip()
+        if not appid.isdigit():
+            messagebox.showinfo("Steam AppID needed",
+                                "Put the game's numeric Steam AppID in the field "
+                                "above first, then run “Scan for saves on another "
+                                "drive” to see which loose folders exist.")
+            return
+        if not messagebox.askyesno(
+            "Import loose saves",
+            f"Copy the loose Documents / My Games / Saved Games folders from the "
+            f"drive that hosts AppID {appid} into that game's Proton prefix?\n\n"
+            "Existing files in the prefix are kept; the originals on the other "
+            "drive are left untouched. Close Steam and the game first.",
+        ):
+            return
+        self._run_stream(f"import loose saves for AppID {appid}",
+                         self._prefix_helper_cmd(f"--saves-import {appid}"),
+                         tag="Prefix tools")
 
     def _run_game_all(self, gid: str):
         """Run every step of a game that has a `run` command, in order,

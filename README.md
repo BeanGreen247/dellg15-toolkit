@@ -216,8 +216,16 @@ flags ones on an NTFS/exFAT drive (Proton can't build a prefix there —
 `dosdevices/c:` needs a `:` in the name, which those filesystems reject, so
 the game won't launch); type an **AppID** + **Relocate this prefix** moves
 just that prefix onto the Linux drive and symlinks it back (game files stay
-put; close Steam first). Backed by `tuxthrottle_prefix_relocate.py`, also
-usable standalone (`<appid>` / `--check` / `--scan`).
+put; close Steam first). A second row of buttons handles **save files that
+ended up on another drive**: it finds prefix folders (Documents / Saved
+Games / AppData) symlinked onto a different filesystem, and loose
+`Documents` / `My Games` folders sitting at a Steam drive's root (left
+behind when a prefix used to redirect there). It pulls the symlinked ones
+back into the prefix automatically; for the loose folders you give it the
+game's AppID and it copies them in. Nothing is deleted — the off-drive
+copies stay put until you've confirmed the saves work. Backed by
+`tuxthrottle_prefix_relocate.py` (`--scan` / `--all` / `--saves-scan` /
+`--saves` / `--saves-all` / `--saves-import`), also usable standalone.
 
 > **GTA V Online note:** the walkthrough gets you a working prefix and
 > **Story Mode**. GTA *Online* (Enhanced, Steam AppID 3240220) is **not**
