@@ -39,7 +39,7 @@ refresh_caches() {
 
 do_uninstall() {
     c_info "Removing ${APPID}…"
-    rm -f "$BIN" "$DESKTOP"
+    rm -f "$BIN" "$(dirname "$BIN")/tuxthrottlectl" "$DESKTOP"
     for s in "${ICON_SIZES[@]}"; do rm -f "${ICONBASE}/${s}x${s}/apps/${APPID}.png"; done
     rm -f "${ICONBASE}/scalable/apps/${APPID}.svg"
     rm -rf "$LIBDIR"
@@ -97,6 +97,15 @@ exec /usr/bin/python3 "${LIBDIR}/tuxthrottle.py" "\$@"
 EOF
     chmod 0755 "$BIN"
     c_ok "launcher: ${BIN}"
+
+    # ---- headless CLI (tuxthrottlectl) ---------------------------------
+    CTL="$(dirname "$BIN")/tuxthrottlectl"
+    cat > "$CTL" <<EOF
+#!/usr/bin/env bash
+exec /usr/bin/python3 "${LIBDIR}/tuxthrottlectl.py" "\$@"
+EOF
+    chmod 0755 "$CTL"
+    c_ok "CLI: ${CTL}"
 
     # ---- icon -----------------------------------------------------------
     for s in "${ICON_SIZES[@]}"; do

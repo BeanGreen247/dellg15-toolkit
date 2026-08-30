@@ -66,7 +66,7 @@ pkill -f 'tuxthrottle.py'     2>/dev/null || true
 if [[ -x "$SRC/install.sh" ]]; then
     "$SRC/install.sh" --uninstall || true
 else
-    rm -rf /opt/tuxthrottle /usr/local/bin/tuxthrottle \
+    rm -rf /opt/tuxthrottle /usr/local/bin/tuxthrottle /usr/local/bin/tuxthrottlectl \
            /usr/share/applications/tuxthrottle.desktop
     for s in 16 24 32 48 64 128 256 512; do
         rm -f "/usr/share/icons/hicolor/${s}x${s}/apps/tuxthrottle.png"
