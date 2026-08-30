@@ -540,6 +540,32 @@
       "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; for e in Top Bottom Left Right TopLeft TopRight BottomLeft BottomRight; do kwriteconfig6 --file kwinrc --group ElectricBorders --key $e --delete; done; { qdbus-qt6 org.kde.KWin /KWin reconfigure || qdbus org.kde.KWin /KWin reconfigure || dbus-send --session --type=method_call --dest=org.kde.KWin /KWin org.kde.KWin.reconfigure; } 2>/dev/null || true'"
     ]
   },
+  "KdeClockSeconds": {
+    "Content": "KDE: show seconds on the panel clock",
+    "Description": "Sets the digital-clock widget(s) to always display seconds (showSeconds=2). Edits plasma-org.kde.plasma.desktop-appletsrc and restarts plasmashell so it applies (the panel reloads for ~2 s). Mirrors the kubuntu setup. Reversible.",
+    "category": "KDE (Desktop GUI Tweaks)",
+    "risk": "safe",
+    "check": "grep -q \"showSeconds=2\" /home/{USER}/.config/plasma-org.kde.plasma.desktop-appletsrc 2>/dev/null",
+    "apply": [
+      "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus python3 {TOOLKIT_DIR}/tuxthrottle_kde_panel.py clock-seconds on"
+    ],
+    "undo": [
+      "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus python3 {TOOLKIT_DIR}/tuxthrottle_kde_panel.py clock-seconds off"
+    ]
+  },
+  "KdeClassicMenu": {
+    "Content": "KDE: classic Application Menu (old start menu)",
+    "Description": "Swaps the panel launcher from Kickoff / Application Dashboard to the classic hierarchical Application Menu (org.kde.plasma.kicker) \u2014 the old Win-95-style start menu. Edits the panel config and restarts plasmashell (panel reloads for ~2 s). Mirrors the kubuntu setup. Reversible (back to Kickoff).",
+    "category": "KDE (Desktop GUI Tweaks)",
+    "risk": "safe",
+    "check": "grep -q \"plugin=org.kde.plasma.kicker$\" /home/{USER}/.config/plasma-org.kde.plasma.desktop-appletsrc 2>/dev/null && ! grep -qE \"plugin=org.kde.plasma.(kickoff|kickerdash)$\" /home/{USER}/.config/plasma-org.kde.plasma.desktop-appletsrc 2>/dev/null",
+    "apply": [
+      "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus python3 {TOOLKIT_DIR}/tuxthrottle_kde_panel.py classic-menu on"
+    ],
+    "undo": [
+      "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus python3 {TOOLKIT_DIR}/tuxthrottle_kde_panel.py classic-menu off"
+    ]
+  },
   "DesktopLauncher": {
     "Content": "Add to the application menu",
     "Description": "Installs a .desktop entry (with the flaming-gauge icon) into your application menu / launcher so you can start the Toolkit without a terminal. Points at wherever this repo currently lives. Reversible.",
