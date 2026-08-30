@@ -13,6 +13,12 @@ presets. Plus a keyboard-RGB tab, a fan/thermal tab, an updates tab, a
 Online first), and a diagnostics tab that dumps hardware + OS info for bug
 reports.
 
+<p align="center">
+  <img src="assets/screenshot-about.png" alt="TuxThrottle running on a Dell G15 5515" width="900"/>
+  <br/>
+  <em>TuxThrottle on the Dell G15 5515 — dark "gaming-BIOS" UI, scrollable left nav with About / Report a Bug pinned to the foot.</em>
+</p>
+
 > **Roadmap:** the goal is a general **gaming-laptop** tool. Today it targets
 > exactly one machine — every check/apply command and hardware path in
 > `config/*.json` is written for the Dell G15 5515 Ryzen Edition on Nobara.
