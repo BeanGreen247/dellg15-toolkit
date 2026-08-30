@@ -3149,6 +3149,15 @@ class ToolkitApp:
         except tk.TclError:
             pass
 
+    def _toggle_about_features(self):
+        self._about_open = not self._about_open
+        if self._about_open:
+            self._about_body.pack(anchor="w", fill="x")
+            self._about_btn.configure(text="▾  What's inside")
+        else:
+            self._about_body.pack_forget()
+            self._about_btn.configure(text="▸  What's inside")
+
     def _build_about_tab(self):
         outer = tb.Frame(self.notebook)
         self.notebook.add(outer, text="About", pin=True)
@@ -3175,22 +3184,32 @@ class ToolkitApp:
             "Every check/apply command is written against that board — it is not a "
             "general-purpose distro tool.")).pack(anchor="w", pady=(0, 10))
 
-        feat = tb.Labelframe(frame, text="What's inside", padding=12)
+        # "What's inside" — a click-to-expand dropdown listing every section
+        feat = tb.Labelframe(frame, text="", padding=(4, 2))
         feat.pack(fill="x", pady=6)
-        for line in (
-            "Dashboard — live CPU / iGPU / dGPU clocks, temps, power + rolling history + CSV log",
-            "Keyboard — AW-ELC RGB (solid colour, brightness, Spectrum Cycle)",
-            "Fans — thermal profile, additive fan boost, presets, manual PWM, closed-loop curve",
-            "Power & Limits — CPU TDP (ryzenadj), NVIDIA / battery limits, hybrid-GPU, AC-switch",
-            "Profiles — named full-state bundles + auto snapshot / rollback",
-            "Presets — one-click curated bundles of tweaks + app installs",
-            "Updates — nobara-sync + dnf / Flatpak / fwupd",
-            "Setup Games — per-game click-through walkthroughs + Proton prefix tools",
-            "Tweaks / Apps — reversible system tweaks (incl. KDE desktop), app installs",
-            "tuxthrottlectl — headless CLI for scripts, keybinds and ssh",
-            "Report a Bug — read-only hardware/OS dump for GitHub issues",
+        self._about_open = False
+        self._about_btn = tb.Button(feat, text="▸  What's inside", bootstyle=(SECONDARY, "link"),
+                                    takefocus=False, command=self._toggle_about_features)
+        self._about_btn.pack(anchor="w")
+        self._about_body = tb.Frame(feat, padding=(14, 4, 4, 8))
+        for name, desc in (
+            ("Dashboard", "live CPU / iGPU / dGPU clocks, temps, power; rolling history sparklines; session CSV log; Game Mode toggle"),
+            ("Keyboard", "AW-ELC RGB — whole-keyboard solid colour, brightness, firmware Spectrum Cycle"),
+            ("Fans", "thermal profile, additive fan boost + presets, manual PWM (guarded), closed-loop custom fan curve"),
+            ("Power & Limits", "CPU TDP (ryzenadj STAPM/fast/slow), NVIDIA power limit where the GPU allows, hybrid-graphics mode (EnvyControl), battery charge limit (sysfs / libsmbios), AC↔battery auto-switch"),
+            ("Profiles", "named full-state bundles; automatic snapshot before every apply; one-click rollback; per-game auto-profiles"),
+            ("Presets", "one-click curated bundles of tweaks + app installs"),
+            ("Updates", "nobara-sync wrapper + per-manager dnf / Flatpak / fwupd; pending count tagged with the metadata age"),
+            ("Setup Games", "per-game click-through walkthroughs (GTA V Online first) + Proton prefix / save-file tools"),
+            ("Tweaks & Apps", "reversible system tweaks by category — Gaming, GPU, Power, Performance, KDE (Desktop GUI Tweaks), Stability — plus one-directional app installs"),
+            ("tuxthrottlectl", "headless CLI (status / get / set / profile / snapshot / rollback / gamemode, --json) for scripts, keybinds and ssh"),
+            ("Report a Bug", "read-only hardware / OS dump for GitHub issues"),
         ):
-            tb.Label(feat, text=f"•  {line}", wraplength=1000, justify="left").pack(anchor="w")
+            row = tb.Frame(self._about_body); row.pack(anchor="w", fill="x", pady=1)
+            tb.Label(row, text=f"•  {name}", font=("Sans", 10, "bold"),
+                     width=16, anchor="w").pack(side="left", anchor="n")
+            tb.Label(row, text=desc, wraplength=900, justify="left",
+                     bootstyle=SECONDARY).pack(side="left", anchor="n")
 
         link = tb.Labelframe(frame, text="Project", padding=12)
         link.pack(fill="x", pady=6)
