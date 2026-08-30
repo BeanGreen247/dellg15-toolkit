@@ -164,11 +164,19 @@ BIOS_PANEL = "#141a21"        # the surface — all widget backgrounds
 BIOS_SUNKEN = "#0b0e12"       # troughs / window ground (darker, so troughs read)
 BIOS_BG = BIOS_SUNKEN         # back-compat alias (busy overlay etc.)
 BIOS_PANEL_HI = "#212c38"     # hover / selected nav row / disclosure headers
-BIOS_FG = "#e6edf3"
-BIOS_MUTED = "#a6b4c4"        # secondary text — lifted for legibility on the dark panel
+BIOS_FG = "#e9eff5"
+BIOS_MUTED = "#b3bfcb"        # secondary text — >= 7:1 on every panel surface
 BIOS_BORDER = "#3c4a5b"       # card / labelframe hairline — clearly visible, not invisible
 BIOS_BORDER_HI = "#5a6b7e"    # stronger edge for the active / hovered card
 BIOS_CARD = "#1b2531"         # a subtle lift above BIOS_PANEL for raised panels / rows
+CHART_AXIS = "#8b98a8"        # sparkline axis / point labels — readable, not invisible
+# semantic status colours, re-picked so each clears ~6:1 on the dark panels
+# (darkly's defaults — esp. danger/info — drop below AA on the card / hover bg)
+SEM_SUCCESS = "#3ddc97"
+SEM_DANGER = "#ff7b70"
+SEM_WARNING = "#f5b041"
+SEM_INFO = "#57c4f2"
+SEM_SECONDARY = "#c3ccd6"
 HELP_AMBER = "#e8a33d"         # the "support / bug report" accent (warm, != KDE accent)
 HELP_BANNER_BG = "#2a2314"     # dark amber tint behind the bug-report banner
 
@@ -241,19 +249,28 @@ def apply_bios_style(style: "tb.Style", accent: str) -> None:
     defensively — a theming quirk must never take the app down."""
     # accent as *text* on the dark panels must stay legible whatever the
     # desktop accent is
-    accent_txt = readable_on(accent, BIOS_PANEL, 4.5)
-    accent_txt_hi = readable_on(accent, BIOS_PANEL_HI, 4.5)
+    # headings/accents: aim past AA (>=6:1) so they read easily even when the
+    # user's desktop accent is dark
+    accent_txt = readable_on(accent, BIOS_PANEL, 6.0)
+    accent_txt_hi = readable_on(accent, BIOS_PANEL_HI, 6.0)
     try:
         c = style.colors
         c.primary = accent
         c.info = accent
         c.selectbg = accent
         c.bg = BIOS_PANEL
+        c.fg = BIOS_FG
         c.dark = BIOS_PANEL
         c.light = BIOS_PANEL
         c.border = BIOS_BORDER
         c.active = BIOS_PANEL_HI
         c.inputbg = BIOS_SUNKEN
+        # re-pick the semantic colours so status text/outlines clear AA on the
+        # darker card / hover surfaces, not just on the base panel
+        c.secondary = SEM_SECONDARY
+        c.success = SEM_SUCCESS
+        c.danger = SEM_DANGER
+        c.warning = SEM_WARNING
     except Exception:  # noqa: BLE001
         pass
 
@@ -305,12 +322,12 @@ def apply_bios_style(style: "tb.Style", accent: str) -> None:
         # the odd one out: the Bug Report / Logs page — warm amber, not the
         # KDE accent, so it reads as "support / external", not a hardware tab
         "NavSupport.TButton": {"background": BIOS_PANEL,
-                               "foreground": readable_on(HELP_AMBER, BIOS_PANEL, 4.5),
+                               "foreground": readable_on(HELP_AMBER, BIOS_PANEL, 6.0),
                                "bordercolor": BIOS_PANEL, "focuscolor": "",
                                "font": ("Sans", 10, "bold"), "anchor": "w",
                                "padding": (16, 11), "relief": "flat"},
         "NavSupportActive.TButton": {"background": BIOS_PANEL_HI,
-                                     "foreground": readable_on(HELP_AMBER, BIOS_PANEL_HI, 4.5),
+                                     "foreground": readable_on(HELP_AMBER, BIOS_PANEL_HI, 6.0),
                                      "bordercolor": HELP_AMBER, "focuscolor": "",
                                      "font": ("Sans", 10, "bold"), "anchor": "w",
                                      "padding": (16, 11), "relief": "flat"},
@@ -324,7 +341,7 @@ def apply_bios_style(style: "tb.Style", accent: str) -> None:
                           "font": ("Sans", 10, "bold"), "padding": (16, 8)},
         "SupportBanner.TFrame": {"background": HELP_BANNER_BG},
         "SupportBanner.TLabel": {"background": HELP_BANNER_BG,
-                                 "foreground": readable_on(HELP_AMBER, HELP_BANNER_BG, 4.5),
+                                 "foreground": readable_on(HELP_AMBER, HELP_BANNER_BG, 6.0),
                                  "font": ("Sans", 10, "bold")},
     }
     for name, opts in specs.items():
@@ -332,8 +349,8 @@ def apply_bios_style(style: "tb.Style", accent: str) -> None:
             style.configure(name, **opts)
         except Exception:  # noqa: BLE001
             pass
-    hover = readable_on(_mix(accent, "#ffffff", 0.18), BIOS_PANEL_HI, 4.0)
-    amber_hover = readable_on(_mix(HELP_AMBER, "#ffffff", 0.18), BIOS_PANEL_HI, 4.0)
+    hover = readable_on(_mix(accent, "#ffffff", 0.22), BIOS_PANEL_HI, 5.0)
+    amber_hover = readable_on(_mix(HELP_AMBER, "#ffffff", 0.22), BIOS_PANEL_HI, 5.0)
     for name in ("NavSupport.TButton", "NavSupportActive.TButton"):
         try:
             style.map(name, background=[("active", BIOS_PANEL_HI)],
@@ -458,9 +475,9 @@ class HistoryChart(tk.Canvas):
         self.create_line(pts[0], h - pad, *pts, pts[-2], h - pad,
                          fill=self._color, width=0, stipple="gray12")
         self.create_text(w - 6, h - 6, text=f"{lo:.0f}", anchor="se",
-                         fill="#39404a", font=("Sans", 7))
+                         fill=CHART_AXIS, font=("Sans", 7))
         self.create_text(w - 6, 8, text=f"{hi:.0f}", anchor="ne",
-                         fill="#39404a", font=("Sans", 7))
+                         fill=CHART_AXIS, font=("Sans", 7))
 
 
 class SidebarNav(tb.Frame):
@@ -1569,14 +1586,14 @@ class ToolkitApp:
         def X(t): return pad + (t - tmin) / (tmax - tmin) * (w - 2 * pad)
         def Y(b): return h - pad - b / 100 * (h - 2 * pad)
         for gb in (0, 25, 50, 75, 100):
-            c.create_line(pad, Y(gb), w - pad, Y(gb), fill="#20262e")
+            c.create_line(pad, Y(gb), w - pad, Y(gb), fill="#2b3542")
         pts = self._fc_points()
         acc = getattr(self, "accent", "#58a6ff")
         for (t0, b0), (t1, b1) in zip(pts, pts[1:]):
             c.create_line(X(t0), Y(b0), X(t1), Y(b1), fill=acc, width=2)
         for t, b in pts:
             c.create_oval(X(t) - 3, Y(b) - 3, X(t) + 3, Y(b) + 3, fill=acc, outline="")
-            c.create_text(X(t), Y(b) - 10, text=f"{t}°", fill="#8b949e", font=("Sans", 7))
+            c.create_text(X(t), Y(b) - 10, text=f"{t}°", fill=CHART_AXIS, font=("Sans", 7))
 
     def _fc_save(self):
         merged = self._read_power_state("powerd.json") or {}
