@@ -210,6 +210,48 @@ ThrottleStop / the ASUS Armoury sliders:
 State is written to `~/.config/tuxthrottle/{tdp,nvpl,battery,powerd}.json`
 and re-applied at boot by the matching tweaks' units.
 
+## The Profiles tab
+
+A **profile** is a named snapshot of the *whole* power surface — thermal
+profile, CPU TDP, battery limit, NVIDIA limit, fan curve, AC/battery
+auto-switch, keyboard colour. Capture the current state as a named profile,
+apply one with a click, or roll back.
+
+- **Automatic snapshots** — applying a profile, rolling back, or hitting
+  "Apply Selected" on the tweaks first drops a timestamped snapshot in
+  `~/.config/tuxthrottle/snapshots/` (newest 20 kept), so there is always a
+  known-good state to return to if something misbehaves.
+- **Per-game auto-profiles** — map an executable name (for Proton games, the
+  Windows `.exe`) to a profile; the `tuxthrottle_powerd.py` daemon snapshots
+  and applies it while the game runs, and restores it on exit. `*` matches
+  any Feral GameMode session.
+- **CLI** — `tuxthrottlectl profile list|apply|save`, `tuxthrottlectl
+  snapshot`, `tuxthrottlectl rollback [last]`.
+- **Suspend/resume** — the **StateResume** tweak re-applies the last applied
+  state after a wake or reboot (TDP/battery/NVIDIA limits set directly don't
+  always survive on their own).
+
+## Desktop tweaks (KDE Plasma 6)
+
+The **KDE (Desktop GUI Tweaks)** category — reversible Plasma toggles,
+mirrored from a typical "gaming Kubuntu" setup. Each runs `kwriteconfig6`
+as your user (with your session D-Bus) and then reloads the live component
+(`qdbus-qt6`/`dbus-send` → KWin `reconfigure`, or a `plasmashell` restart),
+so the change sticks instead of being flushed back on logout. Undo removes
+the keys so Plasma returns to its defaults.
+
+| Tweak | Effect |
+|---|---|
+| Disable window animations + eye-candy | `AnimationDurationFactor=0` + KWin blur/wobbly/slide/fade/… effects off — instant windows, zero compositor overhead |
+| KWin compositor tuned for games | OpenGL/GLCore, fullscreen unredirect (`WindowsBlockCompositing`), `LatencyPolicy=Low`, bilinear texture filter |
+| Classic Application Menu | the old Win-95-style hierarchical start menu (`kicker`) instead of Kickoff |
+| Show seconds on the panel clock | `showSeconds=2` on every digital-clock widget |
+| Disable all screen-edge actions | no hot-corner Overview/Grid triggers mid-game |
+| Stop Activities + recent-docs tracking | kills the `kactivitymanagerd` journal + file-open history |
+| Limit Dolphin thumbnail I/O | cap thumbnail size, no remote-folder thumbnails |
+| No launch feedback | no bouncing cursor / taskbar button on app start |
+| Disable the Plasma splash screen | desktop appears as soon as it's ready |
+
 ## The Updates tab
 
 Wraps Nobara's own updater plus the other package managers on the box:
@@ -353,8 +395,11 @@ no-op.
 - `tray_monitor.py` — the system-tray-only equivalent (needs `PySide6`)
 - `hotkey_listener.py` — the G-key → Game Mode binding (needs `python3-evdev`)
 - `sensors.py` — shared sensor reads + Game Mode logic + CPU TDP (ryzenadj), battery, NVIDIA/hybrid-GPU helpers, **no GUI dependency**, used by everything below so they never disagree on state
-- `tuxthrottle_powerd.py` — stdlib daemon: closed-loop fan curve + AC/battery auto-switch (installed by the **Fan-curve + AC-switch daemon** tweak)
-- `tuxthrottlectl.py` — headless `status` / `get` / `set` CLI over `sensors.py`, installed as `/usr/local/bin/tuxthrottlectl`
+- `tuxthrottle_profiles.py` — stdlib: capture / apply / snapshot / rollback of named full-state profiles; used by the Profiles tab, the CLI, the daemon and the `StateResume` tweak
+- `tuxthrottle_powerd.py` — stdlib daemon: closed-loop fan curve + AC/battery auto-switch + per-game auto-profiles (installed by the **Fan-curve + AC-switch daemon** tweak)
+- `tuxthrottle_kde_panel.py` — stdlib helper for the two panel-applet KDE tweaks (clock seconds, classic menu) — finds applet IDs and restarts `plasmashell`
+- `tuxthrottlectl.py` — headless CLI over `sensors.py` + profiles (`status` / `get` / `set` / `profile` / `snapshot` / `rollback` / `gamemode`, `--json`), installed as `/usr/local/bin/tuxthrottlectl`
+- `tests/` — `pytest` suite for the pure logic (parsers, fan-curve maths, profile engine); `.github/workflows/ci.yml` runs it on push
 - `tuxthrottle_kbd.py` — AW-ELC RGB keyboard control: `openrgb` CLI wrapper for
   static/zone colours + firmware effects, plus stdlib software animation
   daemons (gradient / rainbow) that stream per-LED frames over a hand-rolled
@@ -509,9 +554,14 @@ Install via the Toolkit GUI (Gaming tab):
   **RyzenAdjTDP** (STAPM/fast/slow limits + boot/resume re-apply),
   **BatteryChargeLimit** / **DellBatteryThreshold** (libsmbios) for a
   stop-charging percentage, **FanCurveDaemon** (`tuxthrottle_powerd.py` —
-  closed-loop fan curve + AC/battery profile auto-switch),
-  **GameModeBridge** (wires Feral gamemode's start/end hooks to the toggle
-  scripts).
+  closed-loop fan curve + AC/battery profile auto-switch + per-game
+  auto-profiles), **StateResume** (re-apply the last profile after
+  suspend/reboot), **GameModeBridge** (wires Feral gamemode's start/end
+  hooks to the toggle scripts).
+- **KDE (Desktop GUI Tweaks)** — 9 reversible Plasma-6 toggles (see the
+  "Desktop tweaks" section): animations off, KWin gaming compositor, classic
+  Application Menu, clock seconds, screen edges off, activities/recent-docs
+  off, thumbnail I/O limit, launch feedback off, splash off.
 - **Performance** — USB autosuspend off, flat mouse accel, swappiness, zram
   tuning, KDE Baloo indexer off. Plus a curated **kernel-cmdline** set
   (`split_lock_detect=off`, `nowatchdog`, `preempt=full`, `threadirqs`, … —
