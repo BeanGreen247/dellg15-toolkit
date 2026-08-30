@@ -432,5 +432,90 @@
       "rm -f /home/{USER}/.local/share/applications/tuxthrottle.desktop",
       "su - {USER} -c 'update-desktop-database ~/.local/share/applications 2>/dev/null || true'"
     ]
+  },
+  "RyzenAdjTDP": {
+    "Content": "CPU TDP control (ryzenadj) + persist across reboot",
+    "Description": "Installs ryzenadj (from the distro repo, or built from source as a fallback) so the Power & Limits tab can set the 5800H's STAPM / fast / slow power limits — the Linux 'ThrottleStop for Ryzen'. Also installs tuxthrottle-tdp (re-applies ~/.config/tuxthrottle/tdp.json), a boot+resume service so your chosen limits survive a reboot, and a narrow sudoers rule so a future CLI/tray can call it without a password. The GUI itself already runs elevated and doesn't need the sudoers rule. Reversible.",
+    "category": "Power",
+    "risk": "advanced",
+    "check": "command -v ryzenadj >/dev/null 2>&1 && test -x /usr/local/bin/tuxthrottle-tdp && systemctl is-enabled tuxthrottle-tdp.service 2>/dev/null | grep -q enabled",
+    "reinstall_if": ["/etc/systemd/system/tuxthrottle-tdp.service"],
+    "apply": [
+      "command -v ryzenadj >/dev/null 2>&1 || dnf install -y ryzenadj || true",
+      "if ! command -v ryzenadj >/dev/null 2>&1; then dnf install -y cmake gcc gcc-c++ make git pciutils-devel && rm -rf /tmp/ryzenadj-build && git clone --depth 1 https://github.com/FlyGoat/RyzenAdj /tmp/ryzenadj-build && cmake -S /tmp/ryzenadj-build -B /tmp/ryzenadj-build/build -DCMAKE_BUILD_TYPE=Release && cmake --build /tmp/ryzenadj-build/build && install -m 0755 /tmp/ryzenadj-build/build/ryzenadj /usr/local/bin/ryzenadj; fi",
+      "cat > /usr/local/bin/tuxthrottle-tdp <<'SCRIPT'\n#!/usr/bin/env bash\n# Apply STAPM/fast/slow limits from tdp.json (Watts). Usage: tuxthrottle-tdp [file]\nset -e\nRA=\"$(command -v ryzenadj || echo /usr/local/bin/ryzenadj)\"\nF=\"${1:-/home/{USER}/.config/tuxthrottle/tdp.json}\"\n[ -r \"$F\" ] || { echo \"no $F\"; exit 0; }\nread_key(){ grep -oE \"\\\"$1\\\"[ ]*:[ ]*[0-9]+\" \"$F\" | grep -oE '[0-9]+$'; }\nS=$(read_key stapm); FA=$(read_key fast); SL=$(read_key slow)\nARGS=()\n[ -n \"$S\" ]  && ARGS+=(--stapm-limit=$((S*1000)))\n[ -n \"$FA\" ] && ARGS+=(--fast-limit=$((FA*1000)))\n[ -n \"$SL\" ] && ARGS+=(--slow-limit=$((SL*1000)))\n[ ${#ARGS[@]} -gt 0 ] || { echo 'nothing to apply'; exit 0; }\nexec \"$RA\" \"${ARGS[@]}\"\nSCRIPT",
+      "chmod +x /usr/local/bin/tuxthrottle-tdp",
+      "cat > /etc/systemd/system/tuxthrottle-tdp.service <<'UNIT'\n[Unit]\nDescription=Re-apply saved CPU TDP limits (TuxThrottle)\nAfter=multi-user.target\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/usr/local/bin/tuxthrottle-tdp\n\n[Install]\nWantedBy=multi-user.target\nUNIT",
+      "mkdir -p /usr/lib/systemd/system-sleep",
+      "cat > /usr/lib/systemd/system-sleep/tuxthrottle-tdp <<'HOOK'\n#!/usr/bin/env bash\n[ \"$1\" = post ] && /usr/local/bin/tuxthrottle-tdp || true\nHOOK",
+      "chmod +x /usr/lib/systemd/system-sleep/tuxthrottle-tdp",
+      "printf '{USER} ALL=(root) NOPASSWD: /usr/local/bin/tuxthrottle-tdp\\n' > /etc/sudoers.d/tuxthrottle-tdp",
+      "chmod 0440 /etc/sudoers.d/tuxthrottle-tdp",
+      "visudo -c -f /etc/sudoers.d/tuxthrottle-tdp",
+      "systemctl daemon-reload",
+      "systemctl enable --now tuxthrottle-tdp.service || true"
+    ],
+    "undo": [
+      "systemctl disable --now tuxthrottle-tdp.service 2>/dev/null || true",
+      "rm -f /etc/systemd/system/tuxthrottle-tdp.service /usr/lib/systemd/system-sleep/tuxthrottle-tdp /usr/local/bin/tuxthrottle-tdp /etc/sudoers.d/tuxthrottle-tdp",
+      "systemctl daemon-reload"
+    ]
+  },
+  "BatteryChargeLimit": {
+    "Content": "Battery charge-limit persistence",
+    "Description": "Sets the battery charge-stop threshold from the Power & Limits tab (spares the cell when the laptop lives on AC — 80% is the usual longevity target). This tweak adds tuxthrottle-battery + a boot service that re-applies ~/.config/tuxthrottle/battery.json, since the kernel resets charge_control_end_threshold to 100 on every boot. No-op on a machine that doesn't expose that sysfs attribute. Reversible (service removed; threshold left wherever it currently is).",
+    "category": "Power",
+    "risk": "safe",
+    "check": "test -x /usr/local/bin/tuxthrottle-battery && systemctl is-enabled tuxthrottle-battery.service 2>/dev/null | grep -q enabled",
+    "reinstall_if": ["/etc/systemd/system/tuxthrottle-battery.service"],
+    "apply": [
+      "cat > /usr/local/bin/tuxthrottle-battery <<'SCRIPT'\n#!/usr/bin/env bash\nF=\"${1:-/home/{USER}/.config/tuxthrottle/battery.json}\"\n[ -r \"$F\" ] || exit 0\nP=$(grep -oE '\"percent\"[ ]*:[ ]*[0-9]+' \"$F\" | grep -oE '[0-9]+$')\n[ -n \"$P\" ] || exit 0\nfor b in /sys/class/power_supply/BAT*/charge_control_end_threshold; do\n  [ -w \"$b\" ] && echo \"$P\" > \"$b\"\ndone\nexit 0\nSCRIPT",
+      "chmod +x /usr/local/bin/tuxthrottle-battery",
+      "cat > /etc/systemd/system/tuxthrottle-battery.service <<'UNIT'\n[Unit]\nDescription=Re-apply saved battery charge limit (TuxThrottle)\nAfter=multi-user.target\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/usr/local/bin/tuxthrottle-battery\n\n[Install]\nWantedBy=multi-user.target\nUNIT",
+      "systemctl daemon-reload",
+      "systemctl enable --now tuxthrottle-battery.service || true"
+    ],
+    "undo": [
+      "systemctl disable --now tuxthrottle-battery.service 2>/dev/null || true",
+      "rm -f /etc/systemd/system/tuxthrottle-battery.service /usr/local/bin/tuxthrottle-battery",
+      "systemctl daemon-reload"
+    ]
+  },
+  "NvidiaPowerLimit": {
+    "Content": "NVIDIA board power-limit persistence",
+    "Description": "Lets the Power & Limits tab cap the RTX 3050 Ti's board power (nvidia-smi -pl) — the most effective single lever for GPU heat and battery life. Installs tuxthrottle-nvpl + a boot service that re-applies ~/.config/tuxthrottle/nvpl.json (persistence mode + power limit), plus a scoped sudoers rule. requires the NVIDIA driver. Reversible.",
+    "category": "GPU",
+    "risk": "advanced",
+    "requires_vendor": "nvidia",
+    "check": "test -x /usr/local/bin/tuxthrottle-nvpl && systemctl is-enabled tuxthrottle-nvpl.service 2>/dev/null | grep -q enabled",
+    "reinstall_if": ["/etc/systemd/system/tuxthrottle-nvpl.service"],
+    "apply": [
+      "cat > /usr/local/bin/tuxthrottle-nvpl <<'SCRIPT'\n#!/usr/bin/env bash\nF=\"${1:-/home/{USER}/.config/tuxthrottle/nvpl.json}\"\ncommand -v nvidia-smi >/dev/null 2>&1 || exit 0\n[ -r \"$F\" ] || exit 0\nW=$(grep -oE '\"watts\"[ ]*:[ ]*[0-9]+' \"$F\" | grep -oE '[0-9]+$')\n[ -n \"$W\" ] || exit 0\nnvidia-smi -pm 1 >/dev/null 2>&1 || true\nnvidia-smi -pl \"$W\" >/dev/null 2>&1 || true\nexit 0\nSCRIPT",
+      "chmod +x /usr/local/bin/tuxthrottle-nvpl",
+      "cat > /etc/systemd/system/tuxthrottle-nvpl.service <<'UNIT'\n[Unit]\nDescription=Re-apply saved NVIDIA power limit (TuxThrottle)\nAfter=multi-user.target\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/usr/local/bin/tuxthrottle-nvpl\n\n[Install]\nWantedBy=multi-user.target\nUNIT",
+      "printf '{USER} ALL=(root) NOPASSWD: /usr/local/bin/tuxthrottle-nvpl\\n' > /etc/sudoers.d/tuxthrottle-nvpl",
+      "chmod 0440 /etc/sudoers.d/tuxthrottle-nvpl",
+      "visudo -c -f /etc/sudoers.d/tuxthrottle-nvpl",
+      "systemctl daemon-reload",
+      "systemctl enable --now tuxthrottle-nvpl.service || true"
+    ],
+    "undo": [
+      "systemctl disable --now tuxthrottle-nvpl.service 2>/dev/null || true",
+      "rm -f /etc/systemd/system/tuxthrottle-nvpl.service /usr/local/bin/tuxthrottle-nvpl /etc/sudoers.d/tuxthrottle-nvpl",
+      "systemctl daemon-reload"
+    ]
+  },
+  "GameModeBridge": {
+    "Content": "Feral GameMode → Game Mode bridge",
+    "Description": "Installs Feral gamemode and wires its start/end hooks to the gaming-performance / gaming-balanced scripts, so launching any game with 'gamemoderun %command%' (or a Lutris/Heroic/Steam that requests GameMode) automatically flips the performance platform_profile + fan slam, and drops back when you quit. Also sets a sensible renice/softrealtime. Requires the PowerProfileScripts tweak first. Reversible.",
+    "category": "Gaming",
+    "risk": "safe",
+    "check": "command -v gamemoded >/dev/null 2>&1 && grep -q 'gaming-performance' /etc/gamemode.ini 2>/dev/null",
+    "apply": [
+      "dnf install -y gamemode",
+      "test -x /usr/local/bin/gaming-performance || { echo 'Install the PowerProfileScripts tweak first'; exit 1; }",
+      "cat > /etc/gamemode.ini <<'INI'\n[general]\nrenice=10\nsoftrealtime=auto\ninhibit_screensaver=1\n\n[custom]\nstart=/usr/local/bin/gaming-performance\nend=/usr/local/bin/gaming-balanced\nINI"
+    ],
+    "undo": ["rm -f /etc/gamemode.ini"]
   }
 }

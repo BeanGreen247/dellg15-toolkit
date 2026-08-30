@@ -25,6 +25,7 @@ import subprocess
 import sys
 import threading
 import time
+import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 import tkinter as tk
 from pathlib import Path
@@ -33,6 +34,8 @@ from tkinter import messagebox
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_DIR = BASE_DIR / "config"
 ASSETS_DIR = BASE_DIR / "assets"
+PROJECT_URL = "https://github.com/BeanGreen247/tuxthrottle"
+PROJECT_ISSUES_URL = PROJECT_URL + "/issues"
 sys.path.insert(0, str(BASE_DIR))
 
 try:
@@ -377,6 +380,28 @@ class SidebarNav(tb.Frame):
         self.rail.pack_propagate(False)
         tb.Separator(self, orient="vertical").pack(side="left", fill="y")
 
+        # Pinned area at the foot of the rail — packed first (side=bottom) so it
+        # always reserves its height; About + Report a Bug live here and stay
+        # visible no matter how far the scrollable list above is scrolled.
+        self._rail_bottom = tb.Frame(self.rail, style="Nav.TFrame")
+        self._rail_bottom.pack(side="bottom", fill="x")
+        self._rail_bottom_sep = None
+
+        # Scrollable list of the normal nav buttons.
+        self._nav_canvas = tk.Canvas(self.rail, bg=BIOS_PANEL, highlightthickness=0,
+                                     bd=0, width=212)
+        self._nav_vsb = tb.Scrollbar(self.rail, orient="vertical",
+                                     command=self._nav_canvas.yview)
+        self._nav_canvas.configure(yscrollcommand=self._nav_vsb.set)
+        self._nav_canvas.pack(side="left", fill="both", expand=True)
+        self._nav_box = tb.Frame(self._nav_canvas, style="Nav.TFrame")
+        self._nav_win = self._nav_canvas.create_window((0, 0), window=self._nav_box,
+                                                       anchor="nw")
+        self._nav_box.bind("<Configure>", lambda _e: self._nav_reflow())
+        self._nav_canvas.bind("<Configure>", lambda e: (
+            self._nav_canvas.itemconfigure(self._nav_win, width=e.width),
+            self._nav_reflow()))
+
         right = tb.Frame(self)
         right.pack(side="left", fill="both", expand=True)
         self._header = tb.Label(right, text="", style="Header.TLabel",
@@ -389,17 +414,28 @@ class SidebarNav(tb.Frame):
         self._pages: list = []      # (text, frame, button)
         self._current = None
 
-    def add(self, frame, text: str = "", *, kind: str = "normal", spacer: bool = False):
+    def _nav_reflow(self):
+        """Keep the scrollregion in sync and hide the scrollbar unless the
+        button list actually overflows the rail."""
+        self._nav_canvas.configure(scrollregion=self._nav_canvas.bbox("all"))
+        need = self._nav_box.winfo_reqheight() > self._nav_canvas.winfo_height() + 1
+        if need and not self._nav_vsb.winfo_ismapped():
+            self._nav_vsb.pack(side="right", fill="y", before=self._nav_canvas)
+        elif not need and self._nav_vsb.winfo_ismapped():
+            self._nav_vsb.pack_forget()
+
+    def add(self, frame, text: str = "", *, kind: str = "normal",
+            spacer: bool = False, pin: bool = False):
         frame.master  # noqa: B018  (frame was created as tb.Frame(self); fine)
-        if spacer:
-            # push the rest of the rail down and rule it off — used to detach
-            # the Bug Report / Logs page from the hardware tabs
-            tb.Frame(self.rail, style="Nav.TFrame").pack(fill="both", expand=True)
-            tb.Separator(self.rail, orient="horizontal").pack(fill="x", padx=12, pady=(0, 4))
+        pinned = pin or spacer or kind == "support"
+        parent = self._rail_bottom if pinned else self._nav_box
+        if pinned and self._rail_bottom_sep is None:
+            self._rail_bottom_sep = tb.Separator(self._rail_bottom, orient="horizontal")
+            self._rail_bottom_sep.pack(side="top", fill="x", padx=12, pady=(4, 2))
         base = "NavSupport.TButton" if kind == "support" else "Nav.TButton"
-        btn = tb.Button(self.rail, text=text, style=base,
+        btn = tb.Button(parent, text=text, style=base,
                         takefocus=False, command=lambda f=frame: self.select(f))
-        btn.pack(fill="x", padx=0, pady=1)
+        btn.pack(side="top", fill="x", padx=0, pady=1)
         btn._nav_kind = kind  # noqa: SLF001
         self._pages.append((text, frame, btn))
         if self._current is None:
@@ -422,9 +458,29 @@ class SidebarNav(tb.Frame):
             if on:
                 f.pack(in_=self._stack, fill="both", expand=True)
                 self._header.configure(text=text)
+                self._reveal(b)
             else:
                 f.pack_forget()
         self._current = frame
+
+    def _reveal(self, btn):
+        """If the selected button lives in the scrollable list and is off-screen,
+        scroll it into view."""
+        if btn.master is not self._nav_box:
+            return
+        try:
+            self._nav_canvas.update_idletasks()
+            top = btn.winfo_y()
+            bot = top + btn.winfo_height()
+            view_h = self._nav_canvas.winfo_height()
+            y0 = self._nav_canvas.canvasy(0)
+            total = max(1, self._nav_box.winfo_reqheight())
+            if top < y0:
+                self._nav_canvas.yview_moveto(top / total)
+            elif bot > y0 + view_h:
+                self._nav_canvas.yview_moveto((bot - view_h) / total)
+        except (tk.TclError, ZeroDivisionError):
+            pass
 
     # ---- tb.Notebook compatibility ----
     def tabs(self):
@@ -725,6 +781,7 @@ class ToolkitApp:
     def _on_close(self):
         self.dash_running = False
         self._fan_live = False
+        self._power_live = False
         if self._pop_win is not None:
             try:
                 self._pop_win.destroy()
@@ -843,10 +900,13 @@ class ToolkitApp:
         self.notebook = SidebarNav(self.root)
         self.notebook.pack(fill="both", expand=True)
         self._content = self.notebook   # overlay target for _begin_busy
+        # let the global mouse-wheel handler drive the scrollable nav rail too
+        self._scroll_canvases.append(self.notebook._nav_canvas)  # noqa: SLF001
 
         self._build_dashboard_tab()
         self._build_keyboard_tab()
         self._build_fan_tab()
+        self._build_power_tab()
         self._build_presets_tab()
         self._build_updates_tab()
         if self.games:
@@ -859,8 +919,9 @@ class ToolkitApp:
         for cat in categories:
             self._build_category_tab(cat)
 
-        # last, detached at the bottom of the rail: not a hardware tab, it's the
-        # "gather logs to attach to a GitHub issue" page
+        # last, pinned to the foot of the rail (always visible, below the
+        # scrollable list): About, then the "gather logs for a GitHub issue" page
+        self._build_about_tab()
         self._build_diagnostics_tab()
 
         # ---- footer: actions + status ----
@@ -955,19 +1016,23 @@ class ToolkitApp:
         gauges = tb.Frame(frame)
         gauges.pack(fill="x", pady=(0, 18))
         acc = getattr(self, "accent", ACCENT_FALLBACK)
+        # Two rows of four. dGPU/iGPU clock gauges sit next to their temps so a
+        # glance shows whether a chip is boosting or parked.
         specs = [
-            ("meter_cpu_temp",  "CPU temp",  "°C",  100, acc,       "{:.0f}"),
-            ("meter_cpu_freq",  "CPU clock", "GHz", 5.0, "#3fb950", "{:.2f}"),
-            ("meter_cpu_power", "CPU power", "W",    65, acc,       "{:.0f}"),
-            ("meter_dgpu_temp", "dGPU temp", "°C",  100, "#d29922", "{:.0f}"),
-            ("meter_dgpu_util", "dGPU util", "%",   100, "#f85149", "{:.0f}"),
-            ("meter_dgpu_power","dGPU power","W",    80, "#d29922", "{:.0f}"),
+            ("meter_cpu_temp",  "CPU temp",   "°C",  100, acc,       "{:.0f}"),
+            ("meter_cpu_freq",  "CPU clock",  "GHz", 5.0, "#3fb950", "{:.2f}"),
+            ("meter_cpu_power", "CPU power",  "W",    65, acc,       "{:.0f}"),
+            ("meter_igpu_freq", "iGPU clock", "MHz", 2000, "#3fb950", "{:.0f}"),
+            ("meter_dgpu_temp", "dGPU temp",  "°C",  100, "#d29922", "{:.0f}"),
+            ("meter_dgpu_freq", "dGPU clock", "MHz", 2100, "#d29922", "{:.0f}"),
+            ("meter_dgpu_util", "dGPU util",  "%",   100, "#f85149", "{:.0f}"),
+            ("meter_dgpu_power","dGPU power", "W",    80, "#d29922", "{:.0f}"),
         ]
         for i, (attr, cap, unit, mx, col, fmt) in enumerate(specs):
             g = RingGauge(gauges, caption=cap, unit=unit, maximum=mx,
-                          color=col, fmt=fmt)
-            g.grid(row=0, column=i, padx=8, sticky="n")
-            gauges.columnconfigure(i, weight=1)
+                          color=col, fmt=fmt, size=132)
+            g.grid(row=i // 4, column=i % 4, padx=8, pady=6, sticky="n")
+            gauges.columnconfigure(i % 4, weight=1)
             setattr(self, attr, g)
 
         self.rapl_warning = tb.Label(
@@ -1363,6 +1428,254 @@ class ToolkitApp:
                 except tk.TclError:
                     pass
         self.root.after(2000, self._fan_poll)
+
+    # ---------- Power & Limits tab ----------
+
+    # (STAPM, fast, slow) Watts. STAPM (sustained ceiling) is kept >= slow so the
+    # SMU doesn't clamp it. Dell's stock envelope on this board is 65/65/54.
+    _TDP_PRESETS = {
+        "Quiet":       (25, 35, 25),
+        "Balanced":    (42, 54, 42),
+        "Performance": (65, 80, 54),
+    }
+
+    def _power_state_path(self, name: str) -> Path:
+        try:
+            home = Path(pwd.getpwnam(self.user).pw_dir)
+        except (KeyError, Exception):  # noqa: BLE001
+            home = Path.home()
+        return home / ".config" / "tuxthrottle" / name
+
+    def _write_power_state(self, name: str, data: dict) -> None:
+        """Persist a limit so a later-installed boot service can re-apply it.
+        Best-effort; chowns back to the real user when running elevated."""
+        p = self._power_state_path(name)
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps(data, indent=2, sort_keys=True))
+            if os.geteuid() == 0:
+                pw = pwd.getpwnam(self.user)
+                os.chown(p, pw.pw_uid, pw.pw_gid)
+                os.chown(p.parent, pw.pw_uid, pw.pw_gid)
+        except (OSError, KeyError):
+            pass
+
+    def _build_power_tab(self):
+        outer = tb.Frame(self.notebook)
+        self.notebook.add(outer, text="Power & Limits")
+        frame = self._scroll_body(outer, pad=16)
+
+        tb.Label(frame, wraplength=1100, justify="left", bootstyle=SECONDARY,
+                 text="Live power/thermal envelope controls — the Linux equivalent "
+                      "of ThrottleStop / the ASUS Armoury tuning sliders. Changes "
+                      "apply immediately; installing the matching tweak on the Power "
+                      "tab makes them stick across a reboot.").pack(anchor="w", pady=(0, 14))
+
+        self._build_tdp_section(frame)
+        self._build_nvpl_section(frame)
+        self._build_battery_section(frame)
+
+        self._power_live = True
+        self._power_poll()
+
+    # --- CPU TDP (ryzenadj) ---
+
+    def _build_tdp_section(self, parent):
+        lf = tb.Labelframe(parent, text="CPU power limits — Ryzen 7 5800H (ryzenadj)",
+                           padding=12)
+        lf.pack(fill="x", pady=6)
+        if not sensors.ryzenadj_available():
+            tb.Label(lf, bootstyle=WARNING, wraplength=1000, justify="left",
+                     text="ryzenadj isn't installed. Add the “CPU TDP control "
+                          "(ryzenadj)” tweak on the Power tab, then reopen this tab.").pack(anchor="w")
+            return
+        tb.Label(lf, wraplength=1000, justify="left", bootstyle=SECONDARY,
+                 text="STAPM = sustained limit (long window), Fast = short burst, "
+                      "Slow = medium window. Higher = more performance, more heat.").pack(anchor="w", pady=(0, 8))
+
+        self._tdp_vars = {}
+        self._tdp_val_labels = {}
+        for key, cap in (("stapm", "STAPM (sustained)"), ("fast", "Fast (burst)"),
+                         ("slow", "Slow (medium)")):
+            r = tb.Frame(lf); r.pack(fill="x", pady=4)
+            tb.Label(r, text=cap, width=20, anchor="w").pack(side="left")
+            v = tk.IntVar(value=45)
+            self._tdp_vars[key] = v
+            sc = tb.Scale(r, from_=10, to=90, variable=v, orient="horizontal", length=300)
+            sc.pack(side="left", fill="x", expand=True)
+            sc.bind("<ButtonRelease-1>", lambda _e: self._tdp_apply())
+            tb.Label(r, textvariable=v, width=3).pack(side="left")
+            tb.Label(r, text="W").pack(side="left", padx=(0, 8))
+            live = tb.Label(r, text="now: — W", width=12, bootstyle=SECONDARY)
+            live.pack(side="left")
+            self._tdp_val_labels[key] = live
+
+        pr = tb.Frame(lf); pr.pack(anchor="w", pady=(10, 0))
+        tb.Label(pr, text="Presets:", bootstyle=SECONDARY).pack(side="left", padx=(0, 6))
+        for name in self._TDP_PRESETS:
+            tb.Button(pr, text=name, bootstyle=(INFO, "outline"),
+                      command=lambda n=name: self._tdp_preset(n)).pack(side="left", padx=3)
+        tb.Button(pr, text="Firmware default", bootstyle=(SECONDARY, "outline"),
+                  command=self._tdp_reset).pack(side="left", padx=(12, 0))
+
+    def _tdp_preset(self, name: str):
+        stapm, fast, slow = self._TDP_PRESETS[name]
+        self._tdp_vars["stapm"].set(stapm)
+        self._tdp_vars["fast"].set(fast)
+        self._tdp_vars["slow"].set(slow)
+        self._tdp_apply(note=f"preset {name}")
+
+    def _tdp_reset(self):
+        # No portable "reset to BIOS" in ryzenadj; re-assert the board's stock
+        # 5800H envelope (54/54/54 STAPM/slow, 65 fast is Dell's default here).
+        self._tdp_vars["stapm"].set(54)
+        self._tdp_vars["fast"].set(65)
+        self._tdp_vars["slow"].set(54)
+        self._tdp_apply(note="firmware default")
+
+    def _tdp_apply(self, note: str = ""):
+        vals = {k: v.get() for k, v in self._tdp_vars.items()}
+        self._write_power_state("tdp.json", vals)
+        tail = f" ({note})" if note else ""
+
+        def work():
+            ok, err = sensors.set_ryzenadj_limits(
+                fast_w=vals["fast"], slow_w=vals["slow"], stapm_w=vals["stapm"])
+            self._log(f"[Power] TDP → STAPM {vals['stapm']} / fast {vals['fast']} / "
+                      f"slow {vals['slow']} W{tail}" + ("" if ok else f"  FAILED: {err}"))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    # --- NVIDIA board power limit ---
+
+    def _build_nvpl_section(self, parent):
+        if not self.has_nvidia:
+            return
+        lf = tb.Labelframe(parent, text="NVIDIA board power limit — RTX 3050 Ti",
+                           padding=12)
+        lf.pack(fill="x", pady=6)
+        info = sensors.nvidia_power_limit_info()
+        if info is not None and not info.get("supported", True):
+            tb.Label(lf, bootstyle=WARNING, wraplength=1000, justify="left",
+                     text="This laptop's GPU firmware locks the board power limit "
+                          "(NVIDIA Dynamic Boost manages it) — nvidia-smi -pl is "
+                          "rejected on the G15 5515. Nothing to set here. Use the "
+                          "'nvidia-max-perf' GPU tweak + the CPU TDP slider above "
+                          "to influence the shared power/thermal budget instead.").pack(anchor="w")
+            return
+        self._nvpl_lf = lf
+        self._nvpl_var = tk.IntVar(value=(info or {}).get("current") or 60)
+        r = tb.Frame(lf); r.pack(fill="x", pady=4)
+        tb.Label(r, text="Power limit", width=20, anchor="w").pack(side="left")
+        lo = (info or {}).get("min", 30)
+        hi = (info or {}).get("max", 80)
+        self._nvpl_scale = tb.Scale(r, from_=lo, to=hi, variable=self._nvpl_var,
+                                    orient="horizontal", length=300)
+        self._nvpl_scale.pack(side="left", fill="x", expand=True)
+        self._nvpl_scale.bind("<ButtonRelease-1>", lambda _e: self._nvpl_apply())
+        tb.Label(r, textvariable=self._nvpl_var, width=3).pack(side="left")
+        tb.Label(r, text="W").pack(side="left", padx=(0, 8))
+        self._nvpl_live = tb.Label(r, text="now: — W", width=12, bootstyle=SECONDARY)
+        self._nvpl_live.pack(side="left")
+        br = tb.Frame(lf); br.pack(anchor="w", pady=(8, 0))
+        if info and info.get("default"):
+            tb.Button(br, text=f"Default ({info['default']} W)", bootstyle=(SECONDARY, "outline"),
+                      command=lambda: (self._nvpl_var.set(info["default"]), self._nvpl_apply())
+                      ).pack(side="left")
+        self._nvpl_note = tb.Label(lf, bootstyle=SECONDARY, wraplength=1000,
+                                   text="" if info else "dGPU is asleep — wake it (run something on it) "
+                                        "to read/set the limit.")
+        self._nvpl_note.pack(anchor="w", pady=(6, 0))
+
+    def _nvpl_apply(self):
+        w = self._nvpl_var.get()
+        self._write_power_state("nvpl.json", {"watts": w})
+
+        def work():
+            ok, err = sensors.set_nvidia_power_limit(w)
+            self._log(f"[Power] NVIDIA power limit → {w} W"
+                      + ("" if ok else f"  FAILED: {err}"))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    # --- Battery charge limit ---
+
+    def _build_battery_section(self, parent):
+        info = sensors.battery_charge_limit_info()
+        lf = tb.Labelframe(parent, text="Battery charge limit", padding=12)
+        lf.pack(fill="x", pady=6)
+        if not info["supported"]:
+            tb.Label(lf, bootstyle=SECONDARY, wraplength=1000, justify="left",
+                     text="This machine doesn't expose a charge-stop threshold "
+                          "(no charge_control_end_threshold in sysfs).").pack(anchor="w")
+            return
+        tb.Label(lf, wraplength=1000, justify="left", bootstyle=SECONDARY,
+                 text="Stops charging at the set level to spare the cell when the "
+                      "laptop mostly runs on AC. 80 % is the usual longevity sweet spot.").pack(anchor="w", pady=(0, 8))
+        r = tb.Frame(lf); r.pack(fill="x", pady=4)
+        tb.Label(r, text="Stop charging at", width=20, anchor="w").pack(side="left")
+        self._bat_var = tk.IntVar(value=info["current"] or 100)
+        sc = tb.Scale(r, from_=50, to=100, variable=self._bat_var,
+                      orient="horizontal", length=300,
+                      command=lambda _v: self._bat_var.set(round(self._bat_var.get() / 5) * 5))
+        sc.pack(side="left", fill="x", expand=True)
+        sc.bind("<ButtonRelease-1>", lambda _e: self._bat_apply())
+        tb.Label(r, textvariable=self._bat_var, width=3).pack(side="left")
+        tb.Label(r, text="%").pack(side="left", padx=(0, 8))
+        self._bat_live = tb.Label(r, text="now: — %", width=12, bootstyle=SECONDARY)
+        self._bat_live.pack(side="left")
+        br = tb.Frame(lf); br.pack(anchor="w", pady=(8, 0))
+        for lbl, pct in (("60 %", 60), ("80 %", 80), ("Full (100 %)", 100)):
+            tb.Button(br, text=lbl, bootstyle=(SECONDARY, "outline"),
+                      command=lambda p=pct: (self._bat_var.set(p), self._bat_apply())
+                      ).pack(side="left", padx=3)
+
+    def _bat_apply(self):
+        p = self._bat_var.get()
+        self._write_power_state("battery.json", {"percent": p})
+        ok, err = sensors.set_battery_charge_limit(p)
+        self._log(f"[Power] battery charge limit → {p}%" + ("" if ok else f"  FAILED: {err}"))
+
+    # --- live readouts ---
+
+    def _power_poll(self):
+        """Refresh the 'now:' readouts. The reads (ryzenadj -i, nvidia-smi)
+        can each take ~1s, so they run on a worker and the label writes are
+        marshalled back to the Tk thread."""
+        if not getattr(self, "_power_live", False):
+            return
+        threading.Thread(target=self._power_poll_worker, daemon=True).start()
+        self.root.after(3000, self._power_poll)
+
+    def _power_poll_worker(self):
+        tdp = sensors.read_ryzenadj_info() if getattr(self, "_tdp_val_labels", None) else None
+        nvpl = sensors.nvidia_power_limit_info() if getattr(self, "_nvpl_live", None) is not None else None
+        bat = sensors.battery_charge_limit_info() if getattr(self, "_bat_live", None) is not None else None
+        try:
+            self.root.after(0, lambda: self._power_poll_apply(tdp, nvpl, bat))
+        except (RuntimeError, tk.TclError):
+            pass  # window torn down while this worker was in flight
+
+    def _power_poll_apply(self, tdp, nvpl, bat):
+        if tdp is not None:
+            for key, lab in self._tdp_val_labels.items():
+                v = tdp.get(f"{key}_limit")
+                try:
+                    lab.configure(text=f"now: {v:.0f} W" if v is not None else "now: — W")
+                except tk.TclError:
+                    pass
+        if getattr(self, "_nvpl_live", None) is not None:
+            try:
+                self._nvpl_live.configure(
+                    text=f"now: {nvpl['current']} W" if nvpl else "now: asleep")
+            except tk.TclError:
+                pass
+        if getattr(self, "_bat_live", None) is not None and bat is not None:
+            try:
+                self._bat_live.configure(
+                    text=f"now: {bat['current']} %" if bat["current"] is not None else "now: — %")
+            except tk.TclError:
+                pass
 
     def _build_category_tab(self, category: str):
         outer = tb.Frame(self.notebook)
@@ -2279,6 +2592,113 @@ class ToolkitApp:
 
         threading.Thread(target=work, daemon=True).start()
 
+    # ---------- About ----------
+
+    def _open_url(self, url: str):
+        """Open a link in the user's browser. The GUI runs as root, so hand it
+        to the real user's session first; fall back to webbrowser."""
+        try:
+            uid = pwd.getpwnam(self.user).pw_uid
+            r = subprocess.run(
+                ["sudo", "-u", self.user, "env", f"XDG_RUNTIME_DIR=/run/user/{uid}",
+                 f"DISPLAY={os.environ.get('DISPLAY', ':0')}", "xdg-open", url],
+                capture_output=True, timeout=8,
+            )
+            if r.returncode == 0:
+                self._log(f"[About] opened {url}")
+                return
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            webbrowser.open(url)
+            self._log(f"[About] opened {url}")
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[About] couldn't open a browser ({exc}) — copy the link instead")
+
+    def _copy_text(self, text: str, what: str = "link"):
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            self.status_var.set(f"{what.capitalize()} copied.")
+        except tk.TclError:
+            pass
+
+    def _build_about_tab(self):
+        outer = tb.Frame(self.notebook)
+        self.notebook.add(outer, text="About", pin=True)
+        frame = self._scroll_body(outer, pad=20)
+
+        head = tb.Frame(frame)
+        head.pack(fill="x", pady=(0, 12))
+        if getattr(self, "_icon_img", None) is not None:
+            try:
+                big = self._icon_img.subsample(max(1, self._icon_img.width() // 72))
+                tb.Label(head, image=big).pack(side="left", padx=(0, 14))
+                self._about_icon = big  # keep a ref
+            except tk.TclError:
+                pass
+        tbox = tb.Frame(head); tbox.pack(side="left", anchor="n")
+        tb.Label(tbox, text="TuxThrottle", font=("Sans", 20, "bold")).pack(anchor="w")
+        tb.Label(tbox, text=f"version {toolkit_version()}", bootstyle=SECONDARY,
+                 font=("Monospace", 10)).pack(anchor="w")
+
+        tb.Label(frame, wraplength=1000, justify="left", text=(
+            "A checkbox-driven GUI, tray monitor and G-key listener that applies "
+            "hardware-specific tweaks, drivers and gaming setup to the Dell G15 5515 "
+            "Ryzen Edition (Ryzen 7 5800H + RTX 3050 Ti Mobile) running Nobara Linux. "
+            "Every check/apply command is written against that board — it is not a "
+            "general-purpose distro tool.")).pack(anchor="w", pady=(0, 10))
+
+        feat = tb.Labelframe(frame, text="What's inside", padding=12)
+        feat.pack(fill="x", pady=6)
+        for line in (
+            "Dashboard — live CPU / iGPU / dGPU clocks, temps, power, Game Mode toggle",
+            "Keyboard — AW-ELC RGB (solid colour, brightness, Spectrum Cycle)",
+            "Fans — thermal profile, additive fan boost, presets, manual PWM",
+            "Power & Limits — CPU TDP (ryzenadj), NVIDIA / battery limits where supported",
+            "Presets — one-click curated bundles of tweaks + app installs",
+            "Updates — nobara-sync + dnf / Flatpak / fwupd",
+            "Setup Games — per-game click-through walkthroughs + Proton prefix tools",
+            "Tweaks / Apps — reversible system tweaks, one-directional app installs",
+            "Report a Bug — read-only hardware/OS dump for GitHub issues",
+        ):
+            tb.Label(feat, text=f"•  {line}", wraplength=1000, justify="left").pack(anchor="w")
+
+        link = tb.Labelframe(frame, text="Project", padding=12)
+        link.pack(fill="x", pady=6)
+        row = tb.Frame(link); row.pack(fill="x")
+        tb.Button(row, text="Open on GitHub", bootstyle=INFO,
+                  command=lambda: self._open_url(PROJECT_URL)).pack(side="left")
+        tb.Button(row, text="Report an issue", bootstyle=(WARNING, "outline"),
+                  command=lambda: self._open_url(PROJECT_ISSUES_URL)).pack(side="left", padx=8)
+        tb.Button(row, text="Copy link", bootstyle=(SECONDARY, "outline"),
+                  command=lambda: self._copy_text(PROJECT_URL)).pack(side="left")
+        url_ent = tk.Entry(link, font=("Monospace", 10), relief="flat",
+                           readonlybackground="#0e1116", fg="#c9d1d9", bd=0)
+        url_ent.insert(0, PROJECT_URL)
+        url_ent.configure(state="readonly")
+        url_ent.pack(fill="x", pady=(8, 0))
+
+        meta = tb.Labelframe(frame, text="Details", padding=12)
+        meta.pack(fill="x", pady=6)
+        m = sensors.detect_model()
+        for k, v in (
+            ("Target hardware", "Dell G15 5515 Ryzen Edition (0R3CDX)"),
+            ("This machine", f"{m['vendor']} {m['product']}"
+                             + (f", BIOS {m['bios']}" if m['bios'] else "")),
+            ("Distro target", "Nobara Linux (Fedora 43 base, KDE Plasma / Wayland)"),
+            ("License", "MIT — © 2026 BeanGreen247"),
+            ("Install path", "/opt/tuxthrottle"),
+        ):
+            r = tb.Frame(meta); r.pack(fill="x", pady=1)
+            tb.Label(r, text=f"{k}:", width=16, anchor="w", bootstyle=SECONDARY).pack(side="left")
+            tb.Label(r, text=v, wraplength=880, justify="left").pack(side="left")
+
+        tb.Label(frame, bootstyle=SECONDARY, wraplength=1000, justify="left", text=(
+            "Built in the spirit of WinUtil-style Windows tweak tools and "
+            "Div-Acer-Manager-Max. Not affiliated with Dell or Alienware."
+        )).pack(anchor="w", pady=(10, 0))
+
     # ---------- diagnostics / debug report ----------
 
     def _build_diagnostics_tab(self):
@@ -2457,7 +2877,9 @@ class ToolkitApp:
                 self.meter_cpu_temp.set(cpu_temp)
                 self.meter_cpu_freq.set(cpu_freq)
                 self.meter_cpu_power.set(cpu_power)
+                self.meter_igpu_freq.set(igpu_clock)
                 self.meter_dgpu_temp.set(dgpu_temp)
+                self.meter_dgpu_freq.set(dgpu_clock)
                 self.meter_dgpu_util.set(dgpu_util)
                 self.meter_dgpu_power.set(dgpu_power)
                 cpu_power_txt = f", {cpu_power:.1f} W" if cpu_power is not None else ""

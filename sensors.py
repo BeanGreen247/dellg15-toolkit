@@ -536,3 +536,225 @@ def restore_fan_auto() -> tuple[bool, str]:
         if not ok and "not present" not in err:
             errs.append(err)
     return (not errs), "; ".join(errs)
+
+
+# --------------------------------------------------------------------------- #
+#  CPU power limits — ryzenadj (Ryzen 7 5800H / Cezanne)
+#
+#  ryzenadj talks to the SMU over the ACPI mailbox; every call (reads too)
+#  needs root. The GUI runs elevated so this works directly; the tray/hotkey
+#  (unprivileged) will just get "n/a", which is fine — they only display.
+#  Limits are Watts. STAPM = sustained (long window), fast = short burst,
+#  slow = the medium PPT window.
+# --------------------------------------------------------------------------- #
+
+# name shown by `ryzenadj -i` → key we expose
+_RYZENADJ_LIMIT_ROWS = {
+    "STAPM LIMIT": "stapm_limit",
+    "PPT LIMIT FAST": "fast_limit",
+    "PPT LIMIT SLOW": "slow_limit",
+    "THM LIMIT CORE": "tctl_limit",
+}
+_RYZENADJ_VALUE_ROWS = {
+    "STAPM VALUE": "stapm_value",
+    "PPT VALUE FAST": "fast_value",
+    "PPT VALUE SLOW": "slow_value",
+    "THM VALUE CORE": "tctl_value",
+}
+
+
+def ryzenadj_available() -> bool:
+    return which("ryzenadj") is not None
+
+
+def read_ryzenadj_info() -> dict | None:
+    """Parse `ryzenadj -i` into {stapm_limit, fast_limit, slow_limit,
+    tctl_limit, *_value, ...} (Watts / °C). None if ryzenadj is missing or
+    couldn't run (not root, unsupported SMU)."""
+    exe = which("ryzenadj")
+    if not exe:
+        return None
+    try:
+        out = subprocess.run([exe, "-i"], capture_output=True, text=True, timeout=8)
+    except Exception:  # noqa: BLE001
+        return None
+    if out.returncode != 0 and not out.stdout:
+        return None
+    info: dict = {}
+    for line in out.stdout.splitlines():
+        if line.count("|") < 3:
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) < 2:
+            continue
+        name = cells[0].upper()
+        try:
+            val = float(cells[1])
+        except ValueError:
+            continue
+        for label, key in _RYZENADJ_LIMIT_ROWS.items():
+            if name == label:
+                info[key] = round(val, 1)
+        for label, key in _RYZENADJ_VALUE_ROWS.items():
+            if name == label:
+                info[key] = round(val, 1)
+    return info or None
+
+
+def set_ryzenadj_limits(fast_w=None, slow_w=None, stapm_w=None) -> tuple[bool, str]:
+    """Apply any of the three PPT limits (Watts). Clamped to a sane
+    5800H envelope (10–90 W). At least one value must be given."""
+    exe = which("ryzenadj")
+    if not exe:
+        return False, "ryzenadj is not installed (Power & Limits tab tweak)"
+    args = [exe]
+    for flag, val in (("--stapm-limit", stapm_w), ("--fast-limit", fast_w),
+                      ("--slow-limit", slow_w)):
+        if val is None:
+            continue
+        w = max(10, min(90, int(round(float(val)))))
+        args.append(f"{flag}={w * 1000}")  # ryzenadj wants milliwatts
+    if len(args) == 1:
+        return False, "no limit given"
+    try:
+        r = subprocess.run(args, capture_output=True, text=True, timeout=10)
+        # ryzenadj prints "Setting ... to N ... : OK" per arg; a non-zero exit
+        # with all-OK lines still means it worked on this SMU.
+        if r.returncode == 0 or "OK" in (r.stdout or ""):
+            return True, ""
+        return False, (r.stderr or r.stdout or "ryzenadj failed").strip()
+    except Exception as exc:  # noqa: BLE001
+        return False, str(exc)
+
+
+# --------------------------------------------------------------------------- #
+#  Battery charge threshold — stop charging at N % to spare the cell on a
+#  laptop that lives on AC. Kernel exposes this on Dell via the
+#  `charge_control_end_threshold` sysfs attr when the platform supports it.
+# --------------------------------------------------------------------------- #
+
+def _battery_dir() -> str | None:
+    for bat in sorted(glob.glob("/sys/class/power_supply/BAT*")):
+        if glob.glob(f"{bat}/charge_control_end_threshold"):
+            return bat
+    return None
+
+
+def battery_charge_limit_info() -> dict:
+    """{'supported': bool, 'current': int|None, 'capacity': int|None,
+    'ac_online': bool|None}."""
+    bat = _battery_dir()
+    info: dict = {"supported": bat is not None, "current": None,
+                  "capacity": None, "ac_online": None}
+    if bat:
+        info["current"] = _read_int(f"{bat}/charge_control_end_threshold")
+        info["capacity"] = _read_int(f"{bat}/capacity")
+    for ac in glob.glob("/sys/class/power_supply/A[CD]*/online"):
+        v = _read_int(ac)
+        if v is not None:
+            info["ac_online"] = bool(v)
+            break
+    return info
+
+
+def set_battery_charge_limit(percent: int) -> tuple[bool, str]:
+    bat = _battery_dir()
+    if not bat:
+        return False, "this machine has no charge_control_end_threshold"
+    p = max(50, min(100, int(percent)))
+    try:
+        with open(f"{bat}/charge_control_end_threshold", "w") as f:
+            f.write(str(p))
+        return True, ""
+    except OSError as exc:
+        return False, str(exc)
+
+
+# --------------------------------------------------------------------------- #
+#  NVIDIA board power limit — nvidia-smi -pl. The single most useful GPU
+#  lever on this chassis for heat / battery. Needs root to set.
+# --------------------------------------------------------------------------- #
+
+def _f(x: str):
+    try:
+        return float(x)
+    except ValueError:
+        return None  # nvidia-smi prints "[N/A]" for fields the GPU doesn't expose
+
+
+def nvidia_power_limit_info() -> dict | None:
+    """{'supported', 'min', 'max', 'default', 'current'} in Watts.
+    None if the dGPU is asleep / nvidia-smi is missing (don't wake it to poll).
+    supported=False when the query works but the GPU's power limit is
+    firmware-locked — the Dell G15 5515's RTX 3050 Ti Mobile is one of these
+    (Dynamic Boost; `power.limit` reads [N/A], `-pl` is rejected)."""
+    if not which("nvidia-smi") or not dgpu_is_awake():
+        return None
+    try:
+        out = subprocess.run(
+            ["nvidia-smi",
+             "--query-gpu=power.limit,power.min_limit,power.max_limit,power.default_limit",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if out.returncode != 0:
+            return None
+        cur, lo, hi, dft = [_f(x.strip()) for x in out.stdout.strip().split(",")]
+        return {
+            "supported": cur is not None,
+            "current": round(cur) if cur is not None else None,
+            "min": round(lo) if lo is not None else 1,
+            "max": round(hi) if hi is not None else 100,
+            "default": round(dft) if dft is not None else None,
+        }
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def set_nvidia_power_limit(watts: int) -> tuple[bool, str]:
+    if not which("nvidia-smi"):
+        return False, "nvidia-smi not installed"
+    info = nvidia_power_limit_info()
+    if info and not info["supported"]:
+        return False, ("this GPU's power limit is firmware-locked (laptop Dynamic "
+                       "Boost) — nvidia-smi -pl is not supported on it")
+    w = int(watts)
+    if info:
+        w = max(int(info["min"]), min(int(info["max"]), w))
+    try:
+        subprocess.run(["nvidia-smi", "-pm", "1"], capture_output=True, timeout=8)
+        r = subprocess.run(["nvidia-smi", "-pl", str(w)],
+                           capture_output=True, text=True, timeout=10)
+        blob = (r.stdout or "") + (r.stderr or "")
+        # nvidia-smi exits 0 even when it prints "not supported in current scope"
+        if "not supported" in blob.lower():
+            return False, ("this GPU's power limit is firmware-locked (laptop "
+                           "Dynamic Boost) — nvidia-smi -pl is not supported on it")
+        if r.returncode == 0:
+            return True, ""
+        return False, (r.stderr or r.stdout or "nvidia-smi -pl failed").strip()
+    except Exception as exc:  # noqa: BLE001
+        return False, str(exc)
+
+
+# --------------------------------------------------------------------------- #
+#  Feral GameMode bridge status (informational — the GameModeBridge tweak
+#  wires gamemoded's start/end hooks to gaming-performance/-balanced).
+# --------------------------------------------------------------------------- #
+
+def gamemode_status() -> dict:
+    """{'installed': bool, 'active': bool, 'clients': int}."""
+    exe = which("gamemoded")
+    st = {"installed": exe is not None, "active": False, "clients": 0}
+    if not exe:
+        return st
+    try:
+        r = subprocess.run([exe, "-s"], capture_output=True, text=True, timeout=5)
+        text = (r.stdout or "") + (r.stderr or "")
+        st["active"] = "is active" in text
+        m = re.search(r"(\d+)\s+client", text)
+        if m:
+            st["clients"] = int(m.group(1))
+    except Exception:  # noqa: BLE001
+        pass
+    return st
