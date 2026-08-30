@@ -275,6 +275,14 @@ def apply_bios_style(style: "tb.Style", accent: str) -> None:
                                      "bordercolor": HELP_AMBER, "focuscolor": "",
                                      "font": ("Sans", 10, "bold"), "anchor": "w",
                                      "padding": (16, 11), "relief": "flat"},
+        # top tab-strip used inside the Setup Games page (a real tb.Notebook,
+        # unlike the left rail which is SidebarNav)
+        "TNotebook": {"background": BIOS_PANEL, "bordercolor": BIOS_BORDER,
+                      "darkcolor": BIOS_PANEL, "lightcolor": BIOS_PANEL,
+                      "tabmargins": (2, 4, 2, 0)},
+        "TNotebook.Tab": {"background": BIOS_PANEL, "foreground": BIOS_MUTED,
+                          "bordercolor": BIOS_BORDER, "focuscolor": "",
+                          "font": ("Sans", 10, "bold"), "padding": (16, 8)},
         "SupportBanner.TFrame": {"background": HELP_BANNER_BG},
         "SupportBanner.TLabel": {"background": HELP_BANNER_BG,
                                  "foreground": readable_on(HELP_AMBER, HELP_BANNER_BG, 4.5),
@@ -299,6 +307,12 @@ def apply_bios_style(style: "tb.Style", accent: str) -> None:
                       foreground=[("active", hover)])
         except Exception:  # noqa: BLE001
             pass
+    try:
+        style.map("TNotebook.Tab",
+                  background=[("selected", BIOS_PANEL_HI), ("active", BIOS_PANEL_HI)],
+                  foreground=[("selected", accent_txt_hi), ("active", hover)])
+    except Exception:  # noqa: BLE001
+        pass
 
 
 class RingGauge(tk.Canvas):
@@ -663,6 +677,10 @@ class ToolkitApp:
         self.items: dict[str, Item] = {}
         self._load_items()
         self.presets = load_json("presets.json")
+        try:
+            self.games = load_json("games.json")
+        except (OSError, ValueError):
+            self.games = {}
 
         self.log_queue: queue.Queue = queue.Queue()
         self.dash_queue: queue.Queue = queue.Queue()
@@ -679,6 +697,8 @@ class ToolkitApp:
         self._busy = False
         self._busy_queue: queue.Queue = queue.Queue()
         self._prog_q: queue.Queue = queue.Queue()   # (overall:int|None, step:str|None, phase:str|None)
+        self._games_q: queue.Queue = queue.Queue()  # Setup Games step-check results
+        self._game_steps: list = []
         self._busy_overlay = None
         self._busy_steps = 0
         self._cur_step = ""
@@ -695,6 +715,7 @@ class ToolkitApp:
         self.root.after(100, self._poll_dash_queue)
         self.root.after(100, self._poll_status_queue)
         self.root.after(120, self._poll_busy_queue)
+        self.root.after(130, self._poll_games_queue)
         threading.Thread(target=self._refresh_all_status, daemon=True).start()
 
         self.dash_running = True
@@ -828,6 +849,8 @@ class ToolkitApp:
         self._build_fan_tab()
         self._build_presets_tab()
         self._build_updates_tab()
+        if self.games:
+            self._build_games_tab()
 
         categories = sorted(
             {item.category for item in self.items.values()},
@@ -1390,6 +1413,320 @@ class ToolkitApp:
                 box, text="Apply This Preset", bootstyle=SUCCESS,
                 command=lambda pid=preset_id: self._on_apply_preset(pid)
             ).pack(anchor="e")
+
+    # ---------- Setup Games ----------
+
+    def _build_games_tab(self):
+        outer = tb.Frame(self.notebook)
+        self.notebook.add(outer, text="Setup Games")
+
+        intro = tb.Frame(outer, padding=(16, 12, 16, 6))
+        intro.pack(fill="x")
+        tb.Label(intro, text="Per-game setup walkthroughs",
+                 font=("Sans", 12, "bold")).pack(anchor="w")
+        tb.Label(intro, bootstyle=SECONDARY, wraplength=1100, justify="left",
+                 text="Pick a game from the tabs below, then work down the steps. Steps "
+                      "with a Run button do the work (output streams to the log console "
+                      "at the bottom of the window); manual steps are quick clicks inside "
+                      "the game launcher that can't be scripted — tick “Mark done” once "
+                      "you've done them.").pack(anchor="w", pady=(2, 0))
+
+        # general Proton-prefix relocation — useful for ANY Steam game, not just
+        # the ones with a walkthrough below
+        pf = tb.Labelframe(outer, text="Proton prefix tools", padding=10)
+        pf.pack(fill="x", padx=16, pady=(6, 8))
+        tb.Label(pf, bootstyle=SECONDARY, wraplength=1100, justify="left",
+                 text="A game installed on an NTFS or exFAT drive can't build its Proton "
+                      "prefix there (those filesystems reject ':' in a filename, so the "
+                      "'dosdevices/c:' … links fail and the game won't start). These move "
+                      "just the prefix onto your Linux drive and symlink it back — the "
+                      "game files stay put. Close Steam first.").pack(anchor="w")
+        row = tb.Frame(pf); row.pack(anchor="w", fill="x", pady=(8, 0))
+        tb.Button(row, text="Scan Steam prefixes", bootstyle=(INFO, "outline"),
+                  command=self._prefix_scan).pack(side="left")
+        tb.Label(row, text="   AppID:").pack(side="left")
+        self._prefix_appid_var = tk.StringVar()
+        tb.Entry(row, textvariable=self._prefix_appid_var, width=12).pack(side="left", padx=(2, 6))
+        tb.Button(row, text="Relocate this prefix", bootstyle=(WARNING, "outline"),
+                  command=self._prefix_relocate_entry).pack(side="left")
+
+        tb.Separator(outer).pack(fill="x")
+
+        gnb = tb.Notebook(outer)
+        gnb.pack(fill="both", expand=True, padx=8, pady=8)
+
+        self._game_steps = []
+        for gid, game in sorted(self.games.items(),
+                                key=lambda kv: (kv[1].get("order", 99), kv[0])):
+            page = tb.Frame(gnb)
+            gnb.add(page, text=game.get("Tab", game.get("Content", gid)))
+            inner = self._scroll_body(page, pad=14)
+            desc = game.get("Description", "")
+            if desc:
+                tb.Label(inner, text=desc, wraplength=1150, justify="left",
+                         bootstyle=SECONDARY).pack(anchor="w", pady=(0, 12))
+
+            steps = game.get("steps", [])
+            n_auto = sum(1 for s in steps if s.get("run"))
+            n_manual = sum(1 for s in steps if s.get("manual") and not s.get("run"))
+            if n_auto:
+                hdr = tb.Frame(inner, padding=12, bootstyle="dark")
+                hdr.pack(fill="x", padx=2, pady=(0, 10))
+                tb.Button(hdr, text=f"▶▶  Run all {n_auto} automatic steps",
+                          bootstyle=SUCCESS,
+                          command=lambda g=gid: self._run_game_all(g)).pack(side="left")
+                tb.Label(hdr, bootstyle="inverse-dark", wraplength=900, justify="left",
+                         text=(f"  Runs the {n_auto} Run-step actions below in order, "
+                               "skipping any already done. Steam may open during the "
+                               f"BattlEye step. The {n_manual} manual step(s) after still "
+                               "need doing by hand.")).pack(side="left")
+
+            for step in steps:
+                self._game_step_card(inner, gid, step)
+
+        self._games_q.put("refresh")
+
+    def _game_subst(self, gid: str, s: str) -> str:
+        return (s.replace("{USER}", self.user)
+                 .replace("{TOOLKIT_DIR}", str(BASE_DIR))
+                 .replace("{APPID}", str(self.games.get(gid, {}).get("appid", ""))))
+
+    def _game_step_card(self, parent, gid: str, step: dict):
+        card = tb.Frame(parent, padding=14, bootstyle="dark")
+        card.pack(fill="x", padx=2, pady=5)
+
+        top = tb.Frame(card, bootstyle="dark")
+        top.pack(fill="x")
+        tb.Label(top, text=step.get("title", step.get("id", "step")),
+                 font=("Sans", 11, "bold"), bootstyle="inverse-dark").pack(side="left")
+        status = tb.Label(top, text="…", width=12, anchor="e",
+                          font=("Sans", 9, "bold"), bootstyle=SECONDARY)
+        status.pack(side="right")
+
+        if step.get("desc"):
+            tb.Label(card, text=step["desc"], wraplength=1150, justify="left",
+                     bootstyle="inverse-dark").pack(anchor="w", pady=(4, 8))
+
+        row = tb.Frame(card, bootstyle="dark")
+        row.pack(fill="x")
+        rec = {"gid": gid, "step": step, "status": status}
+
+        if step.get("run"):
+            tb.Button(row, text="▶  Run step", bootstyle=SUCCESS,
+                      command=lambda: self._run_game_step(gid, step)).pack(side="left")
+        copy_txt = self._game_subst(gid, step["copy"]) if step.get("copy") else ""
+        if copy_txt:
+            tb.Button(row, text="⧉  Copy command", bootstyle=(INFO, "outline"),
+                      command=lambda t=copy_txt: self._to_clipboard(t)
+                      ).pack(side="left", padx=6)
+        if step.get("manual") and not step.get("run"):
+            mv = tk.BooleanVar(value=False)
+            rec["manual_var"] = mv
+            tb.Checkbutton(row, text="Mark done", variable=mv, bootstyle="round-toggle",
+                           command=lambda: self._games_q.put("refresh")).pack(side="left", padx=6)
+
+        if copy_txt:
+            tb.Label(card, text="  " + copy_txt, font=("Monospace", 9),
+                     bootstyle="inverse-dark").pack(anchor="w", pady=(8, 0))
+
+        self._game_steps.append(rec)
+
+    def _refresh_game_steps(self):
+        """Off-thread: run each step's `check` and post (index, state) to _games_q.
+        Manual-toggle state is snapshotted here on the main thread (Tk vars
+        aren't safe to read from the worker)."""
+        snap = []
+        for rec in self._game_steps:
+            mv = rec.get("manual_var")
+            snap.append((rec["gid"], rec["step"],
+                         bool(mv.get()) if mv is not None else None))
+
+        def work():
+            for i, (gid, step, manual_done) in enumerate(snap):
+                chk = step.get("check")
+                if not chk:
+                    state = ("manual-done" if manual_done
+                             else "manual" if step.get("manual") else "ready")
+                else:
+                    chk = self._game_subst(gid, chk)
+                    try:
+                        rc = subprocess.run(["bash", "-c", chk], capture_output=True,
+                                            text=True, timeout=25).returncode
+                        state = "done" if rc == 0 else "todo"
+                    except Exception:  # noqa: BLE001
+                        state = "unknown"
+                self._games_q.put((i, state))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _poll_games_queue(self):
+        try:
+            while True:
+                msg = self._games_q.get_nowait()
+                if msg == "refresh":
+                    self._refresh_game_steps()
+                elif isinstance(msg, tuple):
+                    idx, state = msg
+                    if 0 <= idx < len(self._game_steps):
+                        self._apply_game_state(self._game_steps[idx], state)
+        except queue.Empty:
+            pass
+        self.root.after(200, self._poll_games_queue)
+
+    @staticmethod
+    def _apply_game_state(rec: dict, state: str) -> None:
+        txt, style = {
+            "done": ("done ✓", SUCCESS),
+            "manual-done": ("done ✓", SUCCESS),
+            "todo": ("to do", WARNING),
+            "manual": ("manual", INFO),
+            "ready": ("optional", SECONDARY),
+            "unknown": ("check err", DANGER),
+        }.get(state, ("…", SECONDARY))
+        try:
+            rec["status"].configure(text=txt, bootstyle=style)
+        except tk.TclError:
+            pass
+
+    def _run_stream(self, desc: str, cmd: str, *, tag: str = "Setup Games") -> None:
+        """Run one shell command under the busy overlay, streaming stdout to the
+        log; a non-zero exit pops the output dialog (via _upd_last). MAIN THREAD
+        entry — spawns its own worker."""
+        if self._busy:
+            messagebox.showinfo("Busy", "An operation is already running — check the log.")
+            return
+        self._begin_busy(f"{tag} — {desc}", steps=0)
+        self._progress(step=desc)
+        self._log(f"[{tag}] {desc} …")
+
+        def work():
+            rc, tail = -1, []
+            try:
+                proc = subprocess.Popen(
+                    ["bash", "-c", cmd], stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT, text=True, bufsize=1,
+                )
+                for line in proc.stdout:
+                    line = line.rstrip()
+                    self._log(line)
+                    tail.append(line)
+                    del tail[:-400]
+                    ph = self._phase_from_line(line)
+                    if ph:
+                        self._progress(step=desc, phase=ph)
+                rc = proc.wait()
+            except Exception as exc:  # noqa: BLE001
+                self._log(f"[{tag} FAILED] {exc}")
+                tail.append(f"[{tag} FAILED] {exc}")
+            finally:
+                result = "done ✓" if rc == 0 else f"exit {rc}"
+                self._log(f"[{tag}] {desc} — {result}")
+                self._upd_last = {"ok": rc == 0, "rc": rc, "desc": desc,
+                                  "reboot": False, "tail": tail}
+                self._busy_queue.put(f"{tag}: {desc} — {result}")
+                self._games_q.put("refresh")
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _run_game_step(self, gid: str, step: dict):
+        desc = step.get("title", step.get("id", "step"))
+        self._run_stream(desc, self._game_subst(gid, step["run"]))
+
+    # ---- Proton prefix relocation (general, any Steam appid) ----
+
+    def _prefix_helper_cmd(self, args: str) -> str:
+        return (f"su - {shlex.quote(self.user)} -c "
+                f"{shlex.quote(f'python3 {BASE_DIR}/tuxthrottle_prefix_relocate.py {args}')}")
+
+    def _prefix_scan(self):
+        self._run_stream("scan Steam prefixes for NTFS/exFAT problems",
+                         self._prefix_helper_cmd("--scan"), tag="Prefix tools")
+
+    def _prefix_relocate_entry(self):
+        appid = (self._prefix_appid_var.get() or "").strip()
+        if not appid.isdigit():
+            messagebox.showinfo("Steam AppID needed",
+                                "Enter the numeric Steam AppID of the game "
+                                "(shown on its store-page URL, or in the scan output).")
+            return
+        if not messagebox.askyesno(
+            "Relocate Proton prefix",
+            f"Move AppID {appid}'s Proton prefix (compatdata/{appid}) onto your "
+            "Linux drive and leave a symlink in its place?\n\n"
+            "Close Steam and the game first. The game files are not touched; only "
+            "the prefix moves. No-op if it's already on a Linux filesystem.",
+        ):
+            return
+        self._run_stream(f"relocate prefix for AppID {appid}",
+                         self._prefix_helper_cmd(appid), tag="Prefix tools")
+
+    def _run_game_all(self, gid: str):
+        """Run every step of a game that has a `run` command, in order,
+        skipping ones whose `check` already passes. Manual steps are listed
+        at the end as a reminder."""
+        if self._busy:
+            messagebox.showinfo("Busy", "An operation is already running — check the log.")
+            return
+        game = self.games.get(gid, {})
+        steps = game.get("steps", [])
+        auto = [s for s in steps if s.get("run")]
+        manual = [s for s in steps if s.get("manual") and not s.get("run")]
+        if not auto:
+            return
+        name = game.get("Content", gid)
+        lines = "\n".join(f"  {s.get('title', s.get('id'))}" for s in auto)
+        if not messagebox.askyesno(
+            "Run all automatic steps",
+            f"{name}: run these {len(auto)} steps in order?\n\n{lines}\n\n"
+            "Steps already done are skipped. Steam may open during the BattlEye "
+            f"step. {len(manual)} manual step(s) will still need doing by hand afterwards.",
+        ):
+            return
+        self._begin_busy(f"Setup Games — {name}: all automatic steps", steps=len(auto))
+        threading.Thread(target=self._game_all_worker, args=(gid, auto, manual),
+                         daemon=True).start()
+
+    def _game_all_worker(self, gid: str, auto: list[dict], manual: list[dict]):
+        done = 0
+        failed = None
+        for step in auto:
+            desc = step.get("title", step.get("id", "step"))
+            chk = step.get("check")
+            if chk:
+                ok, _rc, _out = run_cmd3(self._game_subst(gid, chk), timeout=30)
+                if ok:
+                    self._log(f"[Setup Games] {desc} — already done, skipping")
+                    done += 1
+                    self._progress(overall=done, step=desc)
+                    continue
+            self._progress(overall=done, step=desc)
+            self._log(f"[Setup Games] {desc} …")
+            cmd = self._game_subst(gid, step["run"])
+            if self._stream_apply_cmd(cmd):
+                self._log(f"[Setup Games] {desc} — done ✓")
+                done += 1
+                self._progress(overall=done, step=desc)
+            else:
+                self._log(f"[Setup Games] {desc} — FAILED, stopping the run")
+                failed = desc
+                break
+        self._progress(overall=done)
+        if failed:
+            self._upd_last = {"ok": False, "rc": 1, "reboot": False,
+                              "desc": f"{failed} (batch stopped here)",
+                              "tail": [f"'{failed}' failed — see the log above. "
+                                       "Fix it, then use its own Run step button or "
+                                       "re-run all."]}
+            msg = f"Setup Games: stopped at “{failed}”"
+        else:
+            hint = ""
+            if manual:
+                hint = "  Now do the manual steps: " + "; ".join(
+                    s.get("title", s.get("id")) for s in manual)
+            self._log(f"=== {len(auto)} automatic step(s) done.{hint} ===")
+            msg = f"Setup Games: {done}/{len(auto)} automatic steps done"
+        self._busy_queue.put(msg)
+        self._games_q.put("refresh")
 
     # ---------- app-wide busy lock ----------
 

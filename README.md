@@ -8,8 +8,10 @@ A checkbox-driven GUI + tray monitor for Dell gaming laptops on Nobara Linux
 (dnf), built the same way as [WinUtil](https://winutil.christitus.com/)-style
 Windows tweak tools: data-driven JSON config, live status detection per
 item, reversible tweaks, one-directional app installs, and one-click
-presets. Plus a keyboard-RGB tab, a fan/thermal tab, an updates tab, and a
-diagnostics tab that dumps hardware + OS info for bug reports.
+presets. Plus a keyboard-RGB tab, a fan/thermal tab, an updates tab, a
+**Setup Games** tab with click-through per-game setup walkthroughs (GTA V
+Online first), and a diagnostics tab that dumps hardware + OS info for bug
+reports.
 
 > **Roadmap:** the goal is a general **gaming-laptop** tool. Today it targets
 > exactly one machine — every check/apply command and hardware path in
@@ -187,6 +189,46 @@ dialog. A pending-update counter (`dnf --cacheonly` + flatpak + fwupd) shows
 at the top with a "recount" button — the dnf figure is "as of the last
 metadata sync" because a full `dnf check-update` can take minutes on this
 box's mirrors.
+
+## The Setup Games tab
+
+Click-through setup walkthroughs for games that need more than "install and
+run" on Linux. A top tab-strip has one page per game (**GTA V Online**
+first); each page is an ordered list of step cards:
+
+- A status pill per step — **done ✓** / **to do** (a `check` command decides)
+  / **manual** / **optional**.
+- Steps with a **▶ Run step** button do the work for you and stream output to
+  the log console (same busy-overlay + failure dialog as the Updates tab):
+  install Steam + the gaming layers, pull the latest **GE-Proton** straight
+  from GitHub into `compatibilitytools.d`, trigger the **Proton BattlEye
+  Runtime**, raise `vm.max_map_count`, apply the Wi-Fi/latency tweaks.
+- **Manual** steps (things that can't be scripted while Steam is running —
+  enabling Steam Play, forcing GE-Proton on the title, launch options) show
+  the exact clicks, a **⧉ Copy command** button where useful, and a
+  "Mark done" toggle.
+- **▶▶ Run all N automatic steps** at the top of a game's page chains every
+  Run-step in order, skipping ones already done.
+
+Above the game tabs, a **Proton prefix tools** box works for *any* Steam
+game: **Scan Steam prefixes** lists every `compatdata/<appid>` prefix and
+flags ones on an NTFS/exFAT drive (Proton can't build a prefix there —
+`dosdevices/c:` needs a `:` in the name, which those filesystems reject, so
+the game won't launch); type an **AppID** + **Relocate this prefix** moves
+just that prefix onto the Linux drive and symlinks it back (game files stay
+put; close Steam first). Backed by `tuxthrottle_prefix_relocate.py`, also
+usable standalone (`<appid>` / `--check` / `--scan`).
+
+> **GTA V Online note:** the walkthrough gets you a working prefix and
+> **Story Mode**. GTA *Online* (Enhanced, Steam AppID 3240220) is **not**
+> playable on Linux — Rockstar does not allow-list Proton for its BattlEye,
+> so you connect to a session and get kicked. No Proton/prefix change fixes
+> a server-side block.
+
+The GTA V flow mirrors "GTA V Online → Route A" further down this README.
+Data lives in `config/games.json` — add a game by adding a key with an
+ordered `steps` list (`check` / `run` / `manual` / `copy`; `{USER}`,
+`{TOOLKIT_DIR}`, `{APPID}` are substituted).
 
 ## The Bug Report tab
 
