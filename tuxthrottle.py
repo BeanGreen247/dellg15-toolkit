@@ -448,9 +448,11 @@ class SidebarNav(tb.Frame):
     `.add(frame, text=...)`; `.tabs()` / `.tab()` / `.select()` keep the few
     Notebook call-sites (and the smoke tests) working."""
 
+    RAIL_WIDTH = 256
+
     def __init__(self, master):
         super().__init__(master)
-        self.rail = tb.Frame(self, width=212, style="Nav.TFrame")
+        self.rail = tb.Frame(self, width=self.RAIL_WIDTH, style="Nav.TFrame")
         self.rail.pack(side="left", fill="y")
         self.rail.pack_propagate(False)
         tb.Separator(self, orient="vertical").pack(side="left", fill="y")
@@ -464,7 +466,7 @@ class SidebarNav(tb.Frame):
 
         # Scrollable list of the normal nav buttons.
         self._nav_canvas = tk.Canvas(self.rail, bg=BIOS_PANEL, highlightthickness=0,
-                                     bd=0, width=212)
+                                     bd=0, width=self.RAIL_WIDTH)
         self._nav_vsb = tb.Scrollbar(self.rail, orient="vertical",
                                      command=self._nav_canvas.yview)
         self._nav_canvas.configure(yscrollcommand=self._nav_vsb.set)
@@ -3123,14 +3125,16 @@ class ToolkitApp:
         feat = tb.Labelframe(frame, text="What's inside", padding=12)
         feat.pack(fill="x", pady=6)
         for line in (
-            "Dashboard — live CPU / iGPU / dGPU clocks, temps, power, Game Mode toggle",
+            "Dashboard — live CPU / iGPU / dGPU clocks, temps, power + rolling history + CSV log",
             "Keyboard — AW-ELC RGB (solid colour, brightness, Spectrum Cycle)",
-            "Fans — thermal profile, additive fan boost, presets, manual PWM",
-            "Power & Limits — CPU TDP (ryzenadj), NVIDIA / battery limits where supported",
+            "Fans — thermal profile, additive fan boost, presets, manual PWM, closed-loop curve",
+            "Power & Limits — CPU TDP (ryzenadj), NVIDIA / battery limits, hybrid-GPU, AC-switch",
+            "Profiles — named full-state bundles + auto snapshot / rollback",
             "Presets — one-click curated bundles of tweaks + app installs",
             "Updates — nobara-sync + dnf / Flatpak / fwupd",
             "Setup Games — per-game click-through walkthroughs + Proton prefix tools",
-            "Tweaks / Apps — reversible system tweaks, one-directional app installs",
+            "Tweaks / Apps — reversible system tweaks (incl. KDE desktop), app installs",
+            "tuxthrottlectl — headless CLI for scripts, keybinds and ssh",
             "Report a Bug — read-only hardware/OS dump for GitHub issues",
         ):
             tb.Label(feat, text=f"•  {line}", wraplength=1000, justify="left").pack(anchor="w")
