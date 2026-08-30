@@ -3,10 +3,15 @@
 187c:0550) — a thin wrapper around the `openrgb` CLI.
 
 Background: this BIOS has no SMBIOS keyboard tokens, `dell-laptop` makes no
-LED, and hand-rolled HID writes (feature *and* output reports) are ACK'd but
-never light up. What *does* work is **OpenRGB** driving the controller as 16
-logical zones — verified on the real 5515. So this module shells out to
-`openrgb --noautoconnect`.
+LED, and hand-rolled HID writes are ACK'd but never light up. What *does* work
+is **OpenRGB** driving the controller — verified on the real 5515.
+
+The 5515's AW-ELC is a **single controllable zone**: OpenRGB advertises 4/16
+zones, but every per-zone write path (CLI `-z`, the SDK per-LED buffer, a raw
+HID user-animation with per-zone SELECT) lands on the whole keyboard — camera-
+verified. So there is no per-zone colour and no gradient; the keyboard does one
+solid colour, plus the firmware Spectrum Cycle. (Breathing / Flashing hold a
+steady colour on fw 1.1.12; Rainbow Wave is washed-out — none are offered.)
 
 Prerequisites:
   * OpenRGB installed (the `OpenRGB` app in the Toolkit's Software tab).
@@ -16,21 +21,16 @@ Prerequisites:
 CLI:
     tuxthrottle_kbd.py on  [--color RRGGBB] [--brightness 0-100]
     tuxthrottle_kbd.py off
-    tuxthrottle_kbd.py zone <0-3> --color RRGGBB [--brightness 0-100]
-    tuxthrottle_kbd.py effect <rainbow|spectrum|breathing|flashing> [--speed 0-100] [--brightness 0-100]
-    tuxthrottle_kbd.py rainbow-wave [--cycle S] [--brightness 0-100] [--saturation F]
-                                [--direction ltr|rtl] [--wavelength F] [--fps N]
-                                [--gamma F] [--seconds N]
+    tuxthrottle_kbd.py zone <0-3> --color RRGGBB [--brightness 0-100]   # == whole keyboard
+    tuxthrottle_kbd.py effect spectrum [--speed 0-100] [--brightness 0-100]
     tuxthrottle_kbd.py rainbow-test          # verify the wave maths, no hardware
     tuxthrottle_kbd.py apply-saved
     tuxthrottle_kbd.py reset
     tuxthrottle_kbd.py info
 
-`rainbow` is a *software* per-LED spectrum wave (detached daemon streaming
-over the OpenRGB SDK socket) — the firmware "Rainbow Wave" mode is washed-out
-and takes no colour/direction. The other effects are firmware modes; their
-*speed* is 0-100 (100 = fastest), *direction* is not offered (no firmware
-mode exposes one).
+`spectrum` is the one working firmware mode (MCU-driven); *speed* is 0-100
+(100 = fastest). The `rainbow-wave` / `gradient-wave` software daemons remain
+only for the `*-test` self-checks and are not wired to anything.
 """
 from __future__ import annotations
 
@@ -413,8 +413,40 @@ def _fx_running_pid():
         return -1   # exists but owned by another uid
 
 
+def _pkill_fx_daemons() -> None:
+    """Belt-and-suspenders: kill any lingering software-wave daemon whose PID
+    never made it into fx.pid (the SDK connect can outlast the spawning call).
+    Never kills the current process (a daemon calls stop_fx() at startup)."""
+    pat = r"tuxthrottle_kbd(\.py)? (rainbow|gradient)-wave"
+    me = os.getpid()
+    try:
+        out = subprocess.run(["pgrep", "-f", pat], capture_output=True,
+                             text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return
+    for tok in out.split():
+        try:
+            victim = int(tok)
+        except ValueError:
+            continue
+        if victim == me:
+            continue
+        try:
+            os.kill(victim, signal.SIGTERM)
+            time.sleep(0.1)
+            os.kill(victim, signal.SIGKILL)
+        except ProcessLookupError:
+            continue
+        except PermissionError:
+            try:                       # daemon owned by another uid (pkexec)
+                subprocess.run(["sudo", "-n", "kill", "-9", str(victim)],
+                               capture_output=True, timeout=5)
+            except (OSError, subprocess.SubprocessError):
+                pass
+
+
 def stop_fx() -> bool:
-    """Stop a running software-effect daemon (the rainbow wave). Cheap no-op
+    """Stop a running software-effect daemon (the gradient wave). Cheap no-op
     when none is running — every other keyboard write calls this, so switching
     away from the wave is automatic. Returns True if one was signalled."""
     pid = _fx_running_pid()
@@ -423,14 +455,10 @@ def stop_fx() -> bool:
             os.unlink(_fx_pidfile())
         except OSError:
             pass
+        _pkill_fx_daemons()
         return False
     if pid == -1:
-        for pk in (["pkill", "-TERM", "-f", "tuxthrottle.kbd.*rainbow-wave"],
-                   ["sudo", "-n", "pkill", "-TERM", "-f", "tuxthrottle.kbd.*rainbow-wave"]):
-            try:
-                subprocess.run(pk, capture_output=True, timeout=5)
-            except (OSError, subprocess.SubprocessError):
-                pass
+        _pkill_fx_daemons()
         return True
     try:
         os.kill(pid, signal.SIGTERM)
@@ -444,6 +472,7 @@ def stop_fx() -> bool:
         os.unlink(_fx_pidfile())
     except OSError:
         pass
+    _pkill_fx_daemons()      # sweep any sibling daemon not in fx.pid
     return True
 
 
@@ -465,34 +494,6 @@ def _spawn_fx(subcmd: str, extra: list[str]) -> None:
     args = [sys.executable, os.path.abspath(__file__), subcmd, *extra]
     subprocess.Popen(args, start_new_session=True,
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-
-def start_rainbow(speed_pct: int = 50, brightness: int = 100,
-                  direction: int = 1) -> None:
-    """Spawn the improved rainbow-wave daemon detached (used by the GUI)."""
-    _spawn_fx("rainbow-wave",
-              ["--cycle", f"{_speed_to_cycle(speed_pct):.2f}",
-               "--brightness", str(int(brightness)), "--fps", "4",
-               "--direction", "ltr" if direction >= 0 else "rtl"])
-
-
-def start_gradient(colors, speed_pct: int = 50, brightness: int = 100,
-                   direction: int = 1, wavelength: float = 1.0,
-                   blend: str = "oklab", min_value: float = 0.15,
-                   max_value: float = 1.0, smooth: float = 0.12,
-                   dither: bool = True, ease: str = "linear", fps: int = 4,
-                   gamma: float = 1.0) -> None:
-    """Spawn the gradient-wave daemon detached (used by the GUI). `colors` is
-    a list of 1-6 RRGGBB / #RRGGBB anchor colours."""
-    cs = ",".join(c.lstrip("#") for c in colors)
-    _spawn_fx("gradient-wave", [
-        "--colors", cs, "--cycle", f"{_speed_to_cycle(speed_pct):.2f}",
-        "--brightness", str(int(brightness)),
-        "--direction", "ltr" if direction >= 0 else "rtl",
-        "--wavelength", str(wavelength), "--blend", blend,
-        "--min-value", str(min_value), "--max-value", str(max_value),
-        "--smooth", str(smooth), "--ease", ease, "--fps", str(int(fps)),
-        "--gamma", str(gamma)] + ([] if dither else ["--no-dither"]))
 
 
 # ------------------------------------------------------------------------- #
@@ -916,14 +917,6 @@ def _hexval(s: str) -> str:
     return s.upper()
 
 
-def _physical_to_logical(zone: int) -> list[int]:
-    """Map one of the 4 physical zones to its block of OpenRGB logical zones.
-    Even split across 16 — refine if the real mapping is uneven."""
-    per = LOGICAL_ZONES // ZONE_COUNT
-    start = zone * per
-    return list(range(start, start + per))
-
-
 # ---- operations ----------------------------------------------------------- #
 
 def _leave_effect_kick() -> None:
@@ -947,28 +940,17 @@ def set_all(color, brightness: int = 100) -> None:
 
 
 def set_zone(zone: int, color, brightness: int = 100) -> None:
-    args = ["-m", "Static", "-b", str(max(0, min(100, brightness)))]
-    for lz in _physical_to_logical(zone):
-        args += ["-z", str(lz), "-c", _hexify(color)]
-    _run(args)
+    # The 5515's AW-ELC is a SINGLE controllable zone. OpenRGB advertises 4/16
+    # zones, but every write path — CLI `-z`, the SDK per-LED buffer (4/8/16
+    # entries), and a raw HID user-animation with per-zone SELECT — lands on
+    # the whole keyboard (camera-verified on hardware). So "per zone" == whole
+    # keyboard; the last colour wins.
+    set_all(color, brightness)
 
 
 def set_zones(colors: dict, brightness: int = 100) -> None:
-    # When every zone is the same colour (the common case — "apply to all",
-    # presets, the boot re-assert), use the single rock-solid whole-keyboard
-    # command. The multi -z form is laggy and *intermittently blanks the
-    # keyboard* on this controller, so only use it for genuinely mixed colours.
     stop_fx()
-    hexes = {_hexify(c) for c in colors.values()}
-    if len(hexes) == 1:
-        set_all(next(iter(hexes)), brightness)   # kicks the effect inside
-        return
-    _leave_effect_kick()
-    args = ["-m", "Static", "-b", str(max(0, min(100, brightness)))]
-    for pz, col in sorted(colors.items()):
-        for lz in _physical_to_logical(pz):
-            args += ["-z", str(lz), "-c", _hexify(col)]
-    _run(args)
+    set_all(next(iter(colors.values())) if colors else "FFFFFF", brightness)
 
 
 def off() -> None:
@@ -977,46 +959,29 @@ def off() -> None:
     _run(["-b", "0"])
 
 
-# Hardware effect modes the controller firmware exposes through OpenRGB.
-# "rainbow" is *not* here — the firmware Rainbow Wave mode is washed-out and
-# takes no colour/direction, so `set_effect('rainbow')` runs our own software
-# wave (rainbow_wave / start_rainbow) instead.
+# Hardware effect modes exposed through OpenRGB. Only Spectrum Cycle actually
+# animates on this AW-ELC (fw 1.1.12) — camera-verified: Breathing and Flashing
+# just hold a steady colour, and Rainbow Wave is washed-out with dark gaps, so
+# none of those are offered.
 EFFECT_MODES = {
     "spectrum": "Spectrum Cycle",
-    "breathing": "Breathing",
-    "flashing": "Flashing",
 }
 # every mode key the GUI / saved state may use, for effect-vs-static dispatch.
-# "rainbow" and "gradient" are software waves (detached daemons), the rest are
-# firmware modes.
-SOFTWARE_EFFECTS = {"rainbow", "gradient"}
+SOFTWARE_EFFECTS = set()          # no software animations any more
 ALL_EFFECTS = set(EFFECT_MODES) | SOFTWARE_EFFECTS
 
 
 def set_effect(name: str, speed: int | None = None, brightness: int = 100,
                gradient: dict | None = None) -> None:
-    """Apply a lighting effect. `speed` is 0-100 where 100 = fastest.
-
-    `rainbow` / `gradient` → software per-LED waves (detached daemon; for
-    `gradient` pass a `gradient` dict with at least `colors`). The others are
-    firmware modes; every mode on this AW-ELC reports a degenerate brightness
-    range (min=100/max=0) and empirically `-b 100` is what lights it, so the
-    caller's brightness is passed straight through (`-b 0` leaves it dark)."""
-    if name == "rainbow":
-        start_rainbow(speed if speed is not None else 50, brightness)
-        return
-    if name == "gradient":
-        g = dict(gradient or {})
-        cols = g.pop("colors", None) or ["FF0000", "0000FF"]
-        g.pop("direction", None)
-        dir_ = 1 if (gradient or {}).get("direction", "ltr") != "rtl" else -1
-        start_gradient(cols, speed if speed is not None else 50, brightness,
-                       direction=dir_,
-                       **{k: g[k] for k in ("wavelength", "blend", "min_value",
-                                            "max_value", "smooth", "dither",
-                                            "ease", "fps", "gamma") if k in g})
-        return
-    stop_fx()
+    """Apply a firmware lighting effect (`spectrum` / `breathing` / `flashing`).
+    `speed` is 0-100 where 100 = fastest. Every mode on this AW-ELC reports a
+    degenerate brightness range (min=100/max=0) and empirically `-b 100` is
+    what lights it, so the caller's brightness is passed straight through
+    (`-b 0` leaves it dark). `gradient` is accepted but unused (legacy)."""
+    stop_fx()                 # kill any lingering software-wave daemon
+    _leave_effect_kick()      # ...and clear a stuck prior effect — this
+                              # controller won't switch effect->effect
+                              # without an OpenRGB server restart
     mode = EFFECT_MODES.get(name, name)
     args = ["-m", mode, "-b", str(max(0, min(100, brightness)))]
     if speed is not None:

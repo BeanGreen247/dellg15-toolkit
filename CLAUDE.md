@@ -18,7 +18,7 @@ Edition** (Ryzen 7 5800H + RTX 3050 Ti Mobile) running **Nobara Linux** (Fedora
 | `tray_monitor.py` | PySide6 system-tray equivalent + `--toggle`. |
 | `hotkey_listener.py` | `systemd --user` service, reads the G-key from evdev, toggles Game Mode. |
 | `sensors.py` | **shared, no GUI deps.** Sensor reads + `set_game_mode()` + `notify()` + `detect_model()` + **fan control** (`read_fans`, `get/set_fan_boost`, `*_platform_profile`, `get_pwm_state`, `set_pwm_manual`, `restore_fan_auto`) + `dgpu_is_awake()`. `which()` is `lru_cache`d. |
-| `tuxthrottle_kbd.py` | AW-ELC RGB keyboard driver: an `openrgb` CLI wrapper for static/zone colours + firmware effects, **plus** stdlib software animation daemons (`rainbow_wave`, `gradient_wave`) that stream per-LED frames over a hand-rolled OpenRGB SDK socket client (`_Sdk`). Detached daemons tracked by `<statedir>/fx.pid` + `stop_fx()`. |
+| `tuxthrottle_kbd.py` | AW-ELC RGB keyboard driver: an `openrgb` CLI wrapper. The 5515 keyboard is **one controllable zone** (see hardware notes) → whole-keyboard solid colour + brightness + the firmware **Spectrum Cycle** only. `set_zones`/`set_zone` collapse to `set_all`. The `rainbow_wave`/`gradient_wave` SDK-socket daemons (`_Sdk`, `<statedir>/fx.pid`, `stop_fx()`) are dead code kept only for the `*-test` self-checks. |
 | `tuxthrottle_automount.py` | scans `lsblk`, adds `/etc/fstab` entries mounting fixed internal data disks at `/mnt/<label>` with `nofail`. |
 | `config/tweaks.json`, `apps.json`, `presets.json` | the data. Tweaks have `check` / `check_pending` (staged-but-needs-reboot) / `apply` / `undo`. Apps have `manager` (`dnf`/`flatpak`/`shell`), `package`, `check`, optional `install`, and — for cross-manager "already installed" detection — optional `provides` (extra shell probes), `binary` (`command -v`), `flatpak_id`. `{USER}` and `{TOOLKIT_DIR}` are substituted. |
 | `install.sh` | system-wide install → `/opt/tuxthrottle`, launcher, hicolor icon, `/usr/share/applications` desktop entry. Also stamps `/opt/tuxthrottle/.version` (git describe). At the end it runs `apply_tweak.py <id> --only-if-present` for `KbdBacklightFix` + `CpuMaxPerformance` so an **already-enabled** service tweak's unit files + `/usr/local/bin` scripts get refreshed to the new version (no-op if the feature was never turned on). `--uninstall` removes just the app. |
@@ -60,35 +60,47 @@ ssh g15 'cd ~/tuxthrottle && sudo ./install.sh'    # system-install to /opt
   → no `kbd_backlight` LED, dead Fn key), mainline `alienware-wmi` has no RGB.
   Hand-rolled HID writes are ACK'd but never light up. What works — verified
   live — is **OpenRGB** (`openrgb -d "Dell G Series LED Controller" -m Static
-  -c RRGGBB -b …`), 16 logical LEDs. **Prereqs:** OpenRGB installed + backlight
-  **enabled in BIOS setup** (off by default). 4 physical zones
-  (Left/Middle/Right/Numpad) = blocks of 4 logical LEDs.
+  -c RRGGBB -b …`). **Prereqs:** OpenRGB installed + backlight **enabled in BIOS
+  setup** (off by default).
+- **The 5515 keyboard is a SINGLE controllable zone.** OpenRGB reports 4/16
+  zones — its `RGBController_Alienware.cpp` platform-id quirk table has the
+  5511/5530/5505 but **not** the 5515, so it falls back to `report.data[6]`=16.
+  But the firmware ignores every zone-scoped write: `openrgb -z`, the SDK
+  per-LED buffer (`update_leds`, any of 4/8/16 entries, L/R split), and a raw
+  HID user-animation with per-zone `SELECT_ZONES` all paint the **whole
+  keyboard one colour** (last colour wins) — camera-verified 2026-08-30. So
+  **no per-zone colour, no gradient.** `set_zones`/`set_zone` collapse to
+  `set_all`. `ZONE_COUNT`/`LOGICAL_ZONES` survive only for the `kbd.json`
+  schema + the `*-wave` self-tests.
+- **Firmware effects on fw 1.1.12:** only **Spectrum Cycle** actually animates
+  (MCU, smooth). Breathing / Flashing just hold a steady colour. Rainbow Wave
+  animates but is washed-out with a travelling dark gap and takes no
+  colour/direction. `EFFECT_MODES` = `{"spectrum": "Spectrum Cycle"}` only.
 - **Keyboard brightness is inverted / degenerate.** Every mode reports
   `brightness_min=100 / brightness_max=0`. Empirically **`-b 100` lights the
   backlight**, lower values dim it, `-b 0` = off. (A "fix" that special-cased
   `-b 0` for effects turned them off — reverted.)
-- **The controller repaints only ~2–4×/sec over USB.** The OpenRGB *server*
-  ingests 60 fps in microseconds, but the device shows a handful of frames/sec
-  — measured live. So a **software** per-LED wave (`rainbow_wave` /
-  `gradient_wave` streaming `UPDATE_LEDS` over `_Sdk`) can only be a **slow
-  ambient** effect: capped at `_HW_MAX_FPS` (5), frame-skip, ~24 s cycles.
-  For a **smooth, fast** rainbow use the **firmware Spectrum Cycle** mode
-  (`set_effect("spectrum", …)`) — it runs on the MCU. The firmware *Rainbow
-  Wave* mode is washed-out with dark gaps and takes no colour/direction —
-  unusable. The GUI "Rainbow Cycle" button = firmware Spectrum Cycle;
-  "Gradient wave" = the slow software daemon (1–6 OKLab anchor colours, or a
-  1-anchor comet).
+- **The software `rainbow_wave` / `gradient_wave` daemons are dead code** kept
+  only for `rainbow-test` / `gradient-test` (which `verify-install.sh` runs).
+  Not wired to any button. A software per-LED wave can't work here anyway: the
+  controller repaints irregularly at ~2–3 fps over USB *and* is single-zone.
+- **DANGER — don't spam the AW-ELC with raw HID feature reports.** Programming
+  user-animations (NEW/SELECT/ADD_ACTION/FINISH_PLAY) in a loop can **hard-hang
+  the MCU**: it drops off USB entirely (`usb 3-3: device not accepting address,
+  error -71`, won't enumerate). A warm `reboot` and USB re-authorize do **not**
+  recover it — needs a **full power-off** (shutdown, wait ~10 s, power on).
 - **Colour persistence** is opt-in via the `KbdBacklightFix` tweak (installs
   `tuxthrottle-openrgb.service` SDK server + `tuxthrottle-kbd.service` `apply-saved` at
   boot + a systemd-sleep hook). State: `~/.config/tuxthrottle/kbd.json`
-  (`mode`/`speed`/`zones`/optional `gradient` block). **`tuxthrottle_kbd._state_path()`
+  (`mode` is `zones` or `spectrum`; plus `speed`/`zones`). **`tuxthrottle_kbd._state_path()`
   must resolve the real user via `PKEXEC_UID`/`SUDO_UID` too** — pkexec sets no
   `PKEXEC_USER`, so a naive `~` lands in `/root` and the boot service never
   sees the GUI's saves (this was the "colour doesn't persist" bug).
 - **Backlight "freezes"** = the OpenRGB SDK server wedged after many mode
-  changes (CLI still exits 0, hardware stuck). Fix: restart
+  changes (CLI still exits 0, hardware stuck). Usual fix: restart
   `tuxthrottle-openrgb` — `tuxthrottle_kbd.restart_server()` / `reset()`, GUI "↻ Reset
-  backlight" button.
+  backlight" button. If even that fails and the colour won't change at all,
+  the MCU itself is hung (see the raw-HID danger note) → full power-off.
 - **Fans (5515):** `hwmon/alienware_wmi` has `fan{1,2}_input` (RPM, ro),
   `fan{1,2}_label` = CPU/GPU Fan, and **`fan{1,2}_boost` 0–255 RW** — an
   *additive* AWCC-style boost (can't slow a fan below the auto curve → the

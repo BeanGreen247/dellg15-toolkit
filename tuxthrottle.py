@@ -1007,7 +1007,7 @@ class ToolkitApp:
             tb.Label(
                 frame, bootstyle=SECONDARY, justify="left",
                 text="No Alienware AW-ELC RGB keyboard (USB 187c:0550) found.\n"
-                     "This tab drives the 4-zone RGB backlight on the Dell G15 5515.",
+                     "This tab drives the RGB backlight on the Dell G15 5515.",
             ).pack(anchor="w")
             return
 
@@ -1015,21 +1015,19 @@ class ToolkitApp:
         note.pack(fill="x", pady=(0, 14))
         tb.Label(
             note, wraplength=1100, justify="left", bootstyle=SECONDARY,
-            text="Driven through OpenRGB (the AW-ELC has no kernel driver and ignores raw HID). "
-                 "The backlight must be enabled in BIOS setup (F2 -> Keyboard Backlight) first — "
-                 "if the keys stay dark, that's why. It's a 4-zone board (Left / Middle / Right / "
-                 "Numpad), not per-key. Effects run on the controller itself; speed is adjustable "
-                 "(100 = fastest), direction is not — none of the six firmware modes exposes a "
-                 "direction field. Colours don't persist a reboot on their own — apply the "
-                 "KbdBacklightFix tweak (Power tab) to re-assert the last setting at login and "
-                 "after resume.",
+            text="Driven through OpenRGB (the AW-ELC has no kernel driver). Enable the backlight "
+                 "in BIOS setup (F2 -> Keyboard Backlight) first — if the keys stay dark, that's "
+                 "why. This keyboard is a single controllable zone: it does one solid colour "
+                 "(pick or preset), a brightness level, or the firmware Spectrum Cycle. There is "
+                 "no per-zone colour or gradient — the hardware ignores zone-scoped writes. "
+                 "Colours don't survive a reboot on their own — apply the KbdBacklightFix tweak "
+                 "(Power tab) to re-assert the last setting at login and after resume.",
         ).pack(anchor="w")
 
         self._kbd_busy = False
         self.kbd_brightness = tk.IntVar(value=100)
         self.kbd_all_hex = tk.StringVar(value="#ffffff")
         self.kbd_speed = tk.IntVar(value=50)
-        self.kbd_zone_vars: dict[int, tk.StringVar] = {}
 
         # pre-fill from saved state if present
         saved = tuxthrottle_kbd.load_state()
@@ -1039,14 +1037,7 @@ class ToolkitApp:
             if zc:
                 r, g, b = tuple(sorted(zc.items())[0][1])
                 self.kbd_all_hex.set("#%02x%02x%02x" % (r, g, b))
-                for z, rgb in zc.items():
-                    self.kbd_zone_vars.setdefault(z, tk.StringVar()).set("#%02x%02x%02x" % tuple(rgb))
-        _meta = tuxthrottle_kbd.load_meta()
-        self.kbd_speed.set(_meta.get("speed", 50))
-        # if the saved mode is a gradient, restore its anchors into the swatches
-        _g = _meta.get("gradient") or {}
-        for i, hexc in enumerate((_g.get("colors") or [])[:tuxthrottle_kbd.ZONE_COUNT]):
-            self.kbd_zone_vars.setdefault(i, tk.StringVar()).set("#" + hexc.lower())
+        self.kbd_speed.set(tuxthrottle_kbd.load_meta().get("speed", 50))
 
         # ---- brightness ----
         br_box = tb.Labelframe(frame, text="Brightness", padding=12)
@@ -1064,7 +1055,7 @@ class ToolkitApp:
         self._kbd_swatch(r1, self.kbd_all_hex).pack(side="left", padx=(0, 8))
         tb.Button(r1, text="Pick colour…", bootstyle=SECONDARY,
                   command=lambda: self._kbd_pick(self.kbd_all_hex)).pack(side="left", padx=4)
-        tb.Button(r1, text="Apply to all zones", bootstyle=SUCCESS,
+        tb.Button(r1, text="Apply colour", bootstyle=SUCCESS,
                   command=self._kbd_apply_all).pack(side="left", padx=4)
         r2 = tb.Frame(whole)
         r2.pack(fill="x", pady=(8, 0))
@@ -1073,22 +1064,8 @@ class ToolkitApp:
                       command=lambda h=hexv: (self.kbd_all_hex.set(h), self._kbd_apply_all())
                       ).pack(side="left", padx=2)
 
-        # ---- per-zone ----
-        pz = tb.Labelframe(frame, text="Per-zone", padding=12)
-        pz.pack(fill="x", pady=(0, 12))
-        for zi, zname in enumerate(tuxthrottle_kbd.ZONE_NAMES):
-            row = tb.Frame(pz)
-            row.pack(fill="x", pady=3)
-            tb.Label(row, text=zname, width=10).pack(side="left")
-            hv = self.kbd_zone_vars.setdefault(zi, tk.StringVar(value="#ffffff"))
-            self._kbd_swatch(row, hv).pack(side="left", padx=(0, 8))
-            tb.Button(row, text="Pick…", bootstyle=SECONDARY,
-                      command=lambda v=hv: self._kbd_pick(v)).pack(side="left", padx=4)
-            tb.Button(row, text="Apply", bootstyle=SUCCESS,
-                      command=lambda z=zi: self._kbd_apply_zone(z)).pack(side="left", padx=4)
-
         # ---- effects ----
-        fx = tb.Labelframe(frame, text="Effects  (run on the controller)", padding=12)
+        fx = tb.Labelframe(frame, text="Effect", padding=12)
         fx.pack(fill="x", pady=(0, 12))
         srow = tb.Frame(fx)
         srow.pack(fill="x", pady=(0, 6))
@@ -1096,26 +1073,12 @@ class ToolkitApp:
         sp = tb.Scale(srow, from_=0, to=100, variable=self.kbd_speed, orient="horizontal")
         sp.pack(side="left", fill="x", expand=True, padx=(0, 10))
         tb.Label(srow, textvariable=self.kbd_speed, width=4).pack(side="left")
-        # Firmware effects run on the controller itself — smooth and fast.
-        # (The AW-ELC only repaints a few times/sec over USB, so a software
-        # per-LED wave can't move fast without visibly stepping; the software
-        # gradient below is a slow ambient option.)
         frow = tb.Frame(fx)
         frow.pack(fill="x")
-        for label, key in (("Rainbow Cycle", "spectrum"), ("Breathing", "breathing"),
-                           ("Flashing", "flashing")):
-            tb.Button(frow, text=label, bootstyle=SECONDARY,
-                      command=lambda k=key: self._kbd_apply_effect(k)).pack(side="left", padx=3)
-
-        frow2 = tb.Frame(fx)
-        frow2.pack(fill="x", pady=(8, 0))
-        tb.Button(frow2, text="Gradient wave  (slow ambient drift through the per-zone colours)",
-                  bootstyle=INFO, command=self._kbd_apply_gradient).pack(side="left", padx=3)
-
-        frow3 = tb.Frame(fx)
-        frow3.pack(fill="x", pady=(8, 0))
-        tb.Button(frow3, text="Solid colour  (leave effects, apply the colours above)",
-                  bootstyle=SUCCESS, command=self._kbd_apply_solid).pack(side="left", padx=3)
+        tb.Button(frow, text="Spectrum Cycle", bootstyle=SECONDARY,
+                  command=lambda: self._kbd_apply_effect("spectrum")).pack(side="left", padx=3)
+        tb.Button(frow, text="Solid colour  (leave the effect)", bootstyle=SUCCESS,
+                  command=self._kbd_apply_all).pack(side="left", padx=3)
 
         bottom = tb.Frame(frame)
         bottom.pack(fill="x", pady=(4, 0))
@@ -1172,10 +1135,6 @@ class ToolkitApp:
         rgb = self._hex_to_rgb(self._safe_hex(self.kbd_all_hex.get()))
         return {z: rgb for z in range(tuxthrottle_kbd.ZONE_COUNT)}
 
-    def _kbd_zone_colors(self) -> dict[int, tuple[int, int, int]]:
-        return {z: self._hex_to_rgb(self._safe_hex(v.get()))
-                for z, v in self.kbd_zone_vars.items()}
-
     def _kbd_apply_brightness(self):
         b = self.kbd_brightness.get()
         hx = self._safe_hex(self.kbd_all_hex.get())
@@ -1188,18 +1147,9 @@ class ToolkitApp:
         hx = self._safe_hex(self.kbd_all_hex.get())
         b = self.kbd_brightness.get()
         colors = self._kbd_all_colors()
-        for v in self.kbd_zone_vars.values():
-            v.set(hx)
         self._kbd_run(lambda kb: (kb.set_all(hx, b),
                                   tuxthrottle_kbd.save_state(colors, b, mode="zones")),
                       f"colour {hx} @ {b}%")
-
-    def _kbd_apply_zone(self, z: int):
-        b = self.kbd_brightness.get()
-        colors = self._kbd_zone_colors()
-        self._kbd_run(lambda kb: (kb.set_zones(colors, b),
-                                  tuxthrottle_kbd.save_state(colors, b, mode="zones")),
-                      f"zone {tuxthrottle_kbd.ZONE_NAMES[z]} -> {self._safe_hex(self.kbd_zone_vars[z].get())} @ {b}%")
 
     def _kbd_apply_effect(self, key: str):
         b = self.kbd_brightness.get()
@@ -1208,32 +1158,6 @@ class ToolkitApp:
         self._kbd_run(lambda kb: (kb.set_effect(key, sp, b),
                                   tuxthrottle_kbd.save_state(colors, b, mode=key, speed=sp)),
                       f"effect {key} @ speed {sp}, {b}%")
-
-    def _kbd_apply_gradient(self):
-        b = self.kbd_brightness.get()
-        sp = self.kbd_speed.get()
-        # the four per-zone swatches are the gradient anchors; drop consecutive
-        # duplicates so "all one colour" → a single-anchor comet, two distinct
-        # → a two-stop gradient, etc.
-        raw = [self._safe_hex(self.kbd_zone_vars[z].get()).lstrip("#").upper()
-               for z in range(tuxthrottle_kbd.ZONE_COUNT)]
-        anchors = [c for i, c in enumerate(raw) if i == 0 or c != raw[i - 1]]
-        block = {"colors": anchors, "wavelength": 1.0, "blend": "oklab",
-                 "direction": "ltr", "min_value": 0.15, "max_value": 1.0,
-                 "fps": 60, "smooth": 0.12, "dither": True, "ease": "linear"}
-        colors = self._kbd_zone_colors()
-        self._kbd_run(lambda kb: (
-            tuxthrottle_kbd.start_gradient(anchors, sp, b),
-            tuxthrottle_kbd.save_state(colors, b, mode="gradient", speed=sp,
-                                   gradient=block)),
-            f"gradient [{', '.join('#' + c for c in anchors)}] @ speed {sp}")
-
-    def _kbd_apply_solid(self):
-        b = self.kbd_brightness.get()
-        colors = self._kbd_zone_colors()
-        self._kbd_run(lambda kb: (kb.set_zones(colors, b),
-                                  tuxthrottle_kbd.save_state(colors, b, mode="zones")),
-                      f"solid colour @ {b}%")
 
     def _kbd_reset(self):
         self._kbd_run(lambda kb: kb.reset(), "reset backlight (restart OpenRGB + re-apply)")
