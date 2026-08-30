@@ -50,12 +50,24 @@
       warning); hidden with an "install EnvyControl" note when it's absent
       (that path confirmed on g15). Also `tuxthrottlectl get/set gpumode`.
 
-## Post (polish — do last)
-- [ ] README: add Power & Limits + the 6 new tweaks + tuxthrottlectl to the tables
-- [ ] CLAUDE.md: fold in the 3 hw findings (STAPM floor / no battery sysfs /
-      NVPL firmware-locked) + `tuxthrottle_powerd.py` + `tuxthrottlectl.py` +
-      the new tweaks in the layout table
-- [ ] Battery threshold on the 5515 via libsmbios/smbios-battery-ctl (optional)
-- [ ] Older backlog: Updates stale-count → timestamp/spinner; auto-hide RAPL
-      tweak on Nobara 43; delete dead rainbow_wave/gradient_wave code
-- [ ] Update memory `tuxthrottle-improvement-backlog`
+## Post (polish) — DONE 2026-08-30
+- [x] README: Dashboard 8-gauge grid, Fans custom curve, new Power & Limits
+      section, `tuxthrottlectl` section, Files list, "What's in it", gating note.
+- [x] CLAUDE.md: layout table (powerd / ctl / Power & Limits / scrollable nav /
+      `item.hidden`) + Hardware-facts (STAPM floor, no battery sysfs → libsmbios,
+      NVPL firmware-lock, dnf-metadata-age, RAPL auto-hide).
+- [x] Battery threshold via libsmbios — `sensors` uses `smbios-battery-ctl`
+      when sysfs is absent; `DellBatteryThreshold` tweak; battery section note
+      points at it. `smbios-battery-ctl` already present on g15 → section works.
+- [x] Updates stale-count → tagged with `_dnf_metadata_age()` ("dnf list as of
+      41 min ago"). Verified on g15.
+- [x] RAPL tweak auto-hide (`item.hidden` in `_apply_vendor_gate`): hidden when
+      RAPL already world-readable AND its udev rule not installed. On g15 it
+      stays visible because the rule was already applied (so undo still works).
+- [x] Memory `tuxthrottle-improvement-backlog` updated.
+
+## Deferred (NOT polish — own branch, needs kbd hardware)
+- [ ] Delete dead `rainbow_wave`/`gradient_wave`/`_Sdk`/`_stream_wave`/`stop_fx`
+      from `tuxthrottle_kbd.py` (~250 interwoven lines; `stop_fx()` in live
+      paths; `rainbow-test`/`gradient-test` feed `verify-install.sh`). Driver
+      refactor, camera-verify the keyboard after.

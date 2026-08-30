@@ -13,6 +13,7 @@ packaged in Fedora/Nobara's repos, pip is the only install path) for the
 themed dark UI + round-toggle switches + gauge widgets on the Dashboard tab.
 """
 import configparser
+import glob
 import json
 import os
 import pwd
@@ -521,6 +522,7 @@ class Item:
         self.risk = data.get("risk", "safe")
         self.requires_vendor = data.get("requires_vendor")  # "nvidia" | "amd" | None
         self.hw_supported = True  # set by ToolkitApp after GPU detection
+        self.hidden = False       # set by _apply_vendor_gate for no-op-on-this-box items
 
         def sub(cmd: str) -> str:
             return cmd.replace("{USER}", user).replace("{TOOLKIT_DIR}", str(BASE_DIR))
@@ -864,6 +866,13 @@ class ToolkitApp:
         elif item.requires_vendor == "amd" and not self.has_amd:
             item.hw_supported = False
             item.description += "  (no AMD GPU detected on this system — disabled)"
+        # Nobara 43 already ships /sys/class/powercap world-readable, so the
+        # RAPL-permissions tweak is a no-op there — hide it unless it's needed
+        # or the user has already applied it (so they can still undo).
+        if (item.id == "RaplPowerPermissions" and sensors.rapl_permissions_ok()
+                and not os.path.exists(
+                    "/etc/udev/rules.d/90-tuxthrottle-powercap-perms.rules")):
+            item.hidden = True
 
     # ---------- UI construction ----------
 
@@ -927,7 +936,7 @@ class ToolkitApp:
             self._build_games_tab()
 
         categories = sorted(
-            {item.category for item in self.items.values()},
+            {item.category for item in self.items.values() if not item.hidden},
             key=lambda c: CATEGORY_ORDER.index(c) if c in CATEGORY_ORDER else 99,
         )
         for cat in categories:
@@ -1747,13 +1756,20 @@ class ToolkitApp:
         lf = tb.Labelframe(parent, text="Battery charge limit", padding=12)
         lf.pack(fill="x", pady=6)
         if not info["supported"]:
+            msg = ("This machine doesn't expose a charge-stop threshold "
+                   "(no charge_control_end_threshold in sysfs).")
+            if info.get("dell_libsmbios_possible"):
+                msg += ("  On this Dell you can still get a firmware-level charge "
+                        "limit — install the “Dell battery threshold (libsmbios)” "
+                        "tweak on the Power tab, then reopen this tab.")
             tb.Label(lf, bootstyle=SECONDARY, wraplength=1000, justify="left",
-                     text="This machine doesn't expose a charge-stop threshold "
-                          "(no charge_control_end_threshold in sysfs).").pack(anchor="w")
+                     text=msg).pack(anchor="w")
             return
+        via = "firmware (libsmbios)" if info.get("method") == "libsmbios" else "kernel sysfs"
         tb.Label(lf, wraplength=1000, justify="left", bootstyle=SECONDARY,
                  text="Stops charging at the set level to spare the cell when the "
-                      "laptop mostly runs on AC. 80 % is the usual longevity sweet spot.").pack(anchor="w", pady=(0, 8))
+                      f"laptop mostly runs on AC. 80 % is the usual longevity sweet spot. "
+                      f"Controlled via {via}.").pack(anchor="w", pady=(0, 8))
         r = tb.Frame(lf); r.pack(fill="x", pady=4)
         tb.Label(r, text="Stop charging at", width=20, anchor="w").pack(side="left")
         self._bat_var = tk.IntVar(value=info["current"] or 100)
@@ -1913,7 +1929,7 @@ class ToolkitApp:
         inner = self._scroll_body(outer)
 
         for item in self.items.values():
-            if item.category != category:
+            if item.category != category or item.hidden:
                 continue
             row = tb.Frame(inner, padding=16, bootstyle="dark")
             row.pack(fill="x", padx=2, pady=4)
@@ -2780,7 +2796,9 @@ class ToolkitApp:
                 parts.append(("firmware", str(out.count("New version:")) if rc in (0, 2) else "?"))
             total = sum(int(v) for _, v in parts if v.isdigit())
             detail = "  ·  ".join(f"{k} {v}" for k, v in parts)
-            self._upd_count_q.put(f"Updates available:  {total}   ({detail})")
+            age = _dnf_metadata_age()
+            stamp = f"   —   dnf list {age}" if age else ""
+            self._upd_count_q.put(f"Updates available:  {total}   ({detail}){stamp}")
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -3435,6 +3453,29 @@ def _load_all_items() -> list:
                 it.hw_supported = False
             items.append(it)
     return items
+
+
+def _dnf_metadata_age() -> str:
+    """Human 'as of …' string for the newest dnf repo metadata on disk, so the
+    update count reads as a snapshot, not a live number. '' if not found."""
+    newest = 0.0
+    for pat in ("/var/cache/dnf/*/repodata/repomd.xml",
+                "/var/cache/libdnf5/*/repodata/repomd.xml"):
+        for p in glob.glob(pat):
+            try:
+                newest = max(newest, os.path.getmtime(p))
+            except OSError:
+                pass
+    if not newest:
+        return ""
+    secs = max(0, time.time() - newest)
+    if secs < 90:
+        return "as of just now"
+    if secs < 5400:
+        return f"as of {round(secs / 60)} min ago"
+    if secs < 172800:
+        return f"as of {round(secs / 3600)} h ago"
+    return f"as of {round(secs / 86400)} d ago"
 
 
 def toolkit_version() -> str:

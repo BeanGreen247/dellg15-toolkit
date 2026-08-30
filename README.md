@@ -157,11 +157,12 @@ elapsed timer.
 
 ## The Dashboard tab
 
-A live "system info" view like DAMX's monitoring dashboard: CPU temp/clock,
-dGPU temp/clock/util as gauges, iGPU/dGPU details as text, and a big
-round-toggle for Game Mode — same effect as the G-key or the tray icon, all
-sharing one source of truth (`sensors.py`). The dGPU reads skip `nvidia-smi`
-while the card is runtime-suspended so polling doesn't wake it.
+A live "system info" view like DAMX's monitoring dashboard. Eight ring
+gauges in a 2×4 grid — **CPU** temp / clock / power, **iGPU** clock,
+**dGPU** temp / clock / util / power — plus iGPU/dGPU details as text and a
+big round-toggle for Game Mode (same effect as the G-key or the tray icon).
+All of it shares one source of truth (`sensors.py`). The dGPU reads skip
+`nvidia-smi` while the card is runtime-suspended so polling doesn't wake it.
 
 ## The Fans tab
 
@@ -176,8 +177,38 @@ DAMX's fan-control equivalent for this board:
 - **Manual PWM** (advanced, behind a warning) — takes the EC off its curve via
   `dell_smm` `pwmN`, floored so the fans never fully stop, with a "Restore
   automatic" button.
+- **Custom fan curve** (closed-loop) — a 5-point temperature → boost table
+  with a live curve preview, driven from CPU / GPU / hotter-of-both, with a
+  cool-down hysteresis. A background daemon (`tuxthrottle_powerd.py`, enabled
+  by the **Fan-curve + AC-switch daemon** tweak) applies it and restores
+  automatic control when stopped. It only ever *adds* boost.
 
-Nothing here persists a reboot yet.
+The profile + boost sliders don't persist a reboot on their own; the fan
+curve and TDP limits do, via their tweaks' systemd units.
+
+## The Power & Limits tab
+
+The knobs that shape the power/thermal envelope — the Linux answer to
+ThrottleStop / the ASUS Armoury sliders:
+
+- **CPU power limits (ryzenadj)** — STAPM / fast / slow sliders (Watts) with
+  Quiet / Balanced / Performance presets and a live "now" readout. On the
+  5800H the SMU floors STAPM near the slow limit, so presets keep STAPM ≥ slow.
+- **NVIDIA board power limit** — a slider where the GPU allows it; on the
+  G15 5515's RTX 3050 Ti Mobile the limit is firmware-locked (Dynamic Boost),
+  so the section shows that instead of a dead control.
+- **Hybrid graphics mode** — integrated / hybrid / nvidia via EnvyControl,
+  with a log-out-to-apply warning (hidden until EnvyControl is installed).
+- **Battery charge limit** — a stop-charging percentage via the kernel
+  `charge_control_end_threshold` where present, or Dell firmware (libsmbios)
+  via the **Dell battery threshold** tweak on machines like the 5515 that
+  lack the sysfs attribute.
+- **AC / battery auto-switch** — pick a bundle (profile + TDP preset) to
+  apply automatically when the charger is plugged or pulled; handled by the
+  same `tuxthrottle_powerd.py` daemon.
+
+State is written to `~/.config/tuxthrottle/{tdp,nvpl,battery,powerd}.json`
+and re-applied at boot by the matching tweaks' units.
 
 ## The Updates tab
 
@@ -192,9 +223,10 @@ Wraps Nobara's own updater plus the other package managers on the box:
 
 Output streams live to the log console; a failure pops a scrollable detail
 dialog. A pending-update counter (`dnf --cacheonly` + flatpak + fwupd) shows
-at the top with a "recount" button — the dnf figure is "as of the last
-metadata sync" because a full `dnf check-update` can take minutes on this
-box's mirrors.
+at the top with a "recount" button, tagged with the age of the dnf metadata
+on disk (`dnf list as of 2 h ago`) — a full `dnf check-update` can take
+minutes on this box's mirrors, so the figure is a snapshot that self-corrects
+after any Check/Update.
 
 ## The Setup Games tab
 
@@ -281,6 +313,23 @@ sudo python3 /opt/tuxthrottle/tuxthrottle.py --report       # apply-status table
 sudo python3 /opt/tuxthrottle/tuxthrottle.py --collect ~    # write the hardware bundle
 ```
 
+## `tuxthrottlectl` — headless control
+
+A stdlib CLI over `sensors.py` for scripts, keybinds and `ssh` sessions
+(installed to `/usr/local/bin/tuxthrottlectl`):
+
+```bash
+tuxthrottlectl status --json                  # everything, machine-readable
+tuxthrottlectl get clocks                      # cpu/igpu/dgpu MHz
+tuxthrottlectl get tdp                          # current ryzenadj limits
+sudo tuxthrottlectl set profile performance
+sudo tuxthrottlectl set tdp balanced           # or --stapm 42 --fast 54 --slow 42
+sudo tuxthrottlectl set fan-boost both 60
+sudo tuxthrottlectl gamemode toggle
+```
+
+`set` commands need root and exit non-zero on failure.
+
 ## Hardware-aware gating
 
 Items tagged `requires_vendor: "nvidia"` or `"amd"` in the JSON (the NVIDIA
@@ -290,12 +339,22 @@ the running system — the same "dynamic UI hides unsupported features"
 principle DAMX uses, done via one detection pass (`sensors.has_nvidia_gpu()`
 / `has_amd_gpu()`) at startup rather than a hardcoded per-model table.
 
+Sections that can't work on the running hardware degrade to an explanatory
+note instead of a dead control: the NVIDIA power-limit slider (firmware-locked
+on the 5515), the battery section (points you at the libsmbios tweak), the
+hybrid-graphics radios (until EnvyControl is installed). The
+**RaplPowerPermissions** tweak is hidden entirely on a box where the RAPL
+counters are already world-readable (Nobara 43's default) and it would be a
+no-op.
+
 ## Files
 
 - `tuxthrottle.py` — the checkbox GUI + in-window Dashboard tab (needs `ttkbootstrap`)
 - `tray_monitor.py` — the system-tray-only equivalent (needs `PySide6`)
 - `hotkey_listener.py` — the G-key → Game Mode binding (needs `python3-evdev`)
-- `sensors.py` — shared sensor reads + Game Mode logic, **no GUI dependency**, used by all three above so they never disagree on state
+- `sensors.py` — shared sensor reads + Game Mode logic + CPU TDP (ryzenadj), battery, NVIDIA/hybrid-GPU helpers, **no GUI dependency**, used by everything below so they never disagree on state
+- `tuxthrottle_powerd.py` — stdlib daemon: closed-loop fan curve + AC/battery auto-switch (installed by the **Fan-curve + AC-switch daemon** tweak)
+- `tuxthrottlectl.py` — headless `status` / `get` / `set` CLI over `sensors.py`, installed as `/usr/local/bin/tuxthrottlectl`
 - `tuxthrottle_kbd.py` — AW-ELC RGB keyboard control: `openrgb` CLI wrapper for
   static/zone colours + firmware effects, plus stdlib software animation
   daemons (gradient / rainbow) that stream per-LED frames over a hand-rolled
@@ -440,11 +499,19 @@ Install via the Toolkit GUI (Gaming tab):
 - **Stability** — the C-state freeze fix (and the alternative `idle=nomwait`),
   `clocksource=tsc`.
 - **GPU** — NVIDIA driver check/install, EnvyControl (AMD+NVIDIA hybrid
-  switching), CoreCtrl, ryzenadj, amdgpu/nvidia perf-state scripts.
+  switching), CoreCtrl, ryzenadj, amdgpu/nvidia perf-state scripts,
+  **NvidiaPowerLimit** (persist `nvidia-smi -pl` where the GPU allows it).
 - **Power** — TLP or auto-cpufreq (pick one), `gaming-performance`/
   `gaming-balanced` toggle scripts, i8kutils fan control (DAMX's fan-tab
   equivalent — best-effort, `dell-smm-hwmon` isn't confirmed to whitelist
-  this model), **RaplPowerPermissions** (see "Power reporting" below).
+  this model), **RaplPowerPermissions** (see "Power reporting" below;
+  auto-hidden where it's already a no-op), and the Power & Limits stack:
+  **RyzenAdjTDP** (STAPM/fast/slow limits + boot/resume re-apply),
+  **BatteryChargeLimit** / **DellBatteryThreshold** (libsmbios) for a
+  stop-charging percentage, **FanCurveDaemon** (`tuxthrottle_powerd.py` —
+  closed-loop fan curve + AC/battery profile auto-switch),
+  **GameModeBridge** (wires Feral gamemode's start/end hooks to the toggle
+  scripts).
 - **Performance** — USB autosuspend off, flat mouse accel, swappiness, zram
   tuning, KDE Baloo indexer off. Plus a curated **kernel-cmdline** set
   (`split_lock_detect=off`, `nowatchdog`, `preempt=full`, `threadirqs`, … —

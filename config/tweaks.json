@@ -536,5 +536,14 @@
       "rm -f /etc/systemd/system/tuxthrottle-powerd.service",
       "systemctl daemon-reload"
     ]
+  },
+  "DellBatteryThreshold": {
+    "Content": "Dell battery threshold (libsmbios)",
+    "Description": "The G15 5515 has no kernel charge_control_end_threshold, but Dell firmware supports a 'custom' charge interval stored in NVRAM. This installs libsmbios (smbios-battery-ctl); the Power & Limits tab then sets the stop-charging percentage through it and it persists in firmware across reboots — no service needed. Undo removes the package only; any interval you set stays in firmware until you set it back to 100 %/standard.",
+    "category": "Power",
+    "risk": "safe",
+    "check": "command -v smbios-battery-ctl >/dev/null 2>&1",
+    "apply": ["dnf install -y libsmbios"],
+    "undo": ["dnf remove -y libsmbios || true"]
   }
 }

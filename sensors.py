@@ -640,15 +640,45 @@ def _battery_dir() -> str | None:
     return None
 
 
+def _smbios_battery_ctl():
+    return which("smbios-battery-ctl")
+
+
+def _smbios_battery_end() -> int | None:
+    """End % of the Dell 'custom' charge interval via libsmbios. Needs root;
+    returns None if libsmbios is absent, not custom mode, or unreadable."""
+    exe = _smbios_battery_ctl()
+    if not exe:
+        return None
+    try:
+        out = subprocess.run([exe, "--get-charging-cfg"],
+                             capture_output=True, text=True, timeout=8)
+        m = re.search(r"[Ee]nd\s*[:=]\s*(\d+)", out.stdout or "")
+        return int(m.group(1)) if m else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def battery_charge_limit_info() -> dict:
-    """{'supported': bool, 'current': int|None, 'capacity': int|None,
-    'ac_online': bool|None}."""
+    """{'supported', 'method', 'current', 'capacity', 'ac_online',
+    'dell_libsmbios_possible'}. method is 'sysfs' | 'libsmbios' | None."""
     bat = _battery_dir()
-    info: dict = {"supported": bat is not None, "current": None,
-                  "capacity": None, "ac_online": None}
+    info: dict = {"supported": False, "method": None, "current": None,
+                  "capacity": None, "ac_online": None,
+                  "dell_libsmbios_possible": False}
     if bat:
-        info["current"] = _read_int(f"{bat}/charge_control_end_threshold")
-        info["capacity"] = _read_int(f"{bat}/capacity")
+        info.update(supported=True, method="sysfs",
+                    current=_read_int(f"{bat}/charge_control_end_threshold"),
+                    capacity=_read_int(f"{bat}/capacity"))
+    else:
+        is_dell = "dell" in _dmi("sys_vendor").lower()
+        info["dell_libsmbios_possible"] = is_dell
+        if _smbios_battery_ctl():
+            end = _smbios_battery_end()
+            info.update(supported=True, method="libsmbios", current=end)
+        for cap in glob.glob("/sys/class/power_supply/BAT*/capacity"):
+            info["capacity"] = _read_int(cap)
+            break
     for ac in glob.glob("/sys/class/power_supply/A[CD]*/online"):
         v = _read_int(ac)
         if v is not None:
@@ -658,16 +688,34 @@ def battery_charge_limit_info() -> dict:
 
 
 def set_battery_charge_limit(percent: int) -> tuple[bool, str]:
-    bat = _battery_dir()
-    if not bat:
-        return False, "this machine has no charge_control_end_threshold"
     p = max(50, min(100, int(percent)))
-    try:
-        with open(f"{bat}/charge_control_end_threshold", "w") as f:
-            f.write(str(p))
-        return True, ""
-    except OSError as exc:
-        return False, str(exc)
+    bat = _battery_dir()
+    if bat:
+        try:
+            with open(f"{bat}/charge_control_end_threshold", "w") as f:
+                f.write(str(p))
+            return True, ""
+        except OSError as exc:
+            return False, str(exc)
+    exe = _smbios_battery_ctl()
+    if exe:
+        # Dell 'custom' interval: start < end, both in 50..100, gap >= 5.
+        start = max(50, min(p - 5, 95))
+        if p >= 100:
+            try:
+                r = subprocess.run([exe, "--set-charging-mode=standard"],
+                                   capture_output=True, text=True, timeout=15)
+                return (r.returncode == 0), (r.stderr or r.stdout or "").strip()
+            except Exception as exc:  # noqa: BLE001
+                return False, str(exc)
+        try:
+            r = subprocess.run([exe, f"--set-custom-charge-interval={start} {p}"],
+                               capture_output=True, text=True, timeout=15)
+            return (r.returncode == 0), (r.stderr or r.stdout or "").strip()
+        except Exception as exc:  # noqa: BLE001
+            return False, str(exc)
+    return False, ("no charge_control_end_threshold in sysfs; on Dell install "
+                   "libsmbios (dnf install libsmbios) for firmware-level control")
 
 
 # --------------------------------------------------------------------------- #
