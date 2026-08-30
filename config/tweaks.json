@@ -1,7 +1,7 @@
 {
   "AutoMountDrives": {
     "Content": "Auto-mount internal data drives at /mnt (fstab)",
-    "Description": "Finds every fixed internal partition with a mountable filesystem (ext4/btrfs/xfs/f2fs/ntfs/exfat/vfat) that isn't already handled, and adds a permanent /etc/fstab entry mounting it at a stable /mnt/<label> path with 'nofail' — the right place for a second games/data NVMe, so Steam libraries and symlinks never move. Skips the OS/boot/swap disks, anything already in fstab, LUKS, and removable media. NTFS uses the in-kernel ntfs3 driver with your uid/gid so games are writable. Reversible: undo unmounts and strips exactly the block it added (and migrates off any older /run/media setup a previous version made).",
+    "Description": "Finds every fixed internal partition with a mountable filesystem (ext4/btrfs/xfs/f2fs/ntfs/exfat/vfat) that isn't already handled, and adds a permanent /etc/fstab entry mounting it at a stable /mnt/<label> path with 'nofail' \u2014 the right place for a second games/data NVMe, so Steam libraries and symlinks never move. Skips the OS/boot/swap disks, anything already in fstab, LUKS, and removable media. NTFS uses the in-kernel ntfs3 driver with your uid/gid so games are writable. Reversible: undo unmounts and strips exactly the block it added (and migrates off any older /run/media setup a previous version made).",
     "category": "Performance",
     "risk": "advanced",
     "check": "grep -q 'tuxthrottle AutoMountDrives' /etc/fstab",
@@ -21,18 +21,26 @@
     "risk": "safe",
     "check": "grep -q 'processor.max_cstate=1' /proc/cmdline",
     "check_pending": "grubby --info=DEFAULT 2>/dev/null | grep -q 'processor.max_cstate=1'",
-    "apply": ["grubby --update-kernel=ALL --args=\"processor.max_cstate=1\""],
-    "undo": ["grubby --update-kernel=ALL --remove-args=\"processor.max_cstate=1\""]
+    "apply": [
+      "grubby --update-kernel=ALL --args=\"processor.max_cstate=1\""
+    ],
+    "undo": [
+      "grubby --update-kernel=ALL --remove-args=\"processor.max_cstate=1\""
+    ]
   },
   "IdleNomwait": {
     "Content": "Alt Freeze Fix (idle=nomwait)",
-    "Description": "Alternative to the C-state fix above — skips the mwait idle driver entirely. Try this INSTEAD of the C-state fix if that one doesn't resolve freezes, not in addition to it. Requires reboot.",
+    "Description": "Alternative to the C-state fix above \u2014 skips the mwait idle driver entirely. Try this INSTEAD of the C-state fix if that one doesn't resolve freezes, not in addition to it. Requires reboot.",
     "category": "Stability",
     "risk": "advanced",
     "check": "grep -q 'idle=nomwait' /proc/cmdline",
     "check_pending": "grubby --info=DEFAULT 2>/dev/null | grep -q 'idle=nomwait'",
-    "apply": ["grubby --update-kernel=ALL --args=\"idle=nomwait\""],
-    "undo": ["grubby --update-kernel=ALL --remove-args=\"idle=nomwait\""]
+    "apply": [
+      "grubby --update-kernel=ALL --args=\"idle=nomwait\""
+    ],
+    "undo": [
+      "grubby --update-kernel=ALL --remove-args=\"idle=nomwait\""
+    ]
   },
   "ClocksourceTsc": {
     "Content": "Use TSC Clocksource (skip HPET)",
@@ -41,8 +49,12 @@
     "risk": "advanced",
     "check": "grep -q 'clocksource=tsc' /proc/cmdline",
     "check_pending": "grubby --info=DEFAULT 2>/dev/null | grep -q 'clocksource=tsc'",
-    "apply": ["grubby --update-kernel=ALL --args=\"clocksource=tsc tsc=reliable\""],
-    "undo": ["grubby --update-kernel=ALL --remove-args=\"clocksource=tsc tsc=reliable\""]
+    "apply": [
+      "grubby --update-kernel=ALL --args=\"clocksource=tsc tsc=reliable\""
+    ],
+    "undo": [
+      "grubby --update-kernel=ALL --remove-args=\"clocksource=tsc tsc=reliable\""
+    ]
   },
   "UsbAutosuspend": {
     "Content": "Disable USB Autosuspend",
@@ -61,7 +73,7 @@
   },
   "MouseAccelFlat": {
     "Content": "Flat Mouse Pointer Acceleration",
-    "Description": "1:1 mouse movement, no acceleration curve — applies under X11. Under Wayland/KDE Plasma (Nobara's default) also set System Settings > Mouse > Acceleration Profile to Flat.",
+    "Description": "1:1 mouse movement, no acceleration curve \u2014 applies under X11. Under Wayland/KDE Plasma (Nobara's default) also set System Settings > Mouse > Acceleration Profile to Flat.",
     "category": "Performance",
     "risk": "safe",
     "check": "test -f /etc/X11/xorg.conf.d/50-mouse-accel.conf",
@@ -69,7 +81,9 @@
       "mkdir -p /etc/X11/xorg.conf.d",
       "printf 'Section \"InputClass\"\\n    Identifier \"Flat pointer accel\"\\n    MatchIsPointer \"on\"\\n    Driver \"libinput\"\\n    Option \"AccelProfile\" \"flat\"\\n    Option \"AccelSpeed\" \"0\"\\nEndSection\\n' > /etc/X11/xorg.conf.d/50-mouse-accel.conf"
     ],
-    "undo": ["rm -f /etc/X11/xorg.conf.d/50-mouse-accel.conf"]
+    "undo": [
+      "rm -f /etc/X11/xorg.conf.d/50-mouse-accel.conf"
+    ]
   },
   "Swappiness": {
     "Content": "Lower Swappiness (vm.swappiness=10)",
@@ -88,7 +102,7 @@
   },
   "ZramTune": {
     "Content": "Tune zram Size (RAM / 2, zstd)",
-    "Description": "Fedora/Nobara already runs zram-generator by default — this bumps its size fraction for heavier gaming loads.",
+    "Description": "Fedora/Nobara already runs zram-generator by default \u2014 this bumps its size fraction for heavier gaming loads.",
     "category": "Performance",
     "risk": "safe",
     "check": "test -f /etc/systemd/zram-generator.conf.d/gaming.conf",
@@ -105,12 +119,16 @@
   },
   "BalooDisable": {
     "Content": "Disable KDE Baloo File Indexer",
-    "Description": "Stops background file content indexing — the single biggest idle CPU/disk drain on stock Plasma. Applied for your user account.",
+    "Description": "Stops background file content indexing \u2014 the single biggest idle CPU/disk drain on stock Plasma. Applied for your user account.",
     "category": "Performance",
     "risk": "safe",
     "check": "grep -qs 'Indexing-Enabled=false' /home/{USER}/.config/baloofilerc",
-    "apply": ["su - {USER} -c 'balooctl6 disable 2>/dev/null || balooctl disable 2>/dev/null'"],
-    "undo": ["su - {USER} -c 'balooctl6 enable 2>/dev/null || balooctl enable 2>/dev/null'"]
+    "apply": [
+      "su - {USER} -c 'balooctl6 disable 2>/dev/null || balooctl disable 2>/dev/null'"
+    ],
+    "undo": [
+      "su - {USER} -c 'balooctl6 enable 2>/dev/null || balooctl enable 2>/dev/null'"
+    ]
   },
   "PowerProfileScripts": {
     "Content": "Install gaming-performance / gaming-balanced Scripts",
@@ -123,7 +141,9 @@
       "cat > /usr/local/bin/gaming-balanced <<'SCRIPT'\n#!/usr/bin/env bash\npowerprofilesctl set balanced\nfor h in /sys/class/hwmon/hwmon*; do\n  [ \"$(cat \"$h/name\" 2>/dev/null)\" = alienware_wmi ] || continue\n  for b in \"$h\"/fan[0-9]*_boost; do [ -w \"$b\" ] && echo 0 > \"$b\"; done\ndone\nexit 0\nSCRIPT",
       "chmod +x /usr/local/bin/gaming-performance /usr/local/bin/gaming-balanced"
     ],
-    "undo": ["rm -f /usr/local/bin/gaming-performance /usr/local/bin/gaming-balanced"]
+    "undo": [
+      "rm -f /usr/local/bin/gaming-performance /usr/local/bin/gaming-balanced"
+    ]
   },
   "TlpEnable": {
     "Content": "Enable TLP Power Management",
@@ -153,7 +173,9 @@
       "printf '#!/usr/bin/env bash\\necho auto | tee /sys/class/drm/card*/device/power_dpm_force_performance_level >/dev/null 2>&1\\n' > /usr/local/bin/amdgpu-perf-auto",
       "chmod +x /usr/local/bin/amdgpu-perf-high /usr/local/bin/amdgpu-perf-auto"
     ],
-    "undo": ["rm -f /usr/local/bin/amdgpu-perf-high /usr/local/bin/amdgpu-perf-auto"]
+    "undo": [
+      "rm -f /usr/local/bin/amdgpu-perf-high /usr/local/bin/amdgpu-perf-auto"
+    ]
   },
   "NvidiaMaxPerf": {
     "Content": "Install nvidia-max-perf Script",
@@ -166,11 +188,13 @@
       "printf '#!/usr/bin/env bash\\nnvidia-smi -pm 1 >/dev/null 2>&1 || true\\nif [[ -n \"${DISPLAY:-}\" ]] && command -v nvidia-settings >/dev/null; then nvidia-settings -a \"[gpu:0]/GpuPowerMizerMode=1\" >/dev/null 2>&1 || true; fi\\nexit 0\\n' > /usr/local/bin/nvidia-max-perf",
       "chmod +x /usr/local/bin/nvidia-max-perf"
     ],
-    "undo": ["rm -f /usr/local/bin/nvidia-max-perf"]
+    "undo": [
+      "rm -f /usr/local/bin/nvidia-max-perf"
+    ]
   },
   "ControllerUdev": {
     "Content": "Game Controller udev Rules",
-    "Description": "Non-root access to Xbox/PlayStation/generic HID pads. Usually already covered by the Steam package — this is a fallback.",
+    "Description": "Non-root access to Xbox/PlayStation/generic HID pads. Usually already covered by the Steam package \u2014 this is a fallback.",
     "category": "Gaming",
     "risk": "safe",
     "check": "test -f /etc/udev/rules.d/99-gamepads.rules",
@@ -185,7 +209,7 @@
   },
   "HotkeyListener": {
     "Content": "Dedicated G-Key Game Mode Toggle",
-    "Description": "Installs a systemd user service that listens for the dedicated G-key (confirmed on the G15 5515 to send KEY_PERFORMANCE when Fn Lock is OFF) and toggles Game Mode on press — same effect as clicking the tray icon. Requires PowerProfileScripts/AmdgpuPerfScripts/NvidiaMaxPerf above to be installed first, and python3-evdev. Adds your user to the 'input' group so the service can read the keyboard device — log out and back in once after applying for that to take effect.",
+    "Description": "Installs a systemd user service that listens for the dedicated G-key (confirmed on the G15 5515 to send KEY_PERFORMANCE when Fn Lock is OFF) and toggles Game Mode on press \u2014 same effect as clicking the tray icon. Requires PowerProfileScripts/AmdgpuPerfScripts/NvidiaMaxPerf above to be installed first, and python3-evdev. Adds your user to the 'input' group so the service can read the keyboard device \u2014 log out and back in once after applying for that to take effect.",
     "category": "Gaming",
     "risk": "advanced",
     "check": "sudo -u {USER} XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) systemctl --user is-enabled tuxthrottle-hotkey.service 2>/dev/null | grep -q enabled && id -nG {USER} | grep -qw input",
@@ -217,11 +241,13 @@
       "chmod 0440 /etc/sudoers.d/tuxthrottle-gamemode-toggle",
       "visudo -c -f /etc/sudoers.d/tuxthrottle-gamemode-toggle"
     ],
-    "undo": ["rm -f /etc/sudoers.d/tuxthrottle-gamemode-toggle"]
+    "undo": [
+      "rm -f /etc/sudoers.d/tuxthrottle-gamemode-toggle"
+    ]
   },
   "RaplPowerPermissions": {
     "Content": "Fix CPU Power-Reading Permissions (RAPL)",
-    "Description": "Linux locks CPU package power counters (RAPL, under /sys/class/powercap) to root-only by default since 2020 (a side-channel security mitigation) — without this, the Dashboard tab and the tray icon (which deliberately run unprivileged) can never show real CPU wattage, always 'n/a'. Adds a udev rule making them world-readable, the same fix MangoHud's own docs recommend for its power display. Note: Nobara 43 already ships these files world-readable, so this is usually a no-op there — apply it only if the Dashboard actually shows 'n/a' for CPU wattage. Trade-off: makes RAPL energy counters readable by any local user/process, a known but low-severity timing side-channel — standard practice on gaming-focused distros/tools, not enabled by default here.",
+    "Description": "Linux locks CPU package power counters (RAPL, under /sys/class/powercap) to root-only by default since 2020 (a side-channel security mitigation) \u2014 without this, the Dashboard tab and the tray icon (which deliberately run unprivileged) can never show real CPU wattage, always 'n/a'. Adds a udev rule making them world-readable, the same fix MangoHud's own docs recommend for its power display. Note: Nobara 43 already ships these files world-readable, so this is usually a no-op there \u2014 apply it only if the Dashboard actually shows 'n/a' for CPU wattage. Trade-off: makes RAPL energy counters readable by any local user/process, a known but low-severity timing side-channel \u2014 standard practice on gaming-focused distros/tools, not enabled by default here.",
     "category": "Power",
     "risk": "advanced",
     "check": "test -f /etc/udev/rules.d/90-tuxthrottle-powercap-perms.rules",
@@ -237,7 +263,7 @@
   },
   "MangoHudGlobalToggle": {
     "Content": "Install MangoHud Global On/Off Scripts",
-    "Description": "Turns MangoHud into a system-wide overlay instead of something you paste into each game's Steam launch options one at a time. Installs 'mangohud-global-on'/'mangohud-global-off', which write/remove ~/.config/environment.d/mangohud.conf (MANGOHUD=1 + LD_PRELOAD for the rare pure-OpenGL title — Vulkan games pick it up via the implicit-layer 'enable_environment' mechanism from MANGOHUD=1 alone, no LD_PRELOAD needed there). Takes effect on next login (or next Steam/game launch after restarting your session) since it's a systemd environment.d file, not a live env var. Once active, MangoHud's own in-game keybind (Shift_R+F12 by default) shows/hides the overlay display without disabling the underlying hook. Requires the GameModeMangoHud app installed first.",
+    "Description": "Turns MangoHud into a system-wide overlay instead of something you paste into each game's Steam launch options one at a time. Installs 'mangohud-global-on'/'mangohud-global-off', which write/remove ~/.config/environment.d/mangohud.conf (MANGOHUD=1 + LD_PRELOAD for the rare pure-OpenGL title \u2014 Vulkan games pick it up via the implicit-layer 'enable_environment' mechanism from MANGOHUD=1 alone, no LD_PRELOAD needed there). Takes effect on next login (or next Steam/game launch after restarting your session) since it's a systemd environment.d file, not a live env var. Once active, MangoHud's own in-game keybind (Shift_R+F12 by default) shows/hides the overlay display without disabling the underlying hook. Requires the GameModeMangoHud app installed first.",
     "category": "Gaming",
     "risk": "safe",
     "check": "test -f /home/{USER}/.config/environment.d/mangohud.conf",
@@ -256,27 +282,35 @@
   },
   "KernelGamingCmdline": {
     "Content": "Kernel Boot Params: gaming/latency set (curated)",
-    "Description": "Adds a curated, hardware-appropriate subset of the usual gaming kernel cmdline: split_lock_detect=off + split_lock_mitigate=0 (no stalls on misaligned locked ops — common in games/emulators), nowatchdog + nosoftlockup (drop the per-second watchdog timer/IRQ), timer_migration=0 (keep timers on their own CPU), preempt=full (fully preemptible — this Nobara kernel is PREEMPT_DYNAMIC so it takes the switch), threadirqs (threaded IRQ handlers, better audio/input latency), ignore_rlimit_data (some Wine/DXVK builds need it), sysrq_always_enabled=1, audit=0. Deliberately EXCLUDES the Intel-only / laptop-dangerous entries from typical desktop lists (intel_pstate=disable is a no-op on this AMD CPU; thermal.off=1, nomce, vdso=0, nohz_full=all left out on purpose). Requires reboot.",
+    "Description": "Adds a curated, hardware-appropriate subset of the usual gaming kernel cmdline: split_lock_detect=off + split_lock_mitigate=0 (no stalls on misaligned locked ops \u2014 common in games/emulators), nowatchdog + nosoftlockup (drop the per-second watchdog timer/IRQ), timer_migration=0 (keep timers on their own CPU), preempt=full (fully preemptible \u2014 this Nobara kernel is PREEMPT_DYNAMIC so it takes the switch), threadirqs (threaded IRQ handlers, better audio/input latency), ignore_rlimit_data (some Wine/DXVK builds need it), sysrq_always_enabled=1, audit=0. Deliberately EXCLUDES the Intel-only / laptop-dangerous entries from typical desktop lists (intel_pstate=disable is a no-op on this AMD CPU; thermal.off=1, nomce, vdso=0, nohz_full=all left out on purpose). Requires reboot.",
     "category": "Performance",
     "risk": "advanced",
     "check": "grep -q 'split_lock_detect=off' /proc/cmdline",
     "check_pending": "grubby --info=DEFAULT 2>/dev/null | grep -q 'split_lock_detect=off'",
-    "apply": ["grubby --update-kernel=ALL --args=\"sysrq_always_enabled=1 split_lock_detect=off split_lock_mitigate=0 nowatchdog nosoftlockup timer_migration=0 preempt=full threadirqs ignore_rlimit_data audit=0\""],
-    "undo": ["grubby --update-kernel=ALL --remove-args=\"sysrq_always_enabled=1 split_lock_detect=off split_lock_mitigate=0 nowatchdog nosoftlockup timer_migration=0 preempt=full threadirqs ignore_rlimit_data audit=0\""]
+    "apply": [
+      "grubby --update-kernel=ALL --args=\"sysrq_always_enabled=1 split_lock_detect=off split_lock_mitigate=0 nowatchdog nosoftlockup timer_migration=0 preempt=full threadirqs ignore_rlimit_data audit=0\""
+    ],
+    "undo": [
+      "grubby --update-kernel=ALL --remove-args=\"sysrq_always_enabled=1 split_lock_detect=off split_lock_mitigate=0 nowatchdog nosoftlockup timer_migration=0 preempt=full threadirqs ignore_rlimit_data audit=0\""
+    ]
   },
   "Ipv6DisableCmdline": {
     "Content": "Kernel Boot Param: disable IPv6",
-    "Description": "Adds ipv6.disable=1 to the kernel cmdline — matches the setup this config was ported from. Only do this if you know nothing on your network needs IPv6 (some VPNs, Tailscale MagicDNS, and a few games' matchmaking prefer it). Requires reboot.",
+    "Description": "Adds ipv6.disable=1 to the kernel cmdline \u2014 matches the setup this config was ported from. Only do this if you know nothing on your network needs IPv6 (some VPNs, Tailscale MagicDNS, and a few games' matchmaking prefer it). Requires reboot.",
     "category": "Performance",
     "risk": "advanced",
     "check": "grep -q 'ipv6.disable=1' /proc/cmdline",
     "check_pending": "grubby --info=DEFAULT 2>/dev/null | grep -q 'ipv6.disable=1'",
-    "apply": ["grubby --update-kernel=ALL --args=\"ipv6.disable=1\""],
-    "undo": ["grubby --update-kernel=ALL --remove-args=\"ipv6.disable=1\""]
+    "apply": [
+      "grubby --update-kernel=ALL --args=\"ipv6.disable=1\""
+    ],
+    "undo": [
+      "grubby --update-kernel=ALL --remove-args=\"ipv6.disable=1\""
+    ]
   },
   "CpuMaxPerformance": {
     "Content": "Force CPU performance governor at boot",
-    "Description": "Installs a oneshot systemd service (tuxthrottle-cpu-perf.service) that pins every core to the 'performance' governor and energy_performance_preference=performance on boot — the amd_pstate 'active' driver on the 5800H only exposes performance/powersave, so this is the max-clocks setting. NOTE: power-profiles-daemon rewrites the governor whenever you switch power profile (or use the Game Mode toggle), so this mainly helps if you do NOT switch profiles / don't use Game Mode. If you use Game Mode, that already covers it. Reversible.",
+    "Description": "Installs a oneshot systemd service (tuxthrottle-cpu-perf.service) that pins every core to the 'performance' governor and energy_performance_preference=performance on boot \u2014 the amd_pstate 'active' driver on the 5800H only exposes performance/powersave, so this is the max-clocks setting. NOTE: power-profiles-daemon rewrites the governor whenever you switch power profile (or use the Game Mode toggle), so this mainly helps if you do NOT switch profiles / don't use Game Mode. If you use Game Mode, that already covers it. Reversible.",
     "category": "Power",
     "risk": "advanced",
     "check": "systemctl is-enabled tuxthrottle-cpu-perf.service 2>/dev/null | grep -q enabled",
@@ -298,7 +332,7 @@
   },
   "BtrfsNoatime": {
     "Content": "Mount root with noatime (fstab)",
-    "Description": "Stops the filesystem writing an access-time stamp on every file read — pure I/O reduction, safe on Btrfs (Nobara's default). Backs up /etc/fstab to /etc/fstab.tuxthrottle-bak first, edits only the ' / ' Btrfs line, and remounts live. Undo restores the backup.",
+    "Description": "Stops the filesystem writing an access-time stamp on every file read \u2014 pure I/O reduction, safe on Btrfs (Nobara's default). Backs up /etc/fstab to /etc/fstab.tuxthrottle-bak first, edits only the ' / ' Btrfs line, and remounts live. Undo restores the backup.",
     "category": "Performance",
     "risk": "advanced",
     "check": "findmnt -no OPTIONS / | grep -qw noatime",
@@ -313,7 +347,7 @@
   },
   "NvmeIoTune": {
     "Content": "NVMe I/O queue tuning (udev)",
-    "Description": "The NVMe scheduler is already 'none' on this system (correct for NVMe), so this only lowers read_ahead_kb to 128 (from 256) — less wasted prefetch on the small random reads typical of game assets. Tiny effect, fully reversible. (nr_requests is left alone: its max is per-device and some queues here reject a bump, which just logs a harmless udev error at boot.)",
+    "Description": "The NVMe scheduler is already 'none' on this system (correct for NVMe), so this only lowers read_ahead_kb to 128 (from 256) \u2014 less wasted prefetch on the small random reads typical of game assets. Tiny effect, fully reversible. (nr_requests is left alone: its max is per-device and some queues here reject a bump, which just logs a harmless udev error at boot.)",
     "category": "Performance",
     "risk": "advanced",
     "check": "test -f /etc/udev/rules.d/60-tuxthrottle-nvme.rules",
@@ -360,7 +394,7 @@
   },
   "DnfSpeed": {
     "Content": "Speed up dnf (parallel downloads + fastestmirror)",
-    "Description": "Appends max_parallel_downloads=10 and fastestmirror=True to /etc/dnf/dnf.conf — the dnf equivalent of ranking mirrors. Makes every install/update in this toolkit noticeably faster. Reversible (removes the two lines).",
+    "Description": "Appends max_parallel_downloads=10 and fastestmirror=True to /etc/dnf/dnf.conf \u2014 the dnf equivalent of ranking mirrors. Makes every install/update in this toolkit noticeably faster. Reversible (removes the two lines).",
     "category": "Performance",
     "risk": "safe",
     "check": "grep -q '^max_parallel_downloads' /etc/dnf/dnf.conf",
@@ -417,28 +451,28 @@
   },
   "KdeAnimationsOff": {
     "Content": "KDE: disable window animations + eye-candy effects",
-    "Description": "Sets AnimationDurationFactor=0 and turns off the KWin eye-candy effect plugins (blur, background contrast, wobbly windows, fade/slide/translucency/morphing popups, minimize animation, magic lamp, glide, scale, fall-apart, sheet). Instant window response, zero compositor overhead — the single biggest desktop-latency win for gaming. Overview / Present Windows / desktop grid navigation is left ON. Applied for your user; KWin reconfigures live, a couple of effects need a re-login. Reversible (removes the keys so KWin returns to its defaults).",
+    "Description": "Sets AnimationDurationFactor=0 and turns off the KWin eye-candy effect plugins (blur, background contrast, wobbly windows, fade/slide/translucency/morphing popups, minimize animation, magic lamp, glide, scale, fall-apart, sheet). Instant window response, zero compositor overhead \u2014 the single biggest desktop-latency win for gaming. Overview / Present Windows / desktop grid navigation is left ON. Applied for your user; KWin reconfigures live, a couple of effects need a re-login. Reversible (removes the keys so KWin returns to its defaults).",
     "category": "KDE (Desktop GUI Tweaks)",
     "risk": "safe",
     "check": "grep -qs 'AnimationDurationFactor=0' /home/{USER}/.config/kdeglobals",
     "apply": [
-      "su - {USER} -c 'for fx in blur contrast wobblywindows kwin4_effect_fadingpopups kwin4_effect_login kwin4_effect_logout kwin4_effect_morphingpopups kwin4_effect_translucency slide slidingpopups minimizeanimation magiclamp glide scale fallapart sheet; do kwriteconfig6 --file kwinrc --group Plugins --key ${fx}Enabled false; done; kwriteconfig6 --file kdeglobals --group KDE --key AnimationDurationFactor 0; qdbus6 org.kde.KWin /KWin reconfigure 2>/dev/null || true'"
+      "su - {USER} -c 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; for fx in blur contrast wobblywindows kwin4_effect_fadingpopups kwin4_effect_login kwin4_effect_logout kwin4_effect_morphingpopups kwin4_effect_translucency slide slidingpopups minimizeanimation magiclamp glide scale fallapart sheet; do kwriteconfig6 --file kwinrc --group Plugins --key ${fx}Enabled false; done; kwriteconfig6 --file kdeglobals --group KDE --key AnimationDurationFactor 0; qdbus6 org.kde.KWin /KWin reconfigure 2>/dev/null || true'"
     ],
     "undo": [
-      "su - {USER} -c 'for fx in blur contrast wobblywindows kwin4_effect_fadingpopups kwin4_effect_login kwin4_effect_logout kwin4_effect_morphingpopups kwin4_effect_translucency slide slidingpopups minimizeanimation magiclamp glide scale fallapart sheet; do kwriteconfig6 --file kwinrc --group Plugins --key ${fx}Enabled --delete; done; kwriteconfig6 --file kdeglobals --group KDE --key AnimationDurationFactor --delete; qdbus6 org.kde.KWin /KWin reconfigure 2>/dev/null || true'"
+      "su - {USER} -c 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; for fx in blur contrast wobblywindows kwin4_effect_fadingpopups kwin4_effect_login kwin4_effect_logout kwin4_effect_morphingpopups kwin4_effect_translucency slide slidingpopups minimizeanimation magiclamp glide scale fallapart sheet; do kwriteconfig6 --file kwinrc --group Plugins --key ${fx}Enabled --delete; done; kwriteconfig6 --file kdeglobals --group KDE --key AnimationDurationFactor --delete; qdbus6 org.kde.KWin /KWin reconfigure 2>/dev/null || true'"
     ]
   },
   "KwinGamingCompositor": {
     "Content": "KDE: KWin compositor tuned for games",
-    "Description": "kwinrc/Compositing: OpenGL backend + GLCore (best on modern Mesa/NVIDIA), WindowsBlockCompositing=true so a fullscreen game bypasses the compositor for direct rendering, LatencyPolicy=Low for snappier input, HiddenPreviews=5 (don't keep minimised windows in VRAM), GLTextureFilter=1 (bilinear — trilinear is wasted on desktop compositing). Applied for your user; KWin reconfigures live. Reversible.",
+    "Description": "kwinrc/Compositing: OpenGL backend + GLCore (best on modern Mesa/NVIDIA), WindowsBlockCompositing=true so a fullscreen game bypasses the compositor for direct rendering, LatencyPolicy=Low for snappier input, HiddenPreviews=5 (don't keep minimised windows in VRAM), GLTextureFilter=1 (bilinear \u2014 trilinear is wasted on desktop compositing). Applied for your user; KWin reconfigures live. Reversible.",
     "category": "KDE (Desktop GUI Tweaks)",
     "risk": "safe",
     "check": "grep -qs 'WindowsBlockCompositing=true' /home/{USER}/.config/kwinrc",
     "apply": [
-      "su - {USER} -c 'kwriteconfig6 --file kwinrc --group Compositing --key Backend OpenGL; kwriteconfig6 --file kwinrc --group Compositing --key GLCore true; kwriteconfig6 --file kwinrc --group Compositing --key WindowsBlockCompositing true; kwriteconfig6 --file kwinrc --group Compositing --key LatencyPolicy Low; kwriteconfig6 --file kwinrc --group Compositing --key HiddenPreviews 5; kwriteconfig6 --file kwinrc --group Compositing --key GLTextureFilter 1; qdbus6 org.kde.KWin /KWin reconfigure 2>/dev/null || true'"
+      "su - {USER} -c 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file kwinrc --group Compositing --key Backend OpenGL; kwriteconfig6 --file kwinrc --group Compositing --key GLCore true; kwriteconfig6 --file kwinrc --group Compositing --key WindowsBlockCompositing true; kwriteconfig6 --file kwinrc --group Compositing --key LatencyPolicy Low; kwriteconfig6 --file kwinrc --group Compositing --key HiddenPreviews 5; kwriteconfig6 --file kwinrc --group Compositing --key GLTextureFilter 1; qdbus6 org.kde.KWin /KWin reconfigure 2>/dev/null || true'"
     ],
     "undo": [
-      "su - {USER} -c 'for k in GLCore WindowsBlockCompositing LatencyPolicy HiddenPreviews GLTextureFilter; do kwriteconfig6 --file kwinrc --group Compositing --key $k --delete; done; qdbus6 org.kde.KWin /KWin reconfigure 2>/dev/null || true'"
+      "su - {USER} -c 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; for k in GLCore WindowsBlockCompositing LatencyPolicy HiddenPreviews GLTextureFilter; do kwriteconfig6 --file kwinrc --group Compositing --key $k --delete; done; qdbus6 org.kde.KWin /KWin reconfigure 2>/dev/null || true'"
     ]
   },
   "KdeActivitiesRecentOff": {
@@ -448,23 +482,23 @@
     "risk": "safe",
     "check": "grep -qs 'enabled=false' /home/{USER}/.config/kactivitymanagerdrc",
     "apply": [
-      "su - {USER} -c 'kwriteconfig6 --file kactivitymanagerdrc --group main --key enabled false; kwriteconfig6 --file kdeglobals --group RecentDocuments --key UseRecentDocuments false'"
+      "su - {USER} -c 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file kactivitymanagerdrc --group main --key enabled false; kwriteconfig6 --file kdeglobals --group RecentDocuments --key UseRecentDocuments false'"
     ],
     "undo": [
-      "su - {USER} -c 'kwriteconfig6 --file kactivitymanagerdrc --group main --key enabled --delete; kwriteconfig6 --file kdeglobals --group RecentDocuments --key UseRecentDocuments --delete'"
+      "su - {USER} -c 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file kactivitymanagerdrc --group main --key enabled --delete; kwriteconfig6 --file kdeglobals --group RecentDocuments --key UseRecentDocuments --delete'"
     ]
   },
   "KdeThumbnailIoLimit": {
     "Content": "KDE: limit Dolphin thumbnail I/O",
-    "Description": "kiorc/Thumbnail: caps the max file size Dolphin will generate a thumbnail for (5 MB), disables thumbnailing of remote (SFTP/SMB) folders entirely, and sets MaximumRemoteSize=0. Stops a directory browse from turning into a seek+read of every large media file — noticeable on HDDs and network mounts. Applied for your user. Reversible.",
+    "Description": "kiorc/Thumbnail: caps the max file size Dolphin will generate a thumbnail for (5 MB), disables thumbnailing of remote (SFTP/SMB) folders entirely, and sets MaximumRemoteSize=0. Stops a directory browse from turning into a seek+read of every large media file \u2014 noticeable on HDDs and network mounts. Applied for your user. Reversible.",
     "category": "KDE (Desktop GUI Tweaks)",
     "risk": "safe",
     "check": "grep -qs 'EnableRemoteFolderThumbnail=false' /home/{USER}/.config/kiorc",
     "apply": [
-      "su - {USER} -c 'kwriteconfig6 --file kiorc --group Thumbnail --key MaximumSize 5242880; kwriteconfig6 --file kiorc --group Thumbnail --key EnableRemoteFolderThumbnail false; kwriteconfig6 --file kiorc --group Thumbnail --key MaximumRemoteSize 0'"
+      "su - {USER} -c 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file kiorc --group Thumbnail --key MaximumSize 5242880; kwriteconfig6 --file kiorc --group Thumbnail --key EnableRemoteFolderThumbnail false; kwriteconfig6 --file kiorc --group Thumbnail --key MaximumRemoteSize 0'"
     ],
     "undo": [
-      "su - {USER} -c 'for k in MaximumSize EnableRemoteFolderThumbnail MaximumRemoteSize; do kwriteconfig6 --file kiorc --group Thumbnail --key $k --delete; done'"
+      "su - {USER} -c 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; for k in MaximumSize EnableRemoteFolderThumbnail MaximumRemoteSize; do kwriteconfig6 --file kiorc --group Thumbnail --key $k --delete; done'"
     ]
   },
   "KdeLaunchFeedbackOff": {
@@ -474,23 +508,23 @@
     "risk": "safe",
     "check": "grep -qs 'BusyCursor=false' /home/{USER}/.config/klaunchrc",
     "apply": [
-      "su - {USER} -c 'kwriteconfig6 --file klaunchrc --group FeedbackStyle --key BusyCursor false; kwriteconfig6 --file klaunchrc --group FeedbackStyle --key TaskbarButton false'"
+      "su - {USER} -c 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file klaunchrc --group FeedbackStyle --key BusyCursor false; kwriteconfig6 --file klaunchrc --group FeedbackStyle --key TaskbarButton false'"
     ],
     "undo": [
-      "su - {USER} -c 'kwriteconfig6 --file klaunchrc --group FeedbackStyle --key BusyCursor --delete; kwriteconfig6 --file klaunchrc --group FeedbackStyle --key TaskbarButton --delete'"
+      "su - {USER} -c 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file klaunchrc --group FeedbackStyle --key BusyCursor --delete; kwriteconfig6 --file klaunchrc --group FeedbackStyle --key TaskbarButton --delete'"
     ]
   },
   "KdeSplashOff": {
     "Content": "KDE: disable the Plasma splash screen",
-    "Description": "ksplashrc: Engine=none, Theme=None — the desktop appears as soon as it's ready instead of waiting on the splash animation. Shaves a second or two off every login. Applied for your user. Reversible.",
+    "Description": "ksplashrc: Engine=none, Theme=None \u2014 the desktop appears as soon as it's ready instead of waiting on the splash animation. Shaves a second or two off every login. Applied for your user. Reversible.",
     "category": "KDE (Desktop GUI Tweaks)",
     "risk": "safe",
     "check": "grep -qs 'Engine=none' /home/{USER}/.config/ksplashrc",
     "apply": [
-      "su - {USER} -c 'kwriteconfig6 --file ksplashrc --group KSplash --key Engine none; kwriteconfig6 --file ksplashrc --group KSplash --key Theme None'"
+      "su - {USER} -c 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file ksplashrc --group KSplash --key Engine none; kwriteconfig6 --file ksplashrc --group KSplash --key Theme None'"
     ],
     "undo": [
-      "su - {USER} -c 'kwriteconfig6 --file ksplashrc --group KSplash --key Engine --delete; kwriteconfig6 --file ksplashrc --group KSplash --key Theme --delete'"
+      "su - {USER} -c 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file ksplashrc --group KSplash --key Engine --delete; kwriteconfig6 --file ksplashrc --group KSplash --key Theme --delete'"
     ]
   },
   "KdeScreenEdgesOff": {
@@ -500,10 +534,10 @@
     "risk": "safe",
     "check": "grep -qs 'TopLeft=None' /home/{USER}/.config/kwinrc",
     "apply": [
-      "su - {USER} -c 'for e in Top Bottom Left Right TopLeft TopRight BottomLeft BottomRight; do kwriteconfig6 --file kwinrc --group ElectricBorders --key $e None; done; qdbus6 org.kde.KWin /KWin reconfigure 2>/dev/null || true'"
+      "su - {USER} -c 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; for e in Top Bottom Left Right TopLeft TopRight BottomLeft BottomRight; do kwriteconfig6 --file kwinrc --group ElectricBorders --key $e None; done; qdbus6 org.kde.KWin /KWin reconfigure 2>/dev/null || true'"
     ],
     "undo": [
-      "su - {USER} -c 'for e in Top Bottom Left Right TopLeft TopRight BottomLeft BottomRight; do kwriteconfig6 --file kwinrc --group ElectricBorders --key $e --delete; done; qdbus6 org.kde.KWin /KWin reconfigure 2>/dev/null || true'"
+      "su - {USER} -c 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; for e in Top Bottom Left Right TopLeft TopRight BottomLeft BottomRight; do kwriteconfig6 --file kwinrc --group ElectricBorders --key $e --delete; done; qdbus6 org.kde.KWin /KWin reconfigure 2>/dev/null || true'"
     ]
   },
   "DesktopLauncher": {
@@ -526,11 +560,13 @@
   },
   "RyzenAdjTDP": {
     "Content": "CPU TDP control (ryzenadj) + persist across reboot",
-    "Description": "Installs ryzenadj (from the distro repo, or built from source as a fallback) so the Power & Limits tab can set the 5800H's STAPM / fast / slow power limits — the Linux 'ThrottleStop for Ryzen'. Also installs tuxthrottle-tdp (re-applies ~/.config/tuxthrottle/tdp.json), a boot+resume service so your chosen limits survive a reboot, and a narrow sudoers rule so a future CLI/tray can call it without a password. The GUI itself already runs elevated and doesn't need the sudoers rule. Reversible.",
+    "Description": "Installs ryzenadj (from the distro repo, or built from source as a fallback) so the Power & Limits tab can set the 5800H's STAPM / fast / slow power limits \u2014 the Linux 'ThrottleStop for Ryzen'. Also installs tuxthrottle-tdp (re-applies ~/.config/tuxthrottle/tdp.json), a boot+resume service so your chosen limits survive a reboot, and a narrow sudoers rule so a future CLI/tray can call it without a password. The GUI itself already runs elevated and doesn't need the sudoers rule. Reversible.",
     "category": "Power",
     "risk": "advanced",
     "check": "command -v ryzenadj >/dev/null 2>&1 && test -x /usr/local/bin/tuxthrottle-tdp && systemctl is-enabled tuxthrottle-tdp.service 2>/dev/null | grep -q enabled",
-    "reinstall_if": ["/etc/systemd/system/tuxthrottle-tdp.service"],
+    "reinstall_if": [
+      "/etc/systemd/system/tuxthrottle-tdp.service"
+    ],
     "apply": [
       "command -v ryzenadj >/dev/null 2>&1 || dnf install -y ryzenadj || true",
       "if ! command -v ryzenadj >/dev/null 2>&1; then dnf install -y cmake gcc gcc-c++ make git pciutils-devel && rm -rf /tmp/ryzenadj-build && git clone --depth 1 https://github.com/FlyGoat/RyzenAdj /tmp/ryzenadj-build && cmake -S /tmp/ryzenadj-build -B /tmp/ryzenadj-build/build -DCMAKE_BUILD_TYPE=Release && cmake --build /tmp/ryzenadj-build/build && install -m 0755 /tmp/ryzenadj-build/build/ryzenadj /usr/local/bin/ryzenadj; fi",
@@ -554,11 +590,13 @@
   },
   "BatteryChargeLimit": {
     "Content": "Battery charge-limit persistence",
-    "Description": "Sets the battery charge-stop threshold from the Power & Limits tab (spares the cell when the laptop lives on AC — 80% is the usual longevity target). This tweak adds tuxthrottle-battery + a boot service that re-applies ~/.config/tuxthrottle/battery.json, since the kernel resets charge_control_end_threshold to 100 on every boot. No-op on a machine that doesn't expose that sysfs attribute. Reversible (service removed; threshold left wherever it currently is).",
+    "Description": "Sets the battery charge-stop threshold from the Power & Limits tab (spares the cell when the laptop lives on AC \u2014 80% is the usual longevity target). This tweak adds tuxthrottle-battery + a boot service that re-applies ~/.config/tuxthrottle/battery.json, since the kernel resets charge_control_end_threshold to 100 on every boot. No-op on a machine that doesn't expose that sysfs attribute. Reversible (service removed; threshold left wherever it currently is).",
     "category": "Power",
     "risk": "safe",
     "check": "test -x /usr/local/bin/tuxthrottle-battery && systemctl is-enabled tuxthrottle-battery.service 2>/dev/null | grep -q enabled",
-    "reinstall_if": ["/etc/systemd/system/tuxthrottle-battery.service"],
+    "reinstall_if": [
+      "/etc/systemd/system/tuxthrottle-battery.service"
+    ],
     "apply": [
       "cat > /usr/local/bin/tuxthrottle-battery <<'SCRIPT'\n#!/usr/bin/env bash\nF=\"${1:-/home/{USER}/.config/tuxthrottle/battery.json}\"\n[ -r \"$F\" ] || exit 0\nP=$(grep -oE '\"percent\"[ ]*:[ ]*[0-9]+' \"$F\" | grep -oE '[0-9]+$')\n[ -n \"$P\" ] || exit 0\nfor b in /sys/class/power_supply/BAT*/charge_control_end_threshold; do\n  [ -w \"$b\" ] && echo \"$P\" > \"$b\"\ndone\nexit 0\nSCRIPT",
       "chmod +x /usr/local/bin/tuxthrottle-battery",
@@ -574,12 +612,14 @@
   },
   "NvidiaPowerLimit": {
     "Content": "NVIDIA board power-limit persistence",
-    "Description": "Lets the Power & Limits tab cap the RTX 3050 Ti's board power (nvidia-smi -pl) — the most effective single lever for GPU heat and battery life. Installs tuxthrottle-nvpl + a boot service that re-applies ~/.config/tuxthrottle/nvpl.json (persistence mode + power limit), plus a scoped sudoers rule. requires the NVIDIA driver. Reversible.",
+    "Description": "Lets the Power & Limits tab cap the RTX 3050 Ti's board power (nvidia-smi -pl) \u2014 the most effective single lever for GPU heat and battery life. Installs tuxthrottle-nvpl + a boot service that re-applies ~/.config/tuxthrottle/nvpl.json (persistence mode + power limit), plus a scoped sudoers rule. requires the NVIDIA driver. Reversible.",
     "category": "GPU",
     "risk": "advanced",
     "requires_vendor": "nvidia",
     "check": "test -x /usr/local/bin/tuxthrottle-nvpl && systemctl is-enabled tuxthrottle-nvpl.service 2>/dev/null | grep -q enabled",
-    "reinstall_if": ["/etc/systemd/system/tuxthrottle-nvpl.service"],
+    "reinstall_if": [
+      "/etc/systemd/system/tuxthrottle-nvpl.service"
+    ],
     "apply": [
       "cat > /usr/local/bin/tuxthrottle-nvpl <<'SCRIPT'\n#!/usr/bin/env bash\nF=\"${1:-/home/{USER}/.config/tuxthrottle/nvpl.json}\"\ncommand -v nvidia-smi >/dev/null 2>&1 || exit 0\n[ -r \"$F\" ] || exit 0\nW=$(grep -oE '\"watts\"[ ]*:[ ]*[0-9]+' \"$F\" | grep -oE '[0-9]+$')\n[ -n \"$W\" ] || exit 0\nnvidia-smi -pm 1 >/dev/null 2>&1 || true\nnvidia-smi -pl \"$W\" >/dev/null 2>&1 || true\nexit 0\nSCRIPT",
       "chmod +x /usr/local/bin/tuxthrottle-nvpl",
@@ -597,7 +637,7 @@
     ]
   },
   "GameModeBridge": {
-    "Content": "Feral GameMode → Game Mode bridge",
+    "Content": "Feral GameMode \u2192 Game Mode bridge",
     "Description": "Installs Feral gamemode and wires its start/end hooks to the gaming-performance / gaming-balanced scripts, so launching any game with 'gamemoderun %command%' (or a Lutris/Heroic/Steam that requests GameMode) automatically flips the performance platform_profile + fan slam, and drops back when you quit. Also sets a sensible renice/softrealtime. Requires the PowerProfileScripts tweak first. Reversible.",
     "category": "Gaming",
     "risk": "safe",
@@ -607,15 +647,19 @@
       "test -x /usr/local/bin/gaming-performance || { echo 'Install the PowerProfileScripts tweak first'; exit 1; }",
       "cat > /etc/gamemode.ini <<'INI'\n[general]\nrenice=10\nsoftrealtime=auto\ninhibit_screensaver=1\n\n[custom]\nstart=/usr/local/bin/gaming-performance\nend=/usr/local/bin/gaming-balanced\nINI"
     ],
-    "undo": ["rm -f /etc/gamemode.ini"]
+    "undo": [
+      "rm -f /etc/gamemode.ini"
+    ]
   },
   "FanCurveDaemon": {
     "Content": "Fan-curve + AC-switch daemon",
-    "Description": "Runs tuxthrottle_powerd.py as a systemd service: a closed-loop fan curve (temperature → additive alienware-wmi fan boost, on the curve you draw in the Fans tab, with cool-down hysteresis) and optional AC/battery auto-switching (applies a platform_profile + ryzenadj TDP bundle when the charger is plugged/pulled). The daemon only ever ADDS airflow over the firmware curve — it can't stop a fan — and restores fully automatic control when stopped. Reads ~/.config/tuxthrottle/powerd.json live (edit it from the Fans / Power & Limits tabs). Reversible.",
+    "Description": "Runs tuxthrottle_powerd.py as a systemd service: a closed-loop fan curve (temperature \u2192 additive alienware-wmi fan boost, on the curve you draw in the Fans tab, with cool-down hysteresis) and optional AC/battery auto-switching (applies a platform_profile + ryzenadj TDP bundle when the charger is plugged/pulled). The daemon only ever ADDS airflow over the firmware curve \u2014 it can't stop a fan \u2014 and restores fully automatic control when stopped. Reads ~/.config/tuxthrottle/powerd.json live (edit it from the Fans / Power & Limits tabs). Reversible.",
     "category": "Power",
     "risk": "advanced",
     "check": "systemctl is-enabled tuxthrottle-powerd.service 2>/dev/null | grep -q enabled",
-    "reinstall_if": ["/etc/systemd/system/tuxthrottle-powerd.service"],
+    "reinstall_if": [
+      "/etc/systemd/system/tuxthrottle-powerd.service"
+    ],
     "apply": [
       "chmod +x {TOOLKIT_DIR}/tuxthrottle_powerd.py",
       "cat > /etc/systemd/system/tuxthrottle-powerd.service <<'UNIT'\n[Unit]\nDescription=TuxThrottle fan-curve + AC-switch daemon\nAfter=multi-user.target\n\n[Service]\nType=simple\nExecStart=/usr/bin/python3 {TOOLKIT_DIR}/tuxthrottle_powerd.py run --user {USER}\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target\nUNIT",
@@ -630,11 +674,13 @@
   },
   "StateResume": {
     "Content": "Re-apply power state after suspend/resume + at boot",
-    "Description": "TDP / battery / NVIDIA limits set directly (by a profile or the Power & Limits tab) don't always survive a suspend/resume or a reboot. This installs a systemd-sleep hook + a boot service that run 'tuxthrottle_profiles.py reassert' — re-applying exactly the last state the tool applied (recorded in ~/.config/tuxthrottle/active_state.json). No-op until you apply a profile or a limit. Reversible.",
+    "Description": "TDP / battery / NVIDIA limits set directly (by a profile or the Power & Limits tab) don't always survive a suspend/resume or a reboot. This installs a systemd-sleep hook + a boot service that run 'tuxthrottle_profiles.py reassert' \u2014 re-applying exactly the last state the tool applied (recorded in ~/.config/tuxthrottle/active_state.json). No-op until you apply a profile or a limit. Reversible.",
     "category": "Power",
     "risk": "safe",
     "check": "test -x /usr/lib/systemd/system-sleep/tuxthrottle-reassert && systemctl is-enabled tuxthrottle-reassert.service 2>/dev/null | grep -q enabled",
-    "reinstall_if": ["/etc/systemd/system/tuxthrottle-reassert.service"],
+    "reinstall_if": [
+      "/etc/systemd/system/tuxthrottle-reassert.service"
+    ],
     "apply": [
       "chmod +x {TOOLKIT_DIR}/tuxthrottle_profiles.py",
       "mkdir -p /usr/lib/systemd/system-sleep",
@@ -652,11 +698,15 @@
   },
   "DellBatteryThreshold": {
     "Content": "Dell battery threshold (libsmbios)",
-    "Description": "The G15 5515 has no kernel charge_control_end_threshold, but Dell firmware supports a 'custom' charge interval stored in NVRAM. This installs libsmbios (smbios-battery-ctl); the Power & Limits tab then sets the stop-charging percentage through it and it persists in firmware across reboots — no service needed. Undo removes the package only; any interval you set stays in firmware until you set it back to 100 %/standard.",
+    "Description": "The G15 5515 has no kernel charge_control_end_threshold, but Dell firmware supports a 'custom' charge interval stored in NVRAM. This installs libsmbios (smbios-battery-ctl); the Power & Limits tab then sets the stop-charging percentage through it and it persists in firmware across reboots \u2014 no service needed. Undo removes the package only; any interval you set stays in firmware until you set it back to 100 %/standard.",
     "category": "Power",
     "risk": "safe",
     "check": "command -v smbios-battery-ctl >/dev/null 2>&1",
-    "apply": ["dnf install -y libsmbios"],
-    "undo": ["dnf remove -y libsmbios || true"]
+    "apply": [
+      "dnf install -y libsmbios"
+    ],
+    "undo": [
+      "dnf remove -y libsmbios || true"
+    ]
   }
 }
