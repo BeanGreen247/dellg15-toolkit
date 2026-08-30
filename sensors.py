@@ -742,6 +742,49 @@ def set_nvidia_power_limit(watts: int) -> tuple[bool, str]:
 #  wires gamemoded's start/end hooks to gaming-performance/-balanced).
 # --------------------------------------------------------------------------- #
 
+def envycontrol_available() -> bool:
+    return which("envycontrol") is not None
+
+
+def gpu_mode_get() -> str | None:
+    """Current hybrid-graphics mode via EnvyControl: 'integrated' | 'hybrid'
+    | 'nvidia', or None if envycontrol isn't installed / couldn't be read."""
+    exe = which("envycontrol")
+    if not exe:
+        return None
+    try:
+        out = subprocess.run([exe, "--query"], capture_output=True, text=True, timeout=8)
+        text = (out.stdout or out.stderr or "").strip().lower()
+        for mode in ("integrated", "hybrid", "nvidia"):
+            if mode in text:
+                return mode
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def gpu_mode_set(mode: str) -> tuple[bool, str]:
+    """Switch hybrid-graphics mode (needs root; takes effect after logout /
+    reboot). mode is 'integrated' | 'hybrid' | 'nvidia'."""
+    exe = which("envycontrol")
+    if not exe:
+        return False, "envycontrol not installed (install the EnvyControl app first)"
+    if mode not in ("integrated", "hybrid", "nvidia"):
+        return False, f"unknown mode {mode!r}"
+    try:
+        r = subprocess.run([exe, "-s", mode, "--dm", "sddm"],
+                           capture_output=True, text=True, timeout=60)
+        if r.returncode == 0:
+            return True, ""
+        # retry without the display-manager hint (older envycontrol)
+        r2 = subprocess.run([exe, "-s", mode], capture_output=True, text=True, timeout=60)
+        if r2.returncode == 0:
+            return True, ""
+        return False, (r2.stderr or r2.stdout or r.stderr or "envycontrol failed").strip()
+    except Exception as exc:  # noqa: BLE001
+        return False, str(exc)
+
+
 def gamemode_status() -> dict:
     """{'installed': bool, 'active': bool, 'clients': int}."""
     exe = which("gamemoded")

@@ -517,5 +517,24 @@
       "cat > /etc/gamemode.ini <<'INI'\n[general]\nrenice=10\nsoftrealtime=auto\ninhibit_screensaver=1\n\n[custom]\nstart=/usr/local/bin/gaming-performance\nend=/usr/local/bin/gaming-balanced\nINI"
     ],
     "undo": ["rm -f /etc/gamemode.ini"]
+  },
+  "FanCurveDaemon": {
+    "Content": "Fan-curve + AC-switch daemon",
+    "Description": "Runs tuxthrottle_powerd.py as a systemd service: a closed-loop fan curve (temperature → additive alienware-wmi fan boost, on the curve you draw in the Fans tab, with cool-down hysteresis) and optional AC/battery auto-switching (applies a platform_profile + ryzenadj TDP bundle when the charger is plugged/pulled). The daemon only ever ADDS airflow over the firmware curve — it can't stop a fan — and restores fully automatic control when stopped. Reads ~/.config/tuxthrottle/powerd.json live (edit it from the Fans / Power & Limits tabs). Reversible.",
+    "category": "Power",
+    "risk": "advanced",
+    "check": "systemctl is-enabled tuxthrottle-powerd.service 2>/dev/null | grep -q enabled",
+    "reinstall_if": ["/etc/systemd/system/tuxthrottle-powerd.service"],
+    "apply": [
+      "chmod +x {TOOLKIT_DIR}/tuxthrottle_powerd.py",
+      "cat > /etc/systemd/system/tuxthrottle-powerd.service <<'UNIT'\n[Unit]\nDescription=TuxThrottle fan-curve + AC-switch daemon\nAfter=multi-user.target\n\n[Service]\nType=simple\nExecStart=/usr/bin/python3 {TOOLKIT_DIR}/tuxthrottle_powerd.py run --user {USER}\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target\nUNIT",
+      "systemctl daemon-reload",
+      "systemctl enable --now tuxthrottle-powerd.service"
+    ],
+    "undo": [
+      "systemctl disable --now tuxthrottle-powerd.service 2>/dev/null || true",
+      "rm -f /etc/systemd/system/tuxthrottle-powerd.service",
+      "systemctl daemon-reload"
+    ]
   }
 }

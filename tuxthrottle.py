@@ -53,6 +53,20 @@ try:
 except Exception:  # noqa: BLE001
     tuxthrottle_kbd = None
 
+try:
+    from tuxthrottle_powerd import interp as fancurve_interp  # noqa: E402
+except Exception:  # noqa: BLE001
+    def fancurve_interp(points, temp):  # minimal fallback
+        s = sorted((float(t), float(b)) for t, b in points)
+        if not s or temp <= s[0][0]:
+            return s[0][1] if s else 0
+        if temp >= s[-1][0]:
+            return s[-1][1]
+        for (t0, b0), (t1, b1) in zip(s, s[1:]):
+            if t0 <= temp <= t1:
+                return b0 + (temp - t0) / (t1 - t0) * (b1 - b0)
+        return s[-1][1]
+
 CATEGORY_ORDER = ["Gaming", "GPU", "Power", "Performance", "Software", "Monitoring", "Streaming", "RGB"]
 THEME = "darkly"
 
@@ -1357,8 +1371,114 @@ class ToolkitApp:
                       command=self._fan_restore).pack(anchor="w", pady=(10, 0))
             self._fan_manual_toggle()
 
+        self._build_fancurve_section(frame)
+
         self._fan_live = True
         self._fan_poll()
+
+    # --- closed-loop fan curve (tuxthrottle_powerd.py) ---
+
+    _FANCURVE_DEFAULT = [[45, 0], [60, 25], [72, 55], [82, 85], [90, 100]]
+
+    def _build_fancurve_section(self, parent):
+        cfg = self._read_power_state("powerd.json") or {}
+        fc = cfg.get("fan_curve", {})
+        pts = fc.get("points") or self._FANCURVE_DEFAULT
+
+        lf = tb.Labelframe(parent, text="Custom fan curve (closed-loop)", padding=12)
+        lf.pack(fill="x", pady=(14, 6))
+        tb.Label(lf, wraplength=1000, justify="left", bootstyle=SECONDARY, text=(
+            "A background daemon maps temperature → additive fan boost on a curve "
+            "you set. It only ever *adds* airflow over the firmware curve, and "
+            "restores automatic control when stopped. Needs the “Fan-curve + "
+            "AC-switch daemon” tweak (Power tab) enabled to actually run at boot.")
+            ).pack(anchor="w", pady=(0, 8))
+
+        top = tb.Frame(lf); top.pack(fill="x")
+        self._fc_enabled = tk.BooleanVar(value=bool(fc.get("enabled")))
+        tb.Checkbutton(top, text="Fan curve enabled", variable=self._fc_enabled,
+                       bootstyle="round-toggle").pack(side="left")
+        tb.Label(top, text="   Drive from:").pack(side="left")
+        self._fc_sensor = tk.StringVar(value=fc.get("sensor", "max"))
+        for lbl, val in (("Hotter of CPU/GPU", "max"), ("CPU", "cpu"), ("GPU", "gpu")):
+            tb.Radiobutton(top, text=lbl, value=val, variable=self._fc_sensor,
+                           bootstyle="toolbutton").pack(side="left", padx=3)
+
+        grid = tb.Frame(lf); grid.pack(anchor="w", pady=(10, 4))
+        tb.Label(grid, text="Temp °C", width=10, bootstyle=SECONDARY).grid(row=0, column=0)
+        tb.Label(grid, text="Boost %", width=10, bootstyle=SECONDARY).grid(row=0, column=1)
+        self._fc_rows = []
+        for r in range(5):
+            t, b = (pts[r] if r < len(pts) else self._FANCURVE_DEFAULT[r])
+            tv = tk.IntVar(value=int(t)); bv = tk.IntVar(value=int(b))
+            tb.Spinbox(grid, from_=30, to=100, textvariable=tv, width=8,
+                       command=self._fc_redraw).grid(row=r + 1, column=0, padx=4, pady=2)
+            tb.Spinbox(grid, from_=0, to=100, textvariable=bv, width=8,
+                       command=self._fc_redraw).grid(row=r + 1, column=1, padx=4, pady=2)
+            self._fc_rows.append((tv, bv))
+
+        self._fc_canvas = tk.Canvas(lf, height=120, bg="#0e1116", highlightthickness=0)
+        self._fc_canvas.pack(fill="x", pady=(6, 6))
+        self._fc_canvas.bind("<Configure>", lambda _e: self._fc_redraw())
+
+        hr = tb.Frame(lf); hr.pack(anchor="w")
+        tb.Label(hr, text="Cool-down hysteresis").pack(side="left")
+        self._fc_hys = tk.IntVar(value=int(fc.get("hysteresis_c", 3)))
+        tb.Spinbox(hr, from_=0, to=10, textvariable=self._fc_hys, width=6).pack(side="left", padx=6)
+        tb.Label(hr, text="°C").pack(side="left")
+        tb.Button(hr, text="Save curve", bootstyle=SUCCESS,
+                  command=self._fc_save).pack(side="left", padx=(16, 0))
+        self._fc_live = tb.Label(hr, text="", bootstyle=SECONDARY)
+        self._fc_live.pack(side="left", padx=12)
+        self._fc_redraw()
+
+    def _fc_points(self) -> list:
+        return sorted([[tv.get(), bv.get()] for tv, bv in self._fc_rows])
+
+    def _fc_redraw(self):
+        c = getattr(self, "_fc_canvas", None)
+        if c is None:
+            return
+        c.delete("all")
+        w = c.winfo_width() or 600
+        h = int(c["height"])
+        pad = 6
+        tmin, tmax = 30, 100
+        def X(t): return pad + (t - tmin) / (tmax - tmin) * (w - 2 * pad)
+        def Y(b): return h - pad - b / 100 * (h - 2 * pad)
+        for gb in (0, 25, 50, 75, 100):
+            c.create_line(pad, Y(gb), w - pad, Y(gb), fill="#20262e")
+        pts = self._fc_points()
+        acc = getattr(self, "accent", "#58a6ff")
+        for (t0, b0), (t1, b1) in zip(pts, pts[1:]):
+            c.create_line(X(t0), Y(b0), X(t1), Y(b1), fill=acc, width=2)
+        for t, b in pts:
+            c.create_oval(X(t) - 3, Y(b) - 3, X(t) + 3, Y(b) + 3, fill=acc, outline="")
+            c.create_text(X(t), Y(b) - 10, text=f"{t}°", fill="#8b949e", font=("Sans", 7))
+
+    def _fc_save(self):
+        merged = self._read_power_state("powerd.json") or {}
+        merged["fan_curve"] = {
+            "enabled": bool(self._fc_enabled.get()),
+            "sensor": self._fc_sensor.get(),
+            "hysteresis_c": int(self._fc_hys.get()),
+            "points": self._fc_points(),
+        }
+        self._write_power_state("powerd.json", merged)
+        # nudge a running daemon (it re-reads on mtime change); also apply once now
+        threading.Thread(target=self._fc_apply_now, daemon=True).start()
+        self._log(f"[Fans] fan curve saved ({'on' if self._fc_enabled.get() else 'off'}, "
+                  f"{self._fc_sensor.get()}, {self._fc_points()})")
+
+    def _fc_apply_now(self):
+        r = subprocess.run(["bash", "-c",
+                            f"test -f {shlex.quote(str(BASE_DIR))}/tuxthrottle_powerd.py && "
+                            f"python3 {shlex.quote(str(BASE_DIR))}/tuxthrottle_powerd.py once "
+                            f"--user {shlex.quote(self.user)}"],
+                           capture_output=True, text=True, timeout=20)
+        out = (r.stdout or r.stderr or "").strip()
+        if out:
+            self._log(f"[Fans] {out.splitlines()[-1]}")
 
     def _fan_set_profile(self, name: str):
         ok, err = sensors.set_platform_profile(name)
@@ -1427,6 +1547,19 @@ class ToolkitApp:
                     lab.configure(text=f"{fan['rpm']} rpm")
                 except tk.TclError:
                     pass
+        live = getattr(self, "_fc_live", None)
+        if live is not None:
+            try:
+                cpu = sensors.read_cpu_temp_c_value()
+                _c, gt, _u, _p = sensors.read_dgpu_values()
+                sensor = self._fc_sensor.get()
+                temp = {"cpu": cpu, "gpu": gt}.get(sensor)
+                if temp is None:
+                    temp = max([v for v in (cpu, gt) if v is not None] or [0])
+                tgt = fancurve_interp(self._fc_points(), temp)
+                live.configure(text=f"now {temp:.0f}°C → target boost {tgt:.0f}%")
+            except (tk.TclError, ValueError):
+                pass
         self.root.after(2000, self._fan_poll)
 
     # ---------- Power & Limits tab ----------
@@ -1445,6 +1578,13 @@ class ToolkitApp:
         except (KeyError, Exception):  # noqa: BLE001
             home = Path.home()
         return home / ".config" / "tuxthrottle" / name
+
+    def _read_power_state(self, name: str) -> dict:
+        try:
+            d = json.loads(self._power_state_path(name).read_text())
+            return d if isinstance(d, dict) else {}
+        except (OSError, ValueError):
+            return {}
 
     def _write_power_state(self, name: str, data: dict) -> None:
         """Persist a limit so a later-installed boot service can re-apply it.
@@ -1473,7 +1613,9 @@ class ToolkitApp:
 
         self._build_tdp_section(frame)
         self._build_nvpl_section(frame)
+        self._build_gpumode_section(frame)
         self._build_battery_section(frame)
+        self._build_autoswitch_section(frame)
 
         self._power_live = True
         self._power_poll()
@@ -1635,6 +1777,94 @@ class ToolkitApp:
         self._write_power_state("battery.json", {"percent": p})
         ok, err = sensors.set_battery_charge_limit(p)
         self._log(f"[Power] battery charge limit → {p}%" + ("" if ok else f"  FAILED: {err}"))
+
+    # --- hybrid graphics mode (EnvyControl) ---
+
+    def _build_gpumode_section(self, parent):
+        if not self.has_nvidia:
+            return
+        lf = tb.Labelframe(parent, text="Hybrid graphics mode", padding=12)
+        lf.pack(fill="x", pady=6)
+        if not sensors.envycontrol_available():
+            tb.Label(lf, bootstyle=WARNING, wraplength=1000, justify="left",
+                     text="EnvyControl isn't installed. Install the “EnvyControl” "
+                          "app (Presets / Software tab), then reopen this tab.").pack(anchor="w")
+            return
+        cur = sensors.gpu_mode_get()
+        tb.Label(lf, wraplength=1000, justify="left", bootstyle=SECONDARY, text=(
+            "hybrid = both GPUs, dGPU on demand (default, best battery/perf balance). "
+            "integrated = dGPU fully off (max battery, no NVIDIA rendering). "
+            "nvidia = dGPU always on (max performance, worst battery). "
+            "A switch takes effect after logging out or rebooting.")).pack(anchor="w", pady=(0, 8))
+        row = tb.Frame(lf); row.pack(anchor="w")
+        self._gpumode_var = tk.StringVar(value=cur or "hybrid")
+        for m in ("integrated", "hybrid", "nvidia"):
+            tb.Radiobutton(row, text=m.capitalize(), value=m, variable=self._gpumode_var,
+                           bootstyle="toolbutton").pack(side="left", padx=3)
+        tb.Button(row, text="Apply", bootstyle=(WARNING, "outline"),
+                  command=self._gpumode_apply).pack(side="left", padx=(12, 0))
+        self._gpumode_now = tb.Label(lf, bootstyle=SECONDARY,
+                                     text=f"current: {cur or 'unknown'}")
+        self._gpumode_now.pack(anchor="w", pady=(6, 0))
+
+    def _gpumode_apply(self):
+        mode = self._gpumode_var.get()
+        if not messagebox.askyesno(
+                "Switch graphics mode",
+                f"Switch to '{mode}' graphics mode?\n\nThis rewrites the Xorg / "
+                "display-manager config and only takes effect after you log out "
+                "or reboot."):
+            return
+
+        def work():
+            ok, err = sensors.gpu_mode_set(mode)
+            self._log(f"[Power] graphics mode → {mode}"
+                      + ("  (log out / reboot to apply)" if ok else f"  FAILED: {err}"))
+            if ok:
+                self.root.after(0, lambda: self._gpumode_now.configure(
+                    text=f"current: {mode}  — log out or reboot to apply"))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    # --- AC / battery auto profile switch (tuxthrottle_powerd.py) ---
+
+    _AUTOSWITCH_BUNDLES = ("Quiet", "Balanced", "Performance")
+
+    def _build_autoswitch_section(self, parent):
+        cfg = self._read_power_state("powerd.json") or {}
+        aw = cfg.get("autoswitch", {})
+        lf = tb.Labelframe(parent, text="AC / battery auto profile switch", padding=12)
+        lf.pack(fill="x", pady=6)
+        tb.Label(lf, wraplength=1000, justify="left", bootstyle=SECONDARY, text=(
+            "When the charger is plugged or pulled, the fan-curve daemon applies a "
+            "bundle: Quiet = balanced profile + 25/35/25 W TDP, Balanced = 42/54/42 W, "
+            "Performance = performance profile + 65/80/54 W. Needs the “Fan-curve + "
+            "AC-switch daemon” tweak enabled.")).pack(anchor="w", pady=(0, 8))
+        self._aw_enabled = tk.BooleanVar(value=bool(aw.get("enabled")))
+        tb.Checkbutton(lf, text="Auto-switch enabled", variable=self._aw_enabled,
+                       bootstyle="round-toggle").pack(anchor="w")
+        row = tb.Frame(lf); row.pack(anchor="w", pady=(8, 0))
+        self._aw_on_ac = tk.StringVar(value=aw.get("on_ac", "Balanced"))
+        self._aw_on_bat = tk.StringVar(value=aw.get("on_battery", "Quiet"))
+        tb.Label(row, text="On AC →", width=12, anchor="w").pack(side="left")
+        tb.Combobox(row, textvariable=self._aw_on_ac, values=self._AUTOSWITCH_BUNDLES,
+                    state="readonly", width=14).pack(side="left", padx=(0, 16))
+        tb.Label(row, text="On battery →", width=12, anchor="w").pack(side="left")
+        tb.Combobox(row, textvariable=self._aw_on_bat, values=self._AUTOSWITCH_BUNDLES,
+                    state="readonly", width=14).pack(side="left")
+        tb.Button(lf, text="Save auto-switch", bootstyle=SUCCESS,
+                  command=self._aw_save).pack(anchor="w", pady=(10, 0))
+
+    def _aw_save(self):
+        merged = self._read_power_state("powerd.json") or {}
+        merged["autoswitch"] = {
+            "enabled": bool(self._aw_enabled.get()),
+            "on_ac": self._aw_on_ac.get(),
+            "on_battery": self._aw_on_bat.get(),
+        }
+        self._write_power_state("powerd.json", merged)
+        self._log(f"[Power] auto-switch saved ({'on' if self._aw_enabled.get() else 'off'}: "
+                  f"AC→{self._aw_on_ac.get()}, battery→{self._aw_on_bat.get()})")
 
     # --- live readouts ---
 
