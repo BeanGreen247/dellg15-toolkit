@@ -22,6 +22,16 @@ Usage:
     python3 tuxthrottle_prefix_relocate.py --all              # relocate every
                                                               # at-risk prefix
 
+It also handles save files that ended up on another drive: a Windows
+"known folder" inside a prefix (Documents / Saved Games / AppData / …) that
+is a symlink onto a *different* filesystem (a common dual-boot save-sharing
+setup, or left behind when a game was moved between drives). Those are
+pulled back into the prefix, with the off-drive copy left untouched.
+
+    python3 tuxthrottle_prefix_relocate.py --saves-scan       # list stranded saves
+    python3 tuxthrottle_prefix_relocate.py --saves <appid>    # pull one game's in
+    python3 tuxthrottle_prefix_relocate.py --saves-all        # pull all in
+
 Run it as the real user (not root); close Steam / the game first.
 """
 from __future__ import annotations
@@ -250,6 +260,111 @@ def do_all(root: Path) -> int:
     return 1 if fails else 0
 
 
+# --------------------------------------------------------------------------- #
+#  Save files stranded on another drive
+# --------------------------------------------------------------------------- #
+
+# Windows "known folders" under pfx/drive_c/users/steamuser/ where games keep
+# saves/config. If one of these is a symlink onto a *different* filesystem,
+# the saves live off the prefix's drive.
+KNOWN_FOLDERS = [
+    "Documents", "My Documents", "Saved Games", "Desktop",
+    "AppData/Local", "AppData/LocalLow", "AppData/Roaming",
+]
+
+
+def _dev(p: Path) -> int:
+    try:
+        return p.stat().st_dev
+    except OSError:
+        return -1
+
+
+def stray_saves(root: Path, appid: str) -> list[tuple[str, Path, Path]]:
+    """(known-folder, symlink path, resolved off-drive target) for this game."""
+    lib = library_for_appid(root, appid)
+    if lib is None:
+        return []
+    pfx = (lib / "steamapps" / "compatdata" / appid / "pfx").resolve()
+    su = pfx / "drive_c" / "users" / "steamuser"
+    if not su.is_dir():
+        return []
+    home_dev = _dev(pfx)
+    out = []
+    for kf in KNOWN_FOLDERS:
+        link = su / kf
+        if not link.is_symlink():
+            continue
+        target = link.resolve()
+        if not target.exists() or not target.is_dir():
+            continue
+        # only care about links that leave the prefix onto another filesystem
+        if _dev(target) != home_dev and su not in target.parents:
+            out.append((kf, link, target))
+    return out
+
+
+def pull_saves_one(root: Path, appid: str) -> int:
+    strays = stray_saves(root, appid)
+    name = appid_name(root, appid) or appid
+    if not strays:
+        print(f"{name} ({appid}): no stray save folders — nothing to do.")
+        return 0
+    moved = 0
+    for kf, link, target in strays:
+        staging = link.with_name(link.name + ".tuxthrottle-pull")
+        print(f"{name}: {kf}  <-  {target}")
+        if staging.exists():
+            print(f"  SKIP — {staging} already exists"); continue
+        try:
+            shutil.copytree(target, staging, symlinks=True,
+                            ignore_dangling_symlinks=True)
+            link.unlink()
+            staging.rename(link)
+        except OSError as exc:
+            print(f"  FAILED: {exc}")
+            if staging.exists():
+                shutil.rmtree(staging, ignore_errors=True)
+            continue
+        print(f"  pulled into the prefix; old copy left at {target}")
+        moved += 1
+    if moved:
+        print(f"{name}: {moved} folder(s) pulled in. Verify saves in-game, then "
+              f"the old off-drive copies can be deleted.")
+    return 0
+
+
+def do_saves_scan(root: Path) -> int:
+    hits = 0
+    for appid, name, _st, _lib in all_prefixes(root):
+        strays = stray_saves(root, appid)
+        if not strays:
+            continue
+        hits += 1
+        print(f"  {appid}  {name}")
+        for kf, _link, target in strays:
+            print(f"      {kf:<18} -> {target}")
+    if not hits:
+        print("no save folders found on another drive.")
+    else:
+        print(f"\n{hits} game(s) with saves on another drive — run:  "
+              f"tuxthrottle_prefix_relocate.py --saves <appid>   (or --saves-all)")
+    return 0
+
+
+def do_saves_all(root: Path) -> int:
+    targets = [a for a, _n, _s, _l in all_prefixes(root) if stray_saves(root, a)]
+    if not targets:
+        print("no save folders on another drive — nothing to do.")
+        return 0
+    if steam_running():
+        sys.exit("Steam is running — close Steam (and every game) first, then retry.")
+    for appid in targets:
+        pull_saves_one(root, appid)
+    print(f"\ndone — {len(targets)} game(s) processed.")
+    return 0
+
+
 def main() -> int:
     if os.geteuid() == 0 and not os.environ.get("TUXTHROTTLE_ALLOW_ROOT"):
         sys.exit("run this as your normal user, not root (it edits ~/.local/share/Steam)")
@@ -259,11 +374,21 @@ def main() -> int:
         return do_scan(root)
     if "--all" in sys.argv:
         return do_all(root)
+    if "--saves-scan" in sys.argv:
+        return do_saves_scan(root)
+    if "--saves-all" in sys.argv:
+        return do_saves_all(root)
 
     args = [a for a in sys.argv[1:] if not a.startswith("-")]
+    if "--saves" in sys.argv:
+        if not args or not args[0].isdigit():
+            sys.exit("usage: tuxthrottle_prefix_relocate.py --saves <appid>")
+        if steam_running():
+            sys.exit("Steam is running — close Steam and the game first, then retry.")
+        return pull_saves_one(root, args[0])
     if not args or not args[0].isdigit():
         sys.exit("usage: tuxthrottle_prefix_relocate.py <appid> [--check] "
-                 "| --scan | --all")
+                 "| --scan | --all | --saves-scan | --saves <appid> | --saves-all")
     return do_one(root, args[0], "--check" in sys.argv)
 
 

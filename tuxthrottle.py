@@ -1431,17 +1431,20 @@ class ToolkitApp:
                       "the game launcher that can't be scripted — tick “Mark done” once "
                       "you've done them.").pack(anchor="w", pady=(2, 0))
 
-        # general Proton-prefix relocation — useful for ANY Steam game, not just
-        # the ones with a walkthrough below
-        pf = tb.Labelframe(outer, text="Proton prefix tools", padding=10)
+        # general Proton-prefix + save-file relocation — useful for ANY Steam
+        # game, not just the ones with a walkthrough below
+        pf = tb.Labelframe(outer, text="Proton prefix & save-file tools", padding=10)
         pf.pack(fill="x", padx=16, pady=(6, 8))
         tb.Label(pf, bootstyle=SECONDARY, wraplength=1100, justify="left",
                  text="A game installed on an NTFS or exFAT drive can't build its Proton "
                       "prefix there (those filesystems reject ':' in a filename, so the "
-                      "'dosdevices/c:' … links fail and the game won't start). These move "
-                      "just the prefix onto your Linux drive and symlink it back — the "
-                      "game files stay put. Close Steam first.").pack(anchor="w")
-        row = tb.Frame(pf); row.pack(anchor="w", fill="x", pady=(8, 0))
+                      "'dosdevices/c:' … links fail and the game won't start). "
+                      "Relocation moves just the prefix onto your Linux drive and "
+                      "symlinks it back — game files stay put. The save-file scan finds "
+                      "prefixes whose Documents / Saved Games / AppData folder is a "
+                      "symlink onto another drive and pulls it back in. Close Steam "
+                      "first.").pack(anchor="w")
+        row = tb.Frame(pf); row.pack(anchor="w", fill="x", pady=(8, 2))
         tb.Button(row, text="Scan Steam prefixes", bootstyle=(INFO, "outline"),
                   command=self._prefix_scan).pack(side="left")
         tb.Button(row, text="Migrate all at-risk prefixes", bootstyle=(WARNING, "outline"),
@@ -1451,6 +1454,12 @@ class ToolkitApp:
         tb.Entry(row, textvariable=self._prefix_appid_var, width=12).pack(side="left", padx=(2, 6))
         tb.Button(row, text="Relocate this prefix", bootstyle=(WARNING, "outline"),
                   command=self._prefix_relocate_entry).pack(side="left")
+        row2 = tb.Frame(pf); row2.pack(anchor="w", fill="x", pady=(2, 0))
+        tb.Button(row2, text="Scan for saves on another drive", bootstyle=(INFO, "outline"),
+                  command=self._saves_scan).pack(side="left")
+        tb.Button(row2, text="Move all stray saves into their prefixes",
+                  bootstyle=(WARNING, "outline"),
+                  command=self._saves_move_all).pack(side="left", padx=6)
 
         tb.Separator(outer).pack(fill="x")
 
@@ -1673,6 +1682,23 @@ class ToolkitApp:
             return
         self._run_stream(f"relocate prefix for AppID {appid}",
                          self._prefix_helper_cmd(appid), tag="Prefix tools")
+
+    def _saves_scan(self):
+        self._run_stream("scan for save files on another drive",
+                         self._prefix_helper_cmd("--saves-scan"), tag="Prefix tools")
+
+    def _saves_move_all(self):
+        if not messagebox.askyesno(
+            "Move stray saves into prefixes",
+            "For every game whose Documents / Saved Games / AppData folder is a "
+            "symlink onto another drive, copy that folder into the game's Proton "
+            "prefix and replace the symlink.\n\n"
+            "The original off-drive copy is left in place — nothing is deleted. "
+            "Close Steam and all games first. Run the scan first to see the list.",
+        ):
+            return
+        self._run_stream("move all stray saves into their prefixes",
+                         self._prefix_helper_cmd("--saves-all"), tag="Prefix tools")
 
     def _run_game_all(self, gid: str):
         """Run every step of a game that has a `run` command, in order,
