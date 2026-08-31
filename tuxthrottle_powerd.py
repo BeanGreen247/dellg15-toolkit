@@ -88,6 +88,13 @@ DEFAULTS: dict[str, Any] = {
         "stalled_fan_hot_c": 70,  # a 0-RPM fan while its sensor is this hot -> event
         "battery_perf_min_pct": 20,   # Performance profile on battery below this -> event
         "cooldown_s": 300,        # min seconds between repeats of the same event
+        # G15 5515/5525 firmware bug: the fans sometimes stop spinning
+        # entirely even when hot, and only toggling G-Mode (the performance
+        # platform_profile) revives them. With this on, a detected stalled-fan
+        # event also kicks platform_profile -> performance, holds it, then
+        # restores the previous profile once the fans are turning again.
+        "stalled_fan_recover": False,
+        "stalled_fan_recover_s": 45,   # hold performance at least this long
     },
 }
 
@@ -209,15 +216,34 @@ def _running_procs() -> set:
     return names
 
 
+def _session_path(user) -> Path:
+    return _config_path(user).with_name("last_session.json")
+
+
+def _chown_user(path: Path, user: str | None) -> None:
+    """Hand a root-written file in the user's config dir back to the user."""
+    if not user:
+        return
+    try:
+        pw = pwd.getpwnam(user)
+        os.chown(path, pw.pw_uid, pw.pw_gid)
+    except (KeyError, OSError):
+        pass
+
+
 class GameProfileController:
-    """Applies a profile while a matched game runs, restores it afterwards."""
+    """Applies a profile while a matched game runs, restores it afterwards,
+    and records a per-session summary (max temps, avg clocks, throttle time)
+    to ~/.config/tuxthrottle/last_session.json when the game exits."""
 
     def __init__(self, user):
         self._user = user
         self._active_key = None   # the match key we're currently honouring
+        self._session: dict | None = None
 
     def tick(self, cfg: dict) -> None:
         gp = cfg.get("game_profiles", {})
+        poll_s = max(3, int(gp.get("poll_s", 6)))
         if not gp.get("enabled") or not gp.get("match"):
             if self._active_key:
                 self._leave(gp)
@@ -240,8 +266,12 @@ class GameProfileController:
             profiles.snapshot(self._user, label="pre-game")
             self._apply_profile(prof)
             self._active_key = key
+            self._session_start(key, prof)
         elif not hit and self._active_key:
             self._leave(gp)
+
+        if self._active_key and self._session is not None:
+            self._session_sample(poll_s)
 
     def _leave(self, gp: dict) -> None:
         dflt = gp.get("default")
@@ -251,7 +281,78 @@ class GameProfileController:
         else:
             log("game gone -> rolling back the pre-game snapshot")
             profiles.rollback("last", self._user)
+        self._session_end()
         self._active_key = None
+
+    # ---- per-session summary ------------------------------------------------ #
+
+    def _session_start(self, key: str, prof: str) -> None:
+        self._session = {
+            "game": key, "profile": prof, "started": time.time(),
+            "n": 0, "cpu_temp_max": 0.0, "gpu_temp_max": 0.0,
+            "cpu_clk_sum": 0.0, "cpu_clk_n": 0,
+            "gpu_clk_sum": 0.0, "gpu_clk_n": 0,
+            "cpu_pow_max": 0.0, "gpu_pow_max": 0.0,
+            "throttle_s": 0.0, "sample_s": 0.0,
+        }
+
+    def _session_sample(self, poll_s: float) -> None:
+        s = self._session
+        if s is None:
+            return
+        s["n"] += 1
+        s["sample_s"] += poll_s
+        info = sensors.read_ryzenadj_info() or {}
+        tctl = info.get("tctl_value")
+        if tctl is not None:
+            s["cpu_temp_max"] = max(s["cpu_temp_max"], float(tctl))
+            if tctl >= 90:                       # near Tjmax -> counts as throttling
+                s["throttle_s"] += poll_s
+        pw = sensors.read_cpu_power_watts()
+        if pw is not None:
+            s["cpu_pow_max"] = max(s["cpu_pow_max"], float(pw))
+        clk = sensors.read_cpu_freq_ghz_value()
+        if clk:
+            s["cpu_clk_sum"] += clk
+            s["cpu_clk_n"] += 1
+        g_clk, g_temp, _g_util, g_pow = sensors.read_dgpu_values()
+        if g_temp is not None:
+            s["gpu_temp_max"] = max(s["gpu_temp_max"], float(g_temp))
+        if g_clk:
+            s["gpu_clk_sum"] += float(g_clk)
+            s["gpu_clk_n"] += 1
+        if g_pow is not None:
+            s["gpu_pow_max"] = max(s["gpu_pow_max"], float(g_pow))
+
+    def _session_end(self) -> None:
+        s = self._session
+        self._session = None
+        if not s or s["n"] < 2:
+            return
+        dur = max(1.0, time.time() - s["started"])
+        summary = {
+            "game": s["game"], "profile": s["profile"],
+            "started": s["started"], "ended": time.time(),
+            "duration_s": round(dur),
+            "cpu_temp_max_c": round(s["cpu_temp_max"]),
+            "gpu_temp_max_c": round(s["gpu_temp_max"]),
+            "cpu_clock_avg_ghz": round(s["cpu_clk_sum"] / s["cpu_clk_n"], 2) if s["cpu_clk_n"] else None,
+            "gpu_clock_avg_mhz": round(s["gpu_clk_sum"] / s["gpu_clk_n"]) if s["gpu_clk_n"] else None,
+            "cpu_power_max_w": round(s["cpu_pow_max"]) if s["cpu_pow_max"] else None,
+            "gpu_power_max_w": round(s["gpu_pow_max"]) if s["gpu_pow_max"] else None,
+            "throttle_s": round(s["throttle_s"]),
+            "throttle_pct": round(100 * s["throttle_s"] / max(1.0, s["sample_s"])),
+        }
+        try:
+            p = _session_path(self._user)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps(summary, indent=2))
+            _chown_user(p, self._user)
+            log(f"session summary: {summary['game']} {summary['duration_s']}s, "
+                f"CPU max {summary['cpu_temp_max_c']}°C, throttled "
+                f"{summary['throttle_pct']}% -> {p.name}")
+        except OSError as exc:
+            log(f"  (session summary write failed: {exc})")
 
     def _apply_profile(self, name: str) -> None:
         st = profiles.load_profile(name, self._user)
@@ -313,6 +414,8 @@ class ThermalWatcher:
         self._user = user
         self._hot_since: float | None = None   # first sample at/above Tjmax
         self._last_fired: dict[str, float] = {}
+        self._recover_prev: str | None = None  # profile to restore after a fan-stall kick
+        self._recover_until: float = 0.0
 
     def _fire(self, kind: str, cd: float, summary: str, body: str) -> None:
         now = time.monotonic()
@@ -348,13 +451,19 @@ class ThermalWatcher:
         fans = sensors.read_fans()
         hot = read_temp("max")
         stalled = [f for f in fans if (f.get("rpm") or 0) == 0]
-        if stalled and hot is not None and hot >= float(tn.get("stalled_fan_hot_c", 70)):
+        stalled_hot = bool(stalled) and hot is not None \
+            and hot >= float(tn.get("stalled_fan_hot_c", 70))
+        if stalled_hot:
             names = ", ".join(f.get("label", f"fan{f['index']}") for f in stalled)
             self._fire("stalled_fan", cd, "Fan not spinning while hot",
                        f"{names} at 0 RPM with a sensor at {hot:.0f} °C.")
+            if tn.get("stalled_fan_recover"):
+                self._kick_fan_recover(names, float(tn.get("stalled_fan_recover_s", 45)))
+        elif self._recover_prev is not None and time.monotonic() >= self._recover_until:
+            self._end_fan_recover()
 
         ac = _ac_online()
-        if ac is False:
+        if ac is False and self._recover_prev is None:
             bat = sensors.battery_charge_limit_info()
             cap = bat.get("capacity")
             prof = (sensors.get_platform_profile() or "").lower()
@@ -363,6 +472,33 @@ class ThermalWatcher:
                 self._fire("battery_perf", cd, "Performance profile on low battery",
                            f"{prof} profile active on battery at {cap}% — "
                            f"consider Balanced/Quiet.")
+
+    def _kick_fan_recover(self, names: str, hold_s: float) -> None:
+        """G15 firmware fan-stall workaround: force the performance
+        platform_profile (G-Mode) — the only thing that reliably restarts a
+        stalled fan — and hold it for at least `hold_s`."""
+        now = time.monotonic()
+        if self._recover_prev is None:
+            prev = (sensors.get_platform_profile() or "balanced").lower()
+            self._recover_prev = prev
+            if prev != "performance":
+                ok, err = sensors.set_platform_profile("performance")
+                log(f"THERMAL-EVENT stalled_fan_recover: {names} stalled -> "
+                    f"platform_profile performance (was {prev})"
+                    + ("" if ok else f" FAILED {err}"))
+            else:
+                log(f"THERMAL-EVENT stalled_fan_recover: {names} stalled, "
+                    f"already in performance — holding")
+        self._recover_until = now + max(10.0, hold_s)
+
+    def _end_fan_recover(self) -> None:
+        prev = self._recover_prev
+        self._recover_prev = None
+        self._recover_until = 0.0
+        if prev and prev != "performance":
+            ok, err = sensors.set_platform_profile(prev)
+            log(f"THERMAL-EVENT stalled_fan_recover: fans turning again -> "
+                f"restored platform_profile {prev}" + ("" if ok else f" FAILED {err}"))
 
 
 def _build_dispatch(user, reload_flag: list):

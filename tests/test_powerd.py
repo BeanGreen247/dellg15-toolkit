@@ -121,3 +121,56 @@ def test_gameprofile_wildcard_needs_gamemode(monkeypatch):
     gc.tick({"game_profiles": {"enabled": True, "match": {"*": "Performance"}, "default": None}})
     assert gc._active_key == "*"
     assert applied
+
+
+def test_session_summary_written_on_game_exit(monkeypatch, tmp_path):
+    monkeypatch.setattr(pd, "_running_procs", lambda: {"gta5.exe"})
+    monkeypatch.setattr(pd.profiles, "snapshot", lambda *a, **k: None)
+    monkeypatch.setattr(pd.profiles, "load_profile", lambda n, u=None: {"x": 1})
+    monkeypatch.setattr(pd.profiles, "apply_state",
+                        lambda st, u=None: [{"key": "x", "ok": True, "msg": ""}])
+    monkeypatch.setattr(pd.profiles, "rollback", lambda t, u=None: [])
+    monkeypatch.setattr(pd, "_session_path", lambda u: tmp_path / "last_session.json")
+    monkeypatch.setattr(pd, "_chown_user", lambda p, u: None)
+    monkeypatch.setattr(pd.sensors, "read_ryzenadj_info", lambda: {"tctl_value": 92.0})
+    monkeypatch.setattr(pd.sensors, "read_cpu_power_watts", lambda: 55.0)
+    monkeypatch.setattr(pd.sensors, "read_cpu_freq_ghz_value", lambda: 3.8)
+    monkeypatch.setattr(pd.sensors, "read_dgpu_values", lambda: (1650, 70, 80, 60.0))
+    gc = pd.GameProfileController("bean")
+    cfg = {"game_profiles": {"enabled": True, "match": {"gta5.exe": "Gaming"},
+                             "default": None, "poll_s": 6}}
+    for _ in range(4):
+        gc.tick(cfg)                       # game running -> samples
+    monkeypatch.setattr(pd, "_running_procs", lambda: set())
+    gc.tick(cfg)                            # game exits -> writes summary
+    import json
+    s = json.loads((tmp_path / "last_session.json").read_text())
+    assert s["game"] == "gta5.exe"
+    assert s["cpu_temp_max_c"] == 92
+    assert s["gpu_temp_max_c"] == 70
+    assert s["throttle_pct"] == 100        # tctl 92 >= 90 every sample
+
+
+def test_thermal_fan_stall_recover(monkeypatch):
+    tw = pd.ThermalWatcher("bean")
+    set_calls = []
+    monkeypatch.setattr(pd.sensors, "get_platform_profile", lambda: "balanced")
+    monkeypatch.setattr(pd.sensors, "set_platform_profile",
+                        lambda p: set_calls.append(p) or (True, ""))
+    monkeypatch.setattr(pd.sensors, "read_ryzenadj_info", lambda: {"tctl_value": 60})
+    monkeypatch.setattr(pd.sensors, "read_fans",
+                        lambda: [{"index": 1, "label": "CPU Fan", "rpm": 0}])
+    monkeypatch.setattr(pd, "read_temp", lambda s: 85.0)
+    monkeypatch.setattr(pd, "_ac_online", lambda: True)
+    cfg = {"thermal_notify": {"enabled": True, "stalled_fan_hot_c": 70,
+                              "stalled_fan_recover": True, "stalled_fan_recover_s": 45}}
+    tw.tick(cfg)
+    assert set_calls == ["performance"]     # kicked G-Mode
+    assert tw._recover_prev == "balanced"
+    # fans come back, recovery window elapsed -> restore
+    monkeypatch.setattr(pd.sensors, "read_fans",
+                        lambda: [{"index": 1, "label": "CPU Fan", "rpm": 3200}])
+    tw._recover_until = 0.0
+    tw.tick(cfg)
+    assert set_calls == ["performance", "balanced"]
+    assert tw._recover_prev is None

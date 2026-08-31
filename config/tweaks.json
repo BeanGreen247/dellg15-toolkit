@@ -825,6 +825,134 @@
       "systemctl try-restart polkit >/dev/null 2>&1 || true"
     ]
   },
+  "NvidiaShaderCache": {
+    "Content": "NVIDIA: stop shader-cache pruning (kills the every-launch recompile)",
+    "Description": "The NVIDIA Linux driver prunes its shader disk cache between sessions, so many games do a FULL shader recompile on every launch — 100% CPU for 10–15 min and stutter until it finishes. Drops env vars into /etc/environment.d/ that give the cache a large fixed budget and disable the cleanup pass (__GL_SHADER_DISK_CACHE=1, ..._PATH=~/.cache/nv, ..._SIZE=~12 GB, ..._SKIP_CLEANUP=1). Takes effect on next login. Reversible.",
+    "category": "GPU",
+    "risk": "safe",
+    "requires_vendor": "nvidia",
+    "check": "grep -q SKIP_CLEANUP /etc/environment.d/90-tuxthrottle-nv-shadercache.conf 2>/dev/null",
+    "reinstall_if": [
+      "/etc/environment.d/90-tuxthrottle-nv-shadercache.conf"
+    ],
+    "apply": [
+      "install -d /etc/environment.d",
+      "printf '%s\\n' '# TuxThrottle: keep the NVIDIA shader disk cache instead of recompiling every launch' '__GL_SHADER_DISK_CACHE=1' '__GL_SHADER_DISK_CACHE_PATH=/home/{USER}/.cache/nv' '__GL_SHADER_DISK_CACHE_SIZE=12000000000' '__GL_SHADER_DISK_CACHE_SKIP_CLEANUP=1' > /etc/environment.d/90-tuxthrottle-nv-shadercache.conf",
+      "install -d -o {USER} -g {USER} /home/{USER}/.cache/nv"
+    ],
+    "undo": [
+      "rm -f /etc/environment.d/90-tuxthrottle-nv-shadercache.conf"
+    ]
+  },
+  "NvidiaDynamicBoost": {
+    "Content": "NVIDIA: enable Dynamic Boost (nvidia-powerd)",
+    "Description": "nvidia-powerd arbitrates the shared CPU/GPU power budget on Ryzen+RTX laptops (Dynamic Boost). If it isn't running the dGPU is capped near its base clock and you lose a chunk of gaming performance. Enables + starts nvidia-powerd.service (ships with the NVIDIA driver). Reversible.",
+    "category": "GPU",
+    "risk": "safe",
+    "requires_vendor": "nvidia",
+    "check": "systemctl is-active --quiet nvidia-powerd.service",
+    "apply": [
+      "systemctl enable --now nvidia-powerd.service"
+    ],
+    "undo": [
+      "systemctl disable --now nvidia-powerd.service 2>/dev/null || true"
+    ]
+  },
+  "SplitLockMitigateOff": {
+    "Content": "Disable split-lock detection (removes a big stall penalty in some games)",
+    "Description": "The kernel's split-lock detector stalls a thread hard (tens of ms) whenever a misaligned locked memory op crosses a cache line — a pattern some games / anti-cheats hit, costing 20–40% FPS. Sets kernel.split_lock_mitigate=0 via /etc/sysctl.d/, applied now and at boot. No downside on a personal gaming machine. Reversible.",
+    "category": "Performance",
+    "risk": "safe",
+    "check": "[ \"$(sysctl -n kernel.split_lock_mitigate 2>/dev/null)\" = \"0\" ]",
+    "reinstall_if": [
+      "/etc/sysctl.d/99-tuxthrottle-splitlock.conf"
+    ],
+    "apply": [
+      "printf 'kernel.split_lock_mitigate = 0\\n' > /etc/sysctl.d/99-tuxthrottle-splitlock.conf",
+      "sysctl -w kernel.split_lock_mitigate=0"
+    ],
+    "undo": [
+      "rm -f /etc/sysctl.d/99-tuxthrottle-splitlock.conf",
+      "sysctl -w kernel.split_lock_mitigate=1 2>/dev/null || true"
+    ]
+  },
+  "SchedExtGaming": {
+    "Content": "sched-ext: run the scx_lavd low-latency scheduler (Steam Deck's)",
+    "Description": "Installs scx-scheds and runs scx_lavd — the sched_ext scheduler Valve ships on the Steam Deck, tuned for low frame-time variance under gaming load, and fine as a full-time desktop scheduler. Needs kernel 6.12+ with sched_ext (Nobara/Fedora 43 has it). Sets SCX_SCHEDULER=scx_lavd in /etc/default/scx and enables scx.service. Reversible with no reboot — undo stops the service and the kernel falls back to its default scheduler.",
+    "category": "Performance",
+    "risk": "advanced",
+    "check": "[ -e /sys/kernel/sched_ext/root/ops ] && systemctl is-active --quiet scx.service 2>/dev/null",
+    "reinstall_if": [
+      "/etc/default/scx"
+    ],
+    "apply": [
+      "command -v scx_lavd >/dev/null 2>&1 || dnf install -y scx-scheds",
+      "printf 'SCX_SCHEDULER=scx_lavd\\nSCX_FLAGS=\\\"\\\"\\n' > /etc/default/scx",
+      "systemctl enable --now scx.service"
+    ],
+    "undo": [
+      "systemctl disable --now scx.service 2>/dev/null || true",
+      "rm -f /etc/default/scx"
+    ]
+  },
+  "MangoHudGamingPreset": {
+    "Content": "MangoHud: install a sensible gaming overlay preset",
+    "Description": "Writes ~/.config/MangoHud/MangoHud.conf with a clean gaming layout: FPS + frametime graph, CPU/GPU load + temp + power, VRAM/RAM, bottom-left, and toggle_hud bound to Shift_R+F12. Does not set fps_limit (leave that per-game). An existing MangoHud.conf is backed up to .bak first. Reversible.",
+    "category": "Gaming",
+    "risk": "safe",
+    "check": "grep -q tuxthrottle-preset /home/{USER}/.config/MangoHud/MangoHud.conf 2>/dev/null",
+    "apply": [
+      "install -d -o {USER} -g {USER} /home/{USER}/.config/MangoHud",
+      "if [ -f /home/{USER}/.config/MangoHud/MangoHud.conf ] && [ ! -f /home/{USER}/.config/MangoHud/MangoHud.conf.bak ]; then cp /home/{USER}/.config/MangoHud/MangoHud.conf /home/{USER}/.config/MangoHud/MangoHud.conf.bak; fi",
+      "printf '%s\\n' '# tuxthrottle-preset' fps frametime frame_timing cpu_stats cpu_temp cpu_power gpu_stats gpu_temp gpu_power vram ram 'position=bottom-left' 'round_corners=6' 'background_alpha=0.4' 'font_size=20' 'toggle_hud=Shift_R+F12' > /home/{USER}/.config/MangoHud/MangoHud.conf",
+      "chown {USER}:{USER} /home/{USER}/.config/MangoHud/MangoHud.conf"
+    ],
+    "undo": [
+      "if [ -f /home/{USER}/.config/MangoHud/MangoHud.conf.bak ]; then mv /home/{USER}/.config/MangoHud/MangoHud.conf.bak /home/{USER}/.config/MangoHud/MangoHud.conf; else rm -f /home/{USER}/.config/MangoHud/MangoHud.conf; fi"
+    ]
+  },
+  "KwinAllowTearing": {
+    "Content": "KDE: allow screen tearing for games (lower input latency)",
+    "Description": "Sets kwinrc [Compositing] AllowTearing=true so a fullscreen game can present frames immediately instead of waiting for the compositor's vsync — lower input latency, higher effective FPS. KWin only tears for apps that explicitly ask (tearing-control protocol / Vulkan immediate present); everything else is unaffected. Reversible.",
+    "category": "KDE (Desktop GUI Tweaks)",
+    "risk": "safe",
+    "check": "[ \"$(sudo -u {USER} -H kreadconfig6 --file kwinrc --group Compositing --key AllowTearing 2>/dev/null)\" = \"true\" ]",
+    "apply": [
+      "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file kwinrc --group Compositing --key AllowTearing true; { qdbus-qt6 org.kde.KWin /KWin reconfigure || qdbus org.kde.KWin /KWin reconfigure || dbus-send --session --type=method_call --dest=org.kde.KWin /KWin org.kde.KWin.reconfigure; } 2>/dev/null || true'"
+    ],
+    "undo": [
+      "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'kwriteconfig6 --file kwinrc --group Compositing --key AllowTearing --delete; { qdbus-qt6 org.kde.KWin /KWin reconfigure || qdbus org.kde.KWin /KWin reconfigure || dbus-send --session --type=method_call --dest=org.kde.KWin /KWin org.kde.KWin.reconfigure; } 2>/dev/null || true'"
+    ]
+  },
+  "AcpiBacklightNvidiaWmiEc": {
+    "Content": "Fix broken screen-brightness control (acpi_backlight=nvidia_wmi_ec)",
+    "Description": "Since kernel 6.1 the backlight handoff changed and brightness keys / the slider stop working on some Optimus G15 configs. Adds acpi_backlight=nvidia_wmi_ec to the kernel command line (grubby, all kernels), restoring brightness control via the NVIDIA WMI EC interface. ONLY apply if your brightness control is actually broken; needs a reboot. Reversible.",
+    "category": "Stability",
+    "risk": "advanced",
+    "check": "grep -q acpi_backlight=nvidia_wmi_ec /proc/cmdline",
+    "check_pending": "grubby --info=DEFAULT 2>/dev/null | grep -q acpi_backlight=nvidia_wmi_ec",
+    "apply": [
+      "grubby --update-kernel=ALL --args=\"acpi_backlight=nvidia_wmi_ec\""
+    ],
+    "undo": [
+      "grubby --update-kernel=ALL --remove-args=\"acpi_backlight=nvidia_wmi_ec\""
+    ]
+  },
+  "AmdPstateActive": {
+    "Content": "Ensure amd_pstate runs in 'active' (EPP) mode",
+    "Description": "amd_pstate has three modes; 'active' (EPP-driven) is what lets Cezanne (Ryzen 7 5800H) boost properly and follow the platform power profile. Adds amd_pstate=active to the kernel command line if it isn't already the running mode. No-op where the kernel already defaults to active (recent Fedora/Nobara). Needs a reboot. Reversible.",
+    "category": "Performance",
+    "risk": "advanced",
+    "requires_vendor": "amd",
+    "check": "[ \"$(cat /sys/devices/system/cpu/amd_pstate/status 2>/dev/null)\" = \"active\" ]",
+    "check_pending": "grubby --info=DEFAULT 2>/dev/null | grep -q amd_pstate=active",
+    "apply": [
+      "grubby --update-kernel=ALL --args=\"amd_pstate=active\""
+    ],
+    "undo": [
+      "grubby --update-kernel=ALL --remove-args=\"amd_pstate=active\""
+    ]
+  },
   "DellBatteryThreshold": {
     "Content": "Dell battery threshold (libsmbios)",
     "Description": "The G15 5515 has no kernel charge_control_end_threshold, but Dell firmware supports a 'custom' charge interval stored in NVRAM. This installs libsmbios (smbios-battery-ctl); the Power & Limits tab then sets the stop-charging percentage through it and it persists in firmware across reboots \u2014 no service needed. Undo removes the package only; any interval you set stays in firmware until you set it back to 100 %/standard.",

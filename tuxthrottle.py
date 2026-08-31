@@ -1842,8 +1842,41 @@ class ToolkitApp:
         #     so the two instances don't clobber each other) ---
         self._build_battery_section(frame, prefix="_bath_bat")
 
+        # --- charging speed (Dell libsmbios) ---
+        mode = sensors.battery_charge_mode()
+        if mode is not None:
+            cf = tb.Labelframe(frame, text="Charging speed", padding=12)
+            cf.pack(fill="x", pady=6)
+            tb.Label(cf, bootstyle=SECONDARY, wraplength=1000, justify="left",
+                     text="Express charges the pack faster (more heat, a little "
+                          "more wear); Standard is the gentler default. Firmware "
+                          "setting — persists with no service.").pack(anchor="w", pady=(0, 6))
+            self._chg_mode = tk.StringVar(value=mode)
+            row = tb.Frame(cf); row.pack(anchor="w")
+            for m in ("standard", "express"):
+                tb.Radiobutton(row, text=m.capitalize(), value=m,
+                               variable=self._chg_mode, bootstyle="toolbutton",
+                               command=self._apply_charge_mode).pack(side="left", padx=3)
+
+        # --- VRR / adaptive-sync (informational) ---
+        vrr = sensors.vrr_status()
+        vf = tb.Frame(frame); vf.pack(fill="x", pady=(10, 0))
+        tb.Label(vf, text="Adaptive Sync", width=18, anchor="w").pack(side="left")
+        tb.Label(vf, bootstyle=SECONDARY,
+                 text=(f"{', '.join(vrr['capable'])} report VRR-capable — enable it "
+                       f"per-display in System Settings → Display, and apply the "
+                       f"KDE “allow tearing” tweak for lowest latency."
+                       if vrr["capable"]
+                       else "no VRR-capable panel detected on this system")
+                 ).pack(side="left")
+
         self._bath_live_on = True
         self._bath_poll()
+
+    def _apply_charge_mode(self):
+        m = self._chg_mode.get()
+        ok, err = sensors.set_battery_charge_mode(m)
+        self._log(f"[Battery] charging mode → {m}" + ("" if ok else f"  FAILED: {err}"))
 
     def _bath_poll(self):
         if not getattr(self, "_bath_live_on", False):
@@ -2513,6 +2546,118 @@ class ToolkitApp:
 
     # ---------- Setup Games ----------
 
+    def _build_launch_opts_box(self, parent):
+        lf = tb.Labelframe(parent, text="Steam / Lutris launch-options builder",
+                           padding=10)
+        lf.pack(fill="x", padx=16, pady=(6, 8))
+        tb.Label(lf, bootstyle=SECONDARY, wraplength=1100, justify="left",
+                 text="Tick what you want and copy the string into a game's "
+                      "Properties → Launch Options (Steam) or the wrapper field "
+                      "(Lutris/Heroic). The `%command%` placeholder is where "
+                      "Steam substitutes the game.").pack(anchor="w")
+        self._lo = {
+            "mangohud": tk.BooleanVar(value=True),
+            "gamemode": tk.BooleanVar(value=True),
+            "gamescope": tk.BooleanVar(value=False),
+            "prime": tk.BooleanVar(value=self.has_nvidia),
+            "nvcache": tk.BooleanVar(value=self.has_nvidia),
+            "radv_gpl": tk.BooleanVar(value=self.has_amd and not self.has_nvidia),
+            "proton_nolog": tk.BooleanVar(value=True),
+        }
+        self._lo_w = tk.StringVar(value="1920")
+        self._lo_h = tk.StringVar(value="1080")
+        self._lo_fps = tk.StringVar(value="")
+        row = tb.Frame(lf); row.pack(anchor="w", pady=(8, 2))
+        for key, label in (("mangohud", "MangoHud overlay"),
+                           ("gamemode", "Feral GameMode"),
+                           ("prime", "Render on the NVIDIA dGPU (PRIME offload)"),
+                           ("nvcache", "Keep NVIDIA shader cache"),
+                           ("radv_gpl", "RADV_PERFTEST=gpl (AMD)"),
+                           ("proton_nolog", "Proton log off")):
+            tb.Checkbutton(row, text=label, variable=self._lo[key],
+                           bootstyle="round-toggle",
+                           command=self._lo_refresh).pack(anchor="w")
+        grow = tb.Frame(lf); grow.pack(anchor="w", pady=(4, 2))
+        tb.Checkbutton(grow, text="gamescope  ", variable=self._lo["gamescope"],
+                       bootstyle="round-toggle",
+                       command=self._lo_refresh).pack(side="left")
+        for cap, var, w in (("W", self._lo_w, 6), ("H", self._lo_h, 6),
+                            ("fps cap", self._lo_fps, 6)):
+            tb.Label(grow, text=cap).pack(side="left", padx=(8, 2))
+            e = tb.Entry(grow, textvariable=var, width=w)
+            e.pack(side="left")
+            e.bind("<KeyRelease>", lambda _e: self._lo_refresh())
+        orow = tb.Frame(lf); orow.pack(fill="x", pady=(8, 2))
+        self._lo_out = tk.StringVar()
+        tb.Entry(orow, textvariable=self._lo_out, state="readonly").pack(
+            side="left", fill="x", expand=True)
+        tb.Button(orow, text="⧉ Copy", bootstyle=INFO,
+                  command=lambda: self._copy_text(self._lo_out.get(),
+                                                  "launch options")).pack(side="left", padx=(6, 0))
+        self._lo_refresh()
+
+    def _lo_refresh(self):
+        env, wrap = [], []
+        if self._lo["prime"].get():
+            env += ["__NV_PRIME_RENDER_OFFLOAD=1", "__VK_LAYER_NV_optimus=NVIDIA_only",
+                    "__GLX_VENDOR_LIBRARY_NAME=nvidia"]
+        if self._lo["nvcache"].get():
+            env.append("__GL_SHADER_DISK_CACHE_SKIP_CLEANUP=1")
+        if self._lo["radv_gpl"].get():
+            env.append("RADV_PERFTEST=gpl")
+        if self._lo["proton_nolog"].get():
+            env.append("PROTON_LOG=0")
+        if self._lo["gamemode"].get():
+            wrap.append("gamemoderun")
+        if self._lo["gamescope"].get():
+            gs = ["gamescope"]
+            if self._lo_w.get().strip().isdigit():
+                gs += ["-W", self._lo_w.get().strip()]
+            if self._lo_h.get().strip().isdigit():
+                gs += ["-H", self._lo_h.get().strip()]
+            if self._lo_fps.get().strip().isdigit():
+                gs += ["-r", self._lo_fps.get().strip()]
+            gs += ["-f", "--"]
+            wrap += gs
+        if self._lo["mangohud"].get():
+            wrap.append("mangohud")
+        self._lo_out.set(" ".join(env + wrap + ["%command%"]))
+
+    def _build_last_session_card(self, parent):
+        lf = tb.Labelframe(parent, text="Last game session", padding=10)
+        lf.pack(fill="x", padx=16, pady=(0, 8))
+        self._last_sess_lbl = tb.Label(lf, bootstyle=SECONDARY, justify="left",
+                                       wraplength=1100)
+        self._last_sess_lbl.pack(anchor="w")
+        tb.Button(lf, text="↻ Refresh", bootstyle=(SECONDARY, "outline"),
+                  command=self._refresh_last_session).pack(anchor="w", pady=(6, 0))
+        self._refresh_last_session()
+
+    def _refresh_last_session(self):
+        import datetime
+        try:
+            s = json.loads(self._power_state_path("last_session.json").read_text())
+        except (OSError, ValueError):
+            self._last_sess_lbl.config(
+                text="No session recorded yet. Turn on per-game auto-profiles "
+                     "(Profiles tab) and the daemon logs a summary here when a "
+                     "mapped game exits.")
+            return
+        mins = round(s.get("duration_s", 0) / 60)
+        when = datetime.datetime.fromtimestamp(
+            s.get("ended", 0)).strftime("%b %d %H:%M") if s.get("ended") else "?"
+        parts = [f"{s.get('game', '?')} — {mins} min  ({when})",
+                 f"CPU max {s.get('cpu_temp_max_c', '?')} °C",
+                 f"GPU max {s.get('gpu_temp_max_c', '?')} °C"]
+        if s.get("cpu_clock_avg_ghz"):
+            parts.append(f"avg CPU {s['cpu_clock_avg_ghz']} GHz")
+        if s.get("gpu_clock_avg_mhz"):
+            parts.append(f"avg GPU {s['gpu_clock_avg_mhz']} MHz")
+        tp = s.get("throttle_pct")
+        if tp is not None:
+            parts.append(f"thermally throttled {tp}% of the session")
+        self._last_sess_lbl.config(text="   ·   ".join(parts))
+
     def _build_games_tab(self):
         outer = tb.Frame(self.notebook)
         self.notebook.add(outer, text="Setup Games")
@@ -2581,6 +2726,9 @@ class ToolkitApp:
                   command=lambda: self._vault_cmd("export")).pack(side="left", padx=6)
         tb.Button(vrow2, text="Import saves ← vault", bootstyle=(WARNING, "outline"),
                   command=lambda: self._vault_cmd("import")).pack(side="left")
+
+        self._build_launch_opts_box(outer)
+        self._build_last_session_card(outer)
 
         tb.Separator(outer).pack(fill="x")
 

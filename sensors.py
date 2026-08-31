@@ -886,6 +886,37 @@ def set_battery_charge_limit(percent: int) -> tuple[bool, str]:
                    "libsmbios (dnf install libsmbios) for firmware-level control")
 
 
+def battery_charge_mode() -> str | None:
+    """Dell firmware charging mode via libsmbios: 'standard' | 'express' |
+    'adaptive' | 'primarily_ac' | 'custom' | None. 'express' = fast charge."""
+    exe = _smbios_battery_ctl()
+    if not exe:
+        return None
+    try:
+        out = subprocess.run([exe, "--get-charging-cfg"],
+                             capture_output=True, text=True, timeout=8).stdout or ""
+        m = re.search(r"[Cc]harging mode\s*[:=]\s*([A-Za-z_]+)", out)
+        return m.group(1).lower() if m else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def set_battery_charge_mode(mode: str) -> tuple[bool, str]:
+    """Set the Dell firmware charging mode. 'standard' or 'express' (fast).
+    Setting a non-custom mode clears any custom charge interval."""
+    exe = _smbios_battery_ctl()
+    if not exe:
+        return False, "libsmbios not installed (Dell battery threshold tweak)"
+    if mode not in ("standard", "express", "adaptive", "primarily_ac"):
+        return False, f"unknown charging mode {mode!r}"
+    try:
+        r = subprocess.run([exe, f"--set-charging-mode={mode}"],
+                           capture_output=True, text=True, timeout=15)
+        return (r.returncode == 0), (r.stderr or r.stdout or "").strip()
+    except Exception as exc:  # noqa: BLE001
+        return False, str(exc)
+
+
 def battery_health_info() -> dict:
     """Static + slow-changing battery facts from
     /sys/class/power_supply/BAT*: design vs full-charge capacity (→ wear %),
@@ -1048,6 +1079,49 @@ def gpu_mode_set(mode: str) -> tuple[bool, str]:
         return False, (r2.stderr or r2.stdout or r.stderr or "envycontrol failed").strip()
     except Exception as exc:  # noqa: BLE001
         return False, str(exc)
+
+
+def nvidia_powerd_status() -> dict:
+    """`nvidia-powerd` arbitrates the shared CPU/GPU power budget (Dynamic
+    Boost) on Ryzen+RTX laptops — if it isn't running the dGPU is stuck near
+    its base clock. {'installed', 'active'}."""
+    st = {"installed": False, "active": False}
+    try:
+        r = subprocess.run(["systemctl", "is-active", "nvidia-powerd.service"],
+                           capture_output=True, text=True, timeout=5)
+        st["active"] = r.stdout.strip() == "active"
+        r2 = subprocess.run(["systemctl", "list-unit-files", "nvidia-powerd.service"],
+                            capture_output=True, text=True, timeout=5)
+        st["installed"] = "nvidia-powerd.service" in (r2.stdout or "")
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return st
+
+
+def amd_pstate_mode() -> str | None:
+    """'active' | 'guided' | 'passive' — how the amd_pstate driver runs.
+    'active' (EPP) is what gives Cezanne its proper boost behaviour. None if
+    the driver isn't amd_pstate (old acpi-cpufreq) or unreadable."""
+    try:
+        with open("/sys/devices/system/cpu/amd_pstate/status") as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def vrr_status() -> dict:
+    """Variable-refresh-rate capability of the connected panels.
+    {'capable': [conn...], 'panels': N}. Purely informational — reads
+    /sys/class/drm/*/vrr_capable."""
+    capable = []
+    for p in glob.glob("/sys/class/drm/card*-*/vrr_capable"):
+        try:
+            if open(p).read().strip() == "1":
+                capable.append(p.split("/")[-2].split("-", 1)[-1])
+        except OSError:
+            continue
+    return {"capable": capable,
+            "panels": len(glob.glob("/sys/class/drm/card*-*/status"))}
 
 
 def gamemode_status() -> dict:
