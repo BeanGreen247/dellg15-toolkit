@@ -40,3 +40,17 @@ Then add the **TuxThrottle** widget to a panel or the desktop.
 The profile buttons run `tuxthrottlectl set power-profile …`, which needs root —
 either the `tuxthrottled` control socket (FanCurveDaemon tweak) is up, or add a
 sudoers rule. Without one, the buttons are a no-op and the temps still update.
+
+## MangoHud — `mangohud/tuxthrottle-mangohud`
+
+A one-line in-game overlay via MangoHud's `exec=` directive: current profile
+(abbreviated), CPU package power + temp, and dGPU temp when it's awake.
+
+```ini
+# ~/.config/MangoHud/MangoHud.conf
+exec=/opt/tuxthrottle/clients/mangohud/tuxthrottle-mangohud
+exec_name=TuxThrottle
+```
+
+Read-only — it never changes anything. MangoHud calls it ~1×/s; the script uses
+short timeouts and prints `TT n/a` if `tuxthrottlectl` can't be reached.

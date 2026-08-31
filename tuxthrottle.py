@@ -1059,6 +1059,7 @@ class ToolkitApp:
         self._build_keyboard_tab()
         self._build_fan_tab()
         self._build_power_tab()
+        self._build_battery_health_tab()
         self._build_profiles_tab()
         self._build_presets_tab()
         self._build_updates_tab()
@@ -1775,6 +1776,100 @@ class ToolkitApp:
         except (OSError, KeyError):
             pass
 
+    def _build_battery_health_tab(self):
+        outer = tb.Frame(self.notebook)
+        self.notebook.add(outer, text="Battery")
+        frame = self._scroll_body(outer, pad=16)
+
+        info = sensors.battery_health_info()
+        if not info:
+            tb.Label(frame, bootstyle=SECONDARY, wraplength=1000, justify="left",
+                     text="No battery detected (/sys/class/power_supply/BAT* is "
+                          "empty) — this page is for laptops.").pack(anchor="w")
+            return
+
+        tb.Label(frame, wraplength=1100, justify="left", bootstyle=SECONDARY,
+                 text="Battery wear and charge cycles, read straight from the "
+                      "kernel power-supply sysfs. Wear is how much of the pack's "
+                      "original design capacity is gone; keeping the charge limit "
+                      "below 100 % (section further down) slows it.").pack(
+            anchor="w", pady=(0, 14))
+
+        # --- health card ---
+        hf = tb.Labelframe(frame, text="Health", padding=12)
+        hf.pack(fill="x", pady=6)
+
+        wear = info.get("wear_pct")
+        wf = tb.Frame(hf); wf.pack(fill="x", pady=(0, 10))
+        tb.Label(wf, text="Wear", width=18, anchor="w").pack(side="left")
+        if wear is None:
+            tb.Label(wf, text="n/a (battery doesn't report design capacity)",
+                     bootstyle=SECONDARY).pack(side="left")
+        else:
+            style = (SUCCESS if wear < 15 else WARNING if wear < 30 else DANGER)
+            tb.Label(wf, text=f"{wear:.1f}%", bootstyle=style,
+                     font=("", 15, "bold")).pack(side="left")
+            tb.Label(wf, bootstyle=SECONDARY,
+                     text=f"   design {info['design']} {info['unit']}"
+                          f"  →  now holds {info['full']} {info['unit']}").pack(side="left")
+
+        rows = [
+            ("Charge cycles", info.get("cycle_count")),
+            ("Chemistry", info.get("technology")),
+            ("Manufacturer", info.get("manufacturer")),
+            ("Model", info.get("model")),
+        ]
+        for cap, val in rows:
+            if val in (None, ""):
+                continue
+            r = tb.Frame(hf); r.pack(fill="x", pady=2)
+            tb.Label(r, text=cap, width=18, anchor="w").pack(side="left")
+            tb.Label(r, text=str(val), bootstyle=SECONDARY).pack(side="left")
+
+        # --- live card ---
+        lf = tb.Labelframe(frame, text="Now", padding=12)
+        lf.pack(fill="x", pady=6)
+        self._bath_live = {}
+        for key, cap in (("charge", "Charge"), ("state", "State"),
+                         ("rate", "Power flow"), ("voltage", "Voltage")):
+            r = tb.Frame(lf); r.pack(fill="x", pady=2)
+            tb.Label(r, text=cap, width=18, anchor="w").pack(side="left")
+            v = tb.Label(r, text="—", bootstyle=SECONDARY)
+            v.pack(side="left")
+            self._bath_live[key] = v
+
+        # --- charge-limit controls, same section as Power & Limits (namespaced
+        #     so the two instances don't clobber each other) ---
+        self._build_battery_section(frame, prefix="_bath_bat")
+
+        self._bath_live_on = True
+        self._bath_poll()
+
+    def _bath_poll(self):
+        if not getattr(self, "_bath_live_on", False):
+            return
+        try:
+            i = sensors.battery_health_info()
+            cap = i.get("capacity_pct")
+            self._bath_live["charge"].config(
+                text=f"{cap}%" if cap is not None else "—")
+            self._bath_live["state"].config(text=i.get("status") or "—")
+            pw = i.get("power_w")
+            st = (i.get("status") or "").lower()
+            arrow = "→ in" if st == "charging" else "← out" if st == "discharging" else ""
+            self._bath_live["rate"].config(
+                text=f"{pw:.1f} W {arrow}".strip() if pw is not None else "—")
+            vv = i.get("voltage_v")
+            self._bath_live["voltage"].config(
+                text=f"{vv:.2f} V" if vv is not None else "—")
+            live = getattr(self, "_bath_bat_live", None)
+            if live is not None:
+                cl = sensors.battery_charge_limit_info().get("current")
+                live.configure(text=f"now: {cl} %" if cl is not None else "now: — %")
+        except Exception:  # noqa: BLE001
+            pass
+        self.root.after(4000, self._bath_poll)
+
     def _build_power_tab(self):
         outer = tb.Frame(self.notebook)
         self.notebook.add(outer, text="Power & Limits")
@@ -1996,7 +2091,10 @@ class ToolkitApp:
 
     # --- Battery charge limit ---
 
-    def _build_battery_section(self, parent):
+    def _build_battery_section(self, parent, prefix: str = "_bat"):
+        # `prefix` namespaces the IntVar / "now:" label so this section can be
+        # placed on two pages (Power & Limits and Battery) without the second
+        # build clobbering the first's widget references.
         info = sensors.battery_charge_limit_info()
         lf = tb.Labelframe(parent, text="Battery charge limit", padding=12)
         lf.pack(fill="x", pady=6)
@@ -2015,29 +2113,36 @@ class ToolkitApp:
                  text="Stops charging at the set level to spare the cell when the "
                       f"laptop mostly runs on AC. 80 % is the usual longevity sweet spot. "
                       f"Controlled via {via}.").pack(anchor="w", pady=(0, 8))
+        var = tk.IntVar(value=info["current"] or 100)
+        setattr(self, f"{prefix}_var", var)
         r = tb.Frame(lf); r.pack(fill="x", pady=4)
         tb.Label(r, text="Stop charging at", width=20, anchor="w").pack(side="left")
-        self._bat_var = tk.IntVar(value=info["current"] or 100)
-        sc = tb.Scale(r, from_=50, to=100, variable=self._bat_var,
+        sc = tb.Scale(r, from_=50, to=100, variable=var,
                       orient="horizontal", length=300,
-                      command=lambda _v: self._bat_var.set(round(self._bat_var.get() / 5) * 5))
+                      command=lambda _v: var.set(round(var.get() / 5) * 5))
         sc.pack(side="left", fill="x", expand=True)
-        sc.bind("<ButtonRelease-1>", lambda _e: self._bat_apply())
-        tb.Label(r, textvariable=self._bat_var, width=3).pack(side="left")
+        sc.bind("<ButtonRelease-1>", lambda _e: self._bat_apply(prefix))
+        tb.Label(r, textvariable=var, width=3).pack(side="left")
         tb.Label(r, text="%").pack(side="left", padx=(0, 8))
-        self._bat_live = tb.Label(r, text="now: — %", width=12, bootstyle=SECONDARY)
-        self._bat_live.pack(side="left")
+        live = tb.Label(r, text="now: — %", width=12, bootstyle=SECONDARY)
+        live.pack(side="left")
+        setattr(self, f"{prefix}_live", live)
         br = tb.Frame(lf); br.pack(anchor="w", pady=(8, 0))
         for lbl, pct in (("60 %", 60), ("80 %", 80), ("Full (100 %)", 100)):
             tb.Button(br, text=lbl, bootstyle=(SECONDARY, "outline"),
-                      command=lambda p=pct: (self._bat_var.set(p), self._bat_apply())
+                      command=lambda p=pct: (var.set(p), self._bat_apply(prefix))
                       ).pack(side="left", padx=3)
 
-    def _bat_apply(self):
-        p = self._bat_var.get()
+    def _bat_apply(self, prefix: str = "_bat"):
+        p = getattr(self, f"{prefix}_var").get()
         self._write_power_state("battery.json", {"percent": p})
         ok, err = sensors.set_battery_charge_limit(p)
         self._log(f"[Power] battery charge limit → {p}%" + ("" if ok else f"  FAILED: {err}"))
+        # keep the twin section (if built) in sync
+        for other in ("_bat", "_bath_bat"):
+            v = getattr(self, f"{other}_var", None)
+            if v is not None and v.get() != p:
+                v.set(p)
 
     # --- hybrid graphics mode (EnvyControl) ---
 

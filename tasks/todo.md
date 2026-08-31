@@ -93,12 +93,12 @@ bridge only (post-game summary + scheduled profiles → backlog).
 
 ## Phase 3 — New capability (D) — user picked 3.1 + 3.2
 
-- [ ] **3.1 Battery health page** — wear %, cycle count, design vs full
+- [x] **3.1 Battery health page** — wear %, cycle count, design vs full
       capacity + charge-limit controls on one nav page. Pure sysfs, model-
       agnostic.
-- [ ] **3.2 MangoHud bridge** — `clients/mangohud/` custom overlay line fed by
+- [x] **3.2 MangoHud bridge** — `clients/mangohud/` custom overlay line fed by
       `tuxthrottlectl status --json` (profile / TDP / temps in-game).
-- [ ] **3.3 Checkpoint 3.**
+- [x] **3.3 Checkpoint 3.**
 
 ## Deferred / not now
 

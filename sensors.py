@@ -886,6 +886,55 @@ def set_battery_charge_limit(percent: int) -> tuple[bool, str]:
                    "libsmbios (dnf install libsmbios) for firmware-level control")
 
 
+def battery_health_info() -> dict:
+    """Static + slow-changing battery facts from
+    /sys/class/power_supply/BAT*: design vs full-charge capacity (→ wear %),
+    charge cycles, chemistry, plus the live charge / draw. `{}` if there's no
+    battery. Model-agnostic — this is generic ACPI/`power_supply` sysfs."""
+    bat = next(iter(sorted(glob.glob("/sys/class/power_supply/BAT*"))), None)
+    if not bat:
+        return {}
+
+    def _s(name: str):
+        try:
+            with open(f"{bat}/{name}") as f:
+                return f.read().strip()
+        except OSError:
+            return None
+
+    # energy_* (µWh, Wh-based gauges) or charge_* (µAh, Ah-based gauges)
+    full = _read_int(f"{bat}/energy_full")
+    design = _read_int(f"{bat}/energy_full_design")
+    unit, scale = "Wh", 1_000_000
+    if full is None:
+        full = _read_int(f"{bat}/charge_full")
+        design = _read_int(f"{bat}/charge_full_design")
+        unit = "Ah"
+    wear = round(100 * (1 - full / design), 1) if (full and design and design > 0) else None
+
+    power_uw = _read_int(f"{bat}/power_now")
+    volt_uv = _read_int(f"{bat}/voltage_now")
+    cur_ua = _read_int(f"{bat}/current_now")
+    if power_uw is None and cur_ua is not None and volt_uv:
+        power_uw = abs(cur_ua) * volt_uv // 1_000_000
+
+    return {
+        "present": True,
+        "manufacturer": _s("manufacturer"),
+        "model": _s("model_name"),
+        "technology": _s("technology"),
+        "status": _s("status"),
+        "capacity_pct": _read_int(f"{bat}/capacity"),
+        "cycle_count": _read_int(f"{bat}/cycle_count"),
+        "full": round(full / scale, 1) if full else None,
+        "design": round(design / scale, 1) if design else None,
+        "unit": unit,
+        "wear_pct": wear,
+        "power_w": round(power_uw / 1_000_000, 1) if power_uw else None,
+        "voltage_v": round(volt_uv / 1_000_000, 2) if volt_uv else None,
+    }
+
+
 # --------------------------------------------------------------------------- #
 #  NVIDIA board power limit — nvidia-smi -pl. The single most useful GPU
 #  lever on this chassis for heat / battery. Needs root to set.

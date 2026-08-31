@@ -33,7 +33,7 @@ jobs:
         run: bash -n install.sh uninstall.sh verify-install.sh purge-legacy-dellg15.sh
 
       - name: Client scripts compile
-        run: python -m py_compile clients/waybar/tuxthrottle-waybar
+        run: python -m py_compile clients/waybar/tuxthrottle-waybar clients/mangohud/tuxthrottle-mangohud
 
       - name: Validate model profiles
         run: |
