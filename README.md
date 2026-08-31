@@ -229,8 +229,18 @@ ThrottleStop / the ASUS Armoury sliders:
 State is written to `~/.config/tuxthrottle/{tdp,nvpl,battery,co,powerd}.json`
 and re-applied at boot by the matching tweaks' units. When the daemon is up it
 also exposes a **root-only control socket** at `/run/tuxthrottle/control.sock`
-so the GUI and `tuxthrottlectl` route hardware writes through the one process
-that owns the hardware (they fall back to writing directly when it's not).
+(and, with the **DbusPolkitIntegration** tweak, `org.tuxthrottle.Daemon1` on
+the system bus) so the GUI and `tuxthrottlectl` route hardware writes through
+the one process that owns the hardware (they fall back to writing directly
+when it's not).
+
+## The Battery tab
+
+Battery **wear** (how much of the pack's original design capacity is gone),
+charge **cycle count**, chemistry, and a live charge / power-flow / voltage
+readout — all straight from the kernel `power_supply` sysfs, so it works on any
+laptop. The charge-limit control from Power & Limits is repeated here so the
+longevity knobs sit on one page.
 
 ## The Profiles tab
 
