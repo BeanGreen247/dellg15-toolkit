@@ -26,29 +26,29 @@ bridge only (post-game summary + scheduled profiles → backlog).
 
 ## Phase 0 — Model-profile plumbing (spine)
 
-- [ ] **0.1 Schema pass on `models/g15-5515.json`.** Confirm every hard-coded
+- [x] **0.1 Schema pass on `models/g15-5515.json`.** Confirm every hard-coded
       value in `sensors.py` has a home in the schema; add missing fields with the
       current 5515 value. Fields at least: `cpu.hwmon`, `fans.hwmon`,
       `fans.pwm_hwmon`, `fans.pwm_floor`, `fans.platform_profile_path`,
       `fans.count`, `battery.method`, `keyboard.*`, `gkey.*`.
       *Accept:* schema documented in `models/README.md`; `g15-5515.json` validates
       against it in CI.
-- [ ] **0.2 `sensors.py` accessors + routing.** Add `_prof_*()` helpers reading
+- [x] **0.2 `sensors.py` accessors + routing.** Add `_prof_*()` helpers reading
       `model_profile()` with the current constant as fallback. Route: `k10temp`
       (L140), `_PLATFORM_PROFILE` (L440), `PWM_FLOOR` (L441), `alienware_wmi` /
       `dell_smm` names, fan-index count, battery method branch.
       *Accept:* no literal `"k10temp"` / `"alienware_wmi"` / `"dell_smm"` /
       `/sys/firmware/acpi/platform_profile` left outside a `_prof_*` fallback;
       `--report` on g15 unchanged.
-- [ ] **0.3 `tuxthrottle_kbd.py` + `hotkey_listener.py` routing.** OpenRGB device
+- [x] **0.3 `tuxthrottle_kbd.py` + `hotkey_listener.py` routing.** OpenRGB device
       name, zone count, effect list, `brightness_on` from `keyboard.*`; evdev
       device + keycodes from `gkey.*`.
       *Accept:* keyboard solid-colour + spectrum still work on g15; G-key still
       toggles Game Mode.
-- [ ] **0.4 Fallback tests.** `tests/test_model_routing.py`: profile field
+- [x] **0.4 Fallback tests.** `tests/test_model_routing.py`: profile field
       present → used; absent → 5515 fallback; unknown DMI → g15-5515 profile.
       *Accept:* pytest green, coverage on every `_prof_*` helper.
-- [ ] **0.5 Checkpoint 0** — byte-diff `--report`, `verify-install.sh` 27/0,
+- [x] **0.5 Checkpoint 0** — byte-diff `--report`, `verify-install.sh` 27/0,
       headless GUI smoke, pytest. Commit `refactor(sensors): route hw specifics
       through model_profile`.
 

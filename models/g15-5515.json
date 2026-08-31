@@ -25,6 +25,7 @@
   "fans": {
     "hwmon": "alienware_wmi",
     "rpm_inputs": ["fan1_input", "fan2_input"],
+    "count": 2,
     "labels": ["CPU Fan", "GPU Fan"],
     "additive_boost": ["fan1_boost", "fan2_boost"],
     "pwm_hwmon": "dell_smm",

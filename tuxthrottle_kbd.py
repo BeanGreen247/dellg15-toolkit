@@ -33,6 +33,7 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import shutil
@@ -40,8 +41,21 @@ import subprocess
 import sys
 import time
 
-DEVICE = "Dell G Series LED Controller"   # OpenRGB's name for the AW-ELC on the G15
-ZONE_COUNT = 4                            # physical zones
+# Keyboard specifics come from the model profile (models/<slug>.json →
+# "keyboard"), defaulting to the 5515's AW-ELC values.
+try:
+    import sensors as _sensors
+    _KBD_PROFILE = _sensors.model_profile().get("keyboard") or {}
+except Exception:  # noqa: BLE001  — sensors import must never break the driver
+    _KBD_PROFILE = {}
+
+DEVICE = _KBD_PROFILE.get("openrgb_device") or "Dell G Series LED Controller"
+_USB = (_KBD_PROFILE.get("usb") or "187c:0550").lower()
+_USB_VID = _USB.split(":")[0]
+_USB_PIDS = tuple(p for p in ({_USB.split(":", 1)[1] if ":" in _USB else "0550",
+                               "0550", "0551"}))
+ZONE_COUNT = 4                            # physical zones (label/schema only — the
+                                         # 5515 firmware ignores zone-scoped writes)
 GKEY_ZONE = 0                             # the G-key sits in the leftmost zone
 ZONE_NAMES = ["Left", "Middle", "Right", "Numpad"]
 
@@ -63,13 +77,12 @@ class Keyboard:
     def _find():
         if not shutil.which("openrgb"):
             return None
-        import glob
         for vp in glob.glob("/sys/bus/usb/devices/*/idVendor"):
             try:
-                if open(vp).read().strip().lower() != "187c":
+                if open(vp).read().strip().lower() != _USB_VID:
                     continue
                 pid = open(vp.rsplit("/", 1)[0] + "/idProduct").read().strip().lower()
-                if pid in ("0550", "0551"):
+                if pid in _USB_PIDS:
                     return "openrgb:" + DEVICE
             except OSError:
                 pass

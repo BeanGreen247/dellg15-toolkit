@@ -4,11 +4,11 @@ stdlib-only) and tray_monitor.py (PySide6). Deliberately has NO GUI
 dependency of its own so the checkbox Toolkit doesn't need PySide6 just to
 show live numbers.
 
-Tested platform: Dell G15 5515 Ryzen Edition (Ryzen 7 5800H, RTX 3050 Ti
-Mobile). CPU temp lookup assumes k10temp (AMD); GPU lookups auto-detect by
-PCI vendor ID (0x1002 AMD / nvidia-smi for NVIDIA) so they should degrade
-gracefully on a different Dell model rather than crash, but haven't been
-verified on one.
+Reference platform: Dell G15 5515 Ryzen Edition (Ryzen 7 5800H, RTX 3050 Ti
+Mobile). Board specifics — CPU/fan hwmon names, the platform_profile path, the
+PWM floor, fan count — come from the model profile (`models/<slug>.json` via
+`model_profile()`), defaulting to the 5515 values when no profile matches.
+GPU lookups auto-detect by PCI vendor ID (0x1002 AMD / nvidia-smi for NVIDIA).
 """
 import glob
 import json
@@ -102,6 +102,51 @@ def model_id() -> str:
     return str(model_profile().get("id", "g15-5515"))
 
 
+# --------------------------------------------------------------------------- #
+#  Model-profile accessors. Every hardware specific that used to be a literal
+#  in this file now comes from models/<slug>.json via model_profile(), with
+#  the reference 5515 value as the fallback — so a machine with no matching
+#  profile (or an old profile missing a field) behaves exactly as before.
+# --------------------------------------------------------------------------- #
+
+def _prof_section(name: str) -> dict:
+    v = model_profile().get(name)
+    return v if isinstance(v, dict) else {}
+
+
+def _cpu_temp_hwmon() -> str:
+    """hwmon `name` that carries the CPU package temperature (`k10temp` on
+    AMD, `coretemp`/`k10temp` elsewhere)."""
+    return _prof_section("cpu").get("hwmon") or "k10temp"
+
+
+def _fan_hwmon() -> str:
+    """hwmon that exposes fan RPM + the additive `fanN_boost` lever."""
+    return _prof_section("fans").get("hwmon") or "alienware_wmi"
+
+
+def _fan_pwm_hwmon() -> str:
+    """hwmon that exposes real `pwmN` / `pwmN_enable` manual fan control."""
+    return _prof_section("fans").get("pwm_hwmon") or "dell_smm"
+
+
+def _fan_indices() -> tuple[int, ...]:
+    """1-based fan indices this board has (2 on the 5515: CPU + GPU)."""
+    fans = _prof_section("fans")
+    n = fans.get("count") or len(fans.get("rpm_inputs") or []) or 2
+    return tuple(range(1, int(n) + 1))
+
+
+def _platform_profile_path() -> str:
+    return (_prof_section("fans").get("platform_profile_path")
+            or "/sys/firmware/acpi/platform_profile")
+
+
+def _pwm_floor() -> int:
+    """Lowest PWM a manual curve may command, so a fan is never stopped."""
+    return int(_prof_section("fans").get("pwm_floor") or PWM_FLOOR)
+
+
 def read_cpu_freq_ghz() -> str:
     try:
         freqs = []
@@ -134,10 +179,11 @@ def read_cpu_temp_c() -> str:
 
 
 def read_cpu_temp_c_value():
+    want = _cpu_temp_hwmon()
     for name_path in glob.glob("/sys/class/hwmon/hwmon*/name"):
         try:
             with open(name_path) as f:
-                if f.read().strip() != "k10temp":
+                if f.read().strip() != want:
                     continue
             hwmon_dir = name_path.rsplit("/", 1)[0]
             with open(f"{hwmon_dir}/temp1_input") as f:
@@ -424,21 +470,21 @@ def toggle_game_mode_external():
 
 
 # --------------------------------------------------------------------------- #
-#  Fan control — Dell G15 5515
+#  Fan control. The hwmon names + platform_profile path + PWM floor come from
+#  the model profile (models/<slug>.json → _fan_hwmon() / _fan_pwm_hwmon() /
+#  _platform_profile_path() / _pwm_floor() / _fan_indices()); the 5515 values
+#  are the fallback.
 #
-#  Two hwmon devices carry the fans:
-#   * alienware_wmi : fan{1,2}_input (RPM, ro), fan{1,2}_boost (0-255, RW) —
-#     the AWCC-style additive boost. Boost only *adds* airflow on top of the
+#  On the reference 5515 two hwmon devices carry the fans:
+#   * alienware_wmi : fanN_input (RPM, ro), fanN_boost (0-255, RW) — the
+#     AWCC-style additive boost. Boost only *adds* airflow on top of the
 #     firmware curve, so it can never stop a fan → the safe lever.
-#   * dell_smm      : pwm{1,2} + pwm{1,2}_enable (0=full, 1=manual, 2=auto).
-#     Real manual control, but a low pwm can slow/stop the fan → risky, gated
-#     behind a warning in the GUI and floored at PWM_FLOOR here.
-#  Thermal profile is /sys/firmware/acpi/platform_profile
-#  (balanced / performance / custom on this board).
+#   * dell_smm      : pwmN + pwmN_enable (0=full, 1=manual, 2=auto). Real
+#     manual control, but a low pwm can slow/stop the fan → risky, gated
+#     behind a warning in the GUI and floored at _pwm_floor() here.
 # --------------------------------------------------------------------------- #
 
-_PLATFORM_PROFILE = "/sys/firmware/acpi/platform_profile"
-PWM_FLOOR = 77   # ~30 % of 255 — a manual curve never drops below this
+PWM_FLOOR = 77   # 5515 default; a manual curve never drops below _pwm_floor()
 
 
 def _hwmon_by_name(name: str):
@@ -464,13 +510,13 @@ def read_fans() -> list:
     """[{'index', 'label', 'rpm', 'max', 'boost'}] per fan. RPM comes from
     alienware_wmi, falling back to dell_smm; 'boost' is the current
     alienware_wmi fan boost (0-255) or None."""
-    aw = _hwmon_by_name("alienware_wmi")
-    smm = _hwmon_by_name("dell_smm")
+    aw = _hwmon_by_name(_fan_hwmon())
+    smm = _hwmon_by_name(_fan_pwm_hwmon())
     base = aw or smm
     if not base:
         return []
     fans = []
-    for i in (1, 2):
+    for i in _fan_indices():
         rpm = _read_int(f"{base}/fan{i}_input")
         if rpm is None and smm and smm != base:
             rpm = _read_int(f"{smm}/fan{i}_input")
@@ -492,16 +538,16 @@ def read_fans() -> list:
 
 
 def get_fan_boost() -> list:
-    aw = _hwmon_by_name("alienware_wmi")
+    aw = _hwmon_by_name(_fan_hwmon())
     if not aw:
         return []
-    return [(_read_int(f"{aw}/fan{i}_boost") or 0) for i in (1, 2)]
+    return [(_read_int(f"{aw}/fan{i}_boost") or 0) for i in _fan_indices()]
 
 
 def set_fan_boost(index: int, value_0_255: int) -> tuple[bool, str]:
-    aw = _hwmon_by_name("alienware_wmi")
+    aw = _hwmon_by_name(_fan_hwmon())
     if not aw:
-        return False, "alienware_wmi hwmon not present"
+        return False, f"{_fan_hwmon()} hwmon not present"
     v = max(0, min(255, int(value_0_255)))
     try:
         with open(f"{aw}/fan{index}_boost", "w") as f:
@@ -513,7 +559,7 @@ def set_fan_boost(index: int, value_0_255: int) -> tuple[bool, str]:
 
 def platform_profile_choices() -> list:
     try:
-        with open(f"{_PLATFORM_PROFILE}_choices") as f:
+        with open(f"{_platform_profile_path()}_choices") as f:
             return f.read().split()
     except OSError:
         return []
@@ -521,7 +567,7 @@ def platform_profile_choices() -> list:
 
 def get_platform_profile() -> str:
     try:
-        with open(_PLATFORM_PROFILE) as f:
+        with open(_platform_profile_path()) as f:
             return f.read().strip()
     except OSError:
         return ""
@@ -529,7 +575,7 @@ def get_platform_profile() -> str:
 
 def set_platform_profile(name: str) -> tuple[bool, str]:
     try:
-        with open(_PLATFORM_PROFILE, "w") as f:
+        with open(_platform_profile_path(), "w") as f:
             f.write(name)
         return True, ""
     except OSError as exc:
@@ -537,22 +583,22 @@ def set_platform_profile(name: str) -> tuple[bool, str]:
 
 
 def get_pwm_state() -> list:
-    """[(enable_mode, pwm_value)] for dell_smm pwm1/pwm2. enable: 0 full /
+    """[(enable_mode, pwm_value)] per fan for the pwm hwmon. enable: 0 full /
     1 manual / 2 automatic. pwm_value is None while in automatic mode."""
-    smm = _hwmon_by_name("dell_smm")
+    smm = _hwmon_by_name(_fan_pwm_hwmon())
     if not smm:
         return []
     return [(_read_int(f"{smm}/pwm{i}_enable"), _read_int(f"{smm}/pwm{i}"))
-            for i in (1, 2)]
+            for i in _fan_indices()]
 
 
 def set_pwm_manual(index: int, value_0_255: int) -> tuple[bool, str]:
-    """Put dell_smm fan `index` into manual mode at the given PWM (floored at
-    PWM_FLOOR so the fan can't be stopped)."""
-    smm = _hwmon_by_name("dell_smm")
+    """Put fan `index` into manual mode at the given PWM (floored at
+    _pwm_floor() so the fan can't be stopped)."""
+    smm = _hwmon_by_name(_fan_pwm_hwmon())
     if not smm:
-        return False, "dell_smm hwmon not present"
-    v = max(PWM_FLOOR, min(255, int(value_0_255)))
+        return False, f"{_fan_pwm_hwmon()} hwmon not present"
+    v = max(_pwm_floor(), min(255, int(value_0_255)))
     try:
         with open(f"{smm}/pwm{index}_enable", "w") as f:
             f.write("1")
@@ -564,17 +610,17 @@ def set_pwm_manual(index: int, value_0_255: int) -> tuple[bool, str]:
 
 
 def restore_fan_auto() -> tuple[bool, str]:
-    """Full reset: dell_smm pwm back to automatic, alienware_wmi boost to 0."""
+    """Full reset: pwm hwmon back to automatic, fan boost to 0."""
     errs = []
-    smm = _hwmon_by_name("dell_smm")
+    smm = _hwmon_by_name(_fan_pwm_hwmon())
     if smm:
-        for i in (1, 2):
+        for i in _fan_indices():
             try:
                 with open(f"{smm}/pwm{i}_enable", "w") as f:
                     f.write("2")
             except OSError as exc:
                 errs.append(str(exc))
-    for i in (1, 2):
+    for i in _fan_indices():
         ok, err = set_fan_boost(i, 0)
         if not ok and "not present" not in err:
             errs.append(err)

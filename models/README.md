@@ -7,17 +7,32 @@ returns the first file whose `match` block matches, falling back to
 
 ## Why it exists
 
-Every `check` / `apply` command in `config/*.json` and every sysfs path in
-`sensors.py` was written for the Dell G15 5515. To add another board without
-breaking that one:
+`sensors.py` reads the CPU/fan hwmon names, the `platform_profile` path, the
+PWM floor and the fan count from the matched profile (accessors `_cpu_temp_hwmon`
+/ `_fan_hwmon` / `_fan_pwm_hwmon` / `_platform_profile_path` / `_pwm_floor` /
+`_fan_indices`), and `tuxthrottle_kbd.py` / `hotkey_listener.py` read the RGB
+device name + USB id and the G-key node + keycode. Every one of those falls
+back to the reference 5515 value when a field (or the whole profile) is absent,
+so a machine with no matching file behaves exactly as before. The
+`config/*.json` `check`/`apply` command strings are still 5515-specific — gate
+those per model with `"models": [...]`.
 
-1. Collect the target's hardware with `python3 tuxthrottle.py --collect` on it
-   and open a "New hardware support" issue with the bundle.
-2. Add `models/<slug>.json` (copy `g15-5515.json`, fill in its fan hwmon
-   names, pwm paths, keycodes, RGB controller, battery method).
-3. Gate any tweak/app that differs by adding `"models": ["g15-5515", "<slug>"]`
+## Adding a board
+
+1. Collect the target's hardware:
+   * `python3 tuxthrottle.py --collect` — the full diagnostic bundle, and
+   * `tuxthrottlectl collect-model` — a `models/<slug>.json` **scaffold** with
+     every field this machine can auto-detect filled in and the rest left as
+     `null` with a `TODO` note.
+   Open a "New hardware support" issue with the bundle.
+2. Finish the scaffold: fill the `null`/`TODO` fields (keycodes, RGB controller,
+   battery method, stock PPT) from the bundle and the vendor's Linux notes.
+3. Test on the target with `TUXTHROTTLE_MODEL=<slug> python3 tuxthrottle.py`
+   (dev override — forces the profile regardless of DMI; logs a warning).
+4. Gate any tweak/app that differs by adding `"models": ["g15-5515", "<slug>"]`
    to its entry in `config/tweaks.json` / `apps.json`. An entry **without** a
-   `models` key applies everywhere (current behaviour — nothing regresses).
+   `models` key applies everywhere (nothing regresses). Add ids that must never
+   run on the new board to its `tweaks_skip`.
 
 ## Schema (informal)
 
@@ -25,14 +40,15 @@ breaking that one:
 |---|---|
 | `id` / `name` | slug (must equal the filename stem) and a human label |
 | `match` | `{product_name: [...], board_name: [...]}` — any value matches |
-| `cpu` / `igpu` / `dgpu` | vendor, driver, PCI id, ryzenadj support, stock PPT |
-| `fans` | hwmon names, RPM inputs, additive-boost attrs, pwm paths, floor, platform_profile path + values |
+| `cpu` | `vendor`, `codename`, **`hwmon`** (temp hwmon `name`, e.g. `k10temp`), `ryzenadj`, `stock_ppt_w` `[stapm, fast, slow]` |
+| `igpu` / `dgpu` | vendor, driver, PCI id, `power_limit_locked` |
+| `fans` | **`hwmon`** (RPM + additive boost), **`pwm_hwmon`** (real `pwmN`), `rpm_inputs`, `additive_boost`, `pwm`, `pwm_enable`, **`count`** (fan count; else derived from `rpm_inputs`), **`pwm_floor`** (min manual PWM), **`platform_profile_path`**, `platform_profiles` |
 | `game_mode` | how Game Mode is toggled on this board |
-| `keyboard` | RGB backend, OpenRGB device name, zone count, usable effects |
-| `gkey` | evdev device + keycodes for the dedicated performance key |
-| `battery` | sysfs threshold vs libsmbios, allowed interval |
+| `keyboard` | `rgb` backend, **`openrgb_device`** (OpenRGB device name), **`usb`** (`vid:pid`), `zones`, `effects`, `brightness_on` |
+| `gkey` | **`device`** (evdev name), `evdev` path, **`keycode_fnlock_off`** (the `KEY_*` name the listener acts on), `keycode_fnlock_on` |
+| `battery` | `sysfs_threshold` vs `method: "libsmbios"`, `interval`, `min_gap` |
 | `tweaks_skip` | tweak ids that must never run on this board |
 
-The fields are advisory today — `sensors.py` still hard-codes the 5515 paths.
-Wiring the profile through `sensors.py` (so a second board Just Works) is the
-next step; the file + the `models:` gate are the foundation for it.
+**Bold** keys are the ones `sensors.py` / `tuxthrottle_kbd.py` /
+`hotkey_listener.py` read at runtime; the rest are documentation / for future
+use. A missing bold key falls back to the 5515 value.
