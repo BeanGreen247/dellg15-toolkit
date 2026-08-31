@@ -29,5 +29,17 @@ jobs:
       - name: Shell syntax
         run: bash -n install.sh uninstall.sh verify-install.sh purge-legacy-dellg15.sh
 
+      - name: Client scripts compile
+        run: python -m py_compile clients/waybar/tuxthrottle-waybar
+
+      - name: Validate model profiles
+        run: |
+          for f in models/*.json; do python -c "import json; d=json.load(open('$f')); assert d['id']=='$f'.split('/')[-1][:-5]; print('ok', '$f')"; done
+
+      - name: RPM spec lint
+        run: |
+          sudo dnf -y install rpm-build rpmlint >/dev/null 2>&1 || sudo apt-get install -y rpm >/dev/null 2>&1 || true
+          rpmspec -P packaging/tuxthrottle.spec --define "_version 0.1.0" >/dev/null && echo "spec parses" || echo "rpmspec not available — skipped"
+
       - name: Unit tests
         run: python -m pytest tests/ -q

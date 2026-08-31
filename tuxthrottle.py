@@ -637,6 +637,10 @@ class Item:
         self.risk = data.get("risk", "safe")
         self.recommended = bool(data.get("recommended"))  # dev's curated pick
         self.requires_vendor = data.get("requires_vendor")  # "nvidia" | "amd" | None
+        # optional per-board gate: a list of models/<slug> ids this entry
+        # applies to. Absent = applies on every board (current default).
+        rm = data.get("models")
+        self.requires_models = [str(x) for x in rm] if isinstance(rm, list) else None
         self.hw_supported = True  # set by ToolkitApp after GPU detection
         self.hidden = False       # set by _apply_vendor_gate for no-op-on-this-box items
 
@@ -986,6 +990,13 @@ class ToolkitApp:
         # Nobara 43 already ships /sys/class/powercap world-readable, so the
         # RAPL-permissions tweak is a no-op there — hide it unless it's needed
         # or the user has already applied it (so they can still undo).
+        # per-board gate: hide an entry that names a `models` list this
+        # machine isn't in (nothing in config/*.json uses it yet — this is the
+        # multi-model hook, see models/README.md).
+        if item.requires_models and sensors.model_id() not in item.requires_models:
+            item.hidden = True
+            item.hw_supported = False
+
         if (item.id == "RaplPowerPermissions" and sensors.rapl_permissions_ok()
                 and not os.path.exists(
                     "/etc/udev/rules.d/90-tuxthrottle-powercap-perms.rules")):
@@ -1775,6 +1786,7 @@ class ToolkitApp:
                       "tab makes them stick across a reboot.").pack(anchor="w", pady=(0, 14))
 
         self._build_tdp_section(frame)
+        self._build_co_section(frame)
         self._build_nvpl_section(frame)
         self._build_gpumode_section(frame)
         self._build_battery_section(frame)
@@ -1849,6 +1861,84 @@ class ToolkitApp:
             self._log(f"[Power] TDP → STAPM {vals['stapm']} / fast {vals['fast']} / "
                       f"slow {vals['slow']} W{tail}" + ("" if ok else f"  FAILED: {err}"))
 
+        threading.Thread(target=work, daemon=True).start()
+
+    # --- Ryzen Curve Optimizer (undervolt) ---
+
+    def _build_co_section(self, parent):
+        if not sensors.ryzenadj_co_supported():
+            return
+        lf = tb.Labelframe(parent, text="Curve Optimizer — all-core undervolt  (advanced)",
+                           padding=12)
+        lf.pack(fill="x", pady=6)
+        tb.Label(lf, bootstyle=DANGER, wraplength=1000, justify="left",
+                 text="⚠  An undervolt that's too aggressive causes silent errors, a "
+                      "segfault storm, or a hard hang (needs a full power-off). "
+                      "'Apply & stress-test' snapshots first, runs a stress-ng + GPU "
+                      "load for 5 min while watching dmesg for MCE/WHEA, and auto-"
+                      "reverts on any fault. The offset is NOT kept across a reboot "
+                      "until you press “Keep”.").pack(anchor="w", pady=(0, 8))
+
+        co = self._read_power_state("co.json")
+        r = tb.Frame(lf); r.pack(fill="x", pady=4)
+        tb.Label(r, text="All-core offset", width=20, anchor="w").pack(side="left")
+        self._co_var = tk.IntVar(value=int(co.get("offset", 0) or 0))
+        sc = tb.Scale(r, from_=0, to=-40, variable=self._co_var,
+                      orient="horizontal", length=300)
+        sc.pack(side="left", fill="x", expand=True)
+        tb.Label(r, textvariable=self._co_var, width=4).pack(side="left")
+        self._co_live = tb.Label(r, text="", width=26, bootstyle=SECONDARY)
+        self._co_live.pack(side="left")
+
+        br = tb.Frame(lf); br.pack(anchor="w", pady=(10, 0))
+        tb.Button(br, text="Apply & stress-test (5 min)", bootstyle=(WARNING, "outline"),
+                  command=self._co_stress).pack(side="left", padx=3)
+        tb.Button(br, text="Keep (confirm)", bootstyle=(SUCCESS, "outline"),
+                  command=lambda: self._co_action("confirm")).pack(side="left", padx=3)
+        tb.Button(br, text="Revert to 0", bootstyle=(SECONDARY, "outline"),
+                  command=lambda: self._co_action("revert")).pack(side="left", padx=3)
+        self._co_refresh_live()
+
+    def _co_refresh_live(self):
+        co = self._read_power_state("co.json")
+        if not co:
+            txt = "now: stock (0)"
+        else:
+            txt = (f"now: {co.get('offset', 0)}  "
+                   + ("✓ kept" if co.get("confirmed") else "· not kept (reboots off)"))
+        try:
+            self._co_live.configure(text=txt)
+        except (AttributeError, tk.TclError):
+            pass
+
+    def _co_stress(self):
+        v = int(self._co_var.get())
+        if v >= 0:
+            messagebox.showinfo("Curve Optimizer",
+                                "Set a negative offset first (e.g. -20).")
+            return
+        if not messagebox.askyesno(
+                "Stress-test undervolt",
+                f"Apply --set-coall={v} and hammer the CPU + GPU for 5 minutes?\n\n"
+                "It snapshots first and auto-reverts on any kernel error, but a "
+                "bad offset can still hard-hang the machine (recoverable only by a "
+                "full power-off). Continue?"):
+            return
+        self._run_stream(f"Curve Optimizer stress-test (offset {v})",
+                         f"python3 {shlex.quote(str(BASE_DIR))}/tuxthrottle_co_stress.py "
+                         f"apply {v} --minutes 5 --user {shlex.quote(self.user)}",
+                         tag="Power")
+        self.root.after(4000, self._co_refresh_live)
+
+    def _co_action(self, action: str):
+        def work():
+            r = subprocess.run(
+                ["python3", str(BASE_DIR / "tuxthrottle_co_stress.py"), action,
+                 "--user", self.user],
+                capture_output=True, text=True)
+            self._log(f"[Power] Curve Optimizer {action}: "
+                      + (r.stdout or r.stderr or "").strip())
+            self.root.after(0, self._co_refresh_live)
         threading.Thread(target=work, daemon=True).start()
 
     # --- NVIDIA board power limit ---
@@ -3261,13 +3351,16 @@ class ToolkitApp:
             ("Dashboard", "live CPU / iGPU / dGPU clocks, temps, power; rolling history sparklines; session CSV log; Game Mode toggle"),
             ("Keyboard", "AW-ELC RGB — whole-keyboard solid colour, brightness, firmware Spectrum Cycle"),
             ("Fans", "thermal profile, additive fan boost + presets, manual PWM (guarded), closed-loop custom fan curve"),
-            ("Power & Limits", "CPU TDP (ryzenadj STAPM/fast/slow), NVIDIA power limit where the GPU allows, hybrid-graphics mode (EnvyControl), battery charge limit (sysfs / libsmbios), AC↔battery auto-switch"),
+            ("Power & Limits", "CPU TDP (ryzenadj STAPM/fast/slow); Curve Optimizer all-core undervolt with a stress-test / auto-revert harness; NVIDIA power limit where the GPU allows; hybrid-graphics mode (EnvyControl); battery charge limit (sysfs / libsmbios); AC↔battery auto-switch; thermal-event alerts"),
             ("Profiles", "named full-state bundles; automatic snapshot before every apply; one-click rollback; per-game auto-profiles"),
             ("Presets", "one-click curated bundles of tweaks + app installs"),
             ("Updates", "nobara-sync wrapper + per-manager dnf / Flatpak / fwupd; pending count tagged with the metadata age"),
             ("Setup Games", "per-game click-through walkthroughs (GTA V Online first) + Proton prefix / save-file tools"),
-            ("Tweaks & Apps", "reversible system tweaks by category — Gaming, GPU, Power, Performance, KDE (Desktop GUI Tweaks), Stability — plus one-directional app installs"),
-            ("tuxthrottlectl", "headless CLI (status / get / set / profile / snapshot / rollback / gamemode, --json) for scripts, keybinds and ssh"),
+            ("Tweaks & Apps", "reversible system tweaks by category — Gaming, GPU, Power, Performance, KDE (Desktop GUI Tweaks: 10 Plasma 6 toggles), Stability — plus one-directional app installs"),
+            ("tuxthrottled", "systemd daemon: closed-loop fan curve, AC↔battery auto-switch, per-game auto-profiles, thermal-event notifications, and a root-only control socket the GUI + CLI write through"),
+            ("tuxthrottlectl", "headless CLI (status / get / set / profile / snapshot / rollback / gamemode / daemon, --json) for scripts, keybinds and ssh; routes through the daemon socket when it's up"),
+            ("Panel clients", "optional waybar module + KDE plasmoid showing CPU/GPU temp and a one-click profile switch (clients/, over tuxthrottlectl --json)"),
+            ("Packaging", "noarch RPM spec + a COPR workflow (packaging/) for a dnf install; the git-clone install.sh path still works"),
             ("Report a Bug", "read-only hardware / OS dump for GitHub issues"),
         ):
             row = tb.Frame(self._about_body, style="CardRow.TFrame")
@@ -3300,6 +3393,7 @@ class ToolkitApp:
             ("This machine", f"{m['vendor']} {m['product']}"
                              + (f", BIOS {m['bios']}" if m['bios'] else "")),
             ("Distro target", "Nobara Linux (Fedora 43 base, KDE Plasma / Wayland)"),
+            ("Status", "developed and tested live on the target hardware"),
             ("License", "MIT — © 2026 BeanGreen247"),
             ("Install path", "/opt/tuxthrottle"),
         ):

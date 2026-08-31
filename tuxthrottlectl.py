@@ -17,6 +17,11 @@ A thin argparse wrapper over sensors.py so scripts, the tray, keybinds and
   tuxthrottlectl profile  {list|apply|save|show|delete} [<name>]   # full-state bundles
   tuxthrottlectl snapshot [<label>]                                # capture a rollback point
   tuxthrottlectl rollback [last|<file>]                            # restore one
+  tuxthrottlectl daemon   {status|ping|reload}                     # the tuxthrottled control socket
+
+When tuxthrottled (FanCurveDaemon) is running, `set` / `profile apply` are
+routed through its /run/tuxthrottle/control.sock so one process owns the
+hardware; otherwise they act directly.
 
 Most `set` operations need root; without it sensors.py returns a clear error
 and the command exits non-zero.
@@ -29,6 +34,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import sensors  # noqa: E402
 import tuxthrottle_profiles as profiles  # noqa: E402
+import tuxthrottle_control as control  # noqa: E402
 
 TDP_PRESETS = {
     "quiet": (25, 35, 25),
@@ -91,8 +97,25 @@ def _fail(msg: str) -> int:
     return 1
 
 
+def _daemon_set(params: dict) -> int | None:
+    """Route a `set` through tuxthrottled's control socket when it's up.
+    Returns an exit code, or None to fall back to a direct sensors call."""
+    if not control.available():
+        return None
+    resp = control.call("set", params)
+    if resp is None:
+        return None
+    if resp.get("ok"):
+        print(f"{params.get('target')}: ok (via tuxthrottled)")
+        return 0
+    return _fail(resp.get("error", "daemon rejected the request"))
+
+
 def cmd_set(args) -> int:
     if args.target == "power-profile":
+        rc = _daemon_set({"target": "power-profile", "value": args.value[0]})
+        if rc is not None:
+            return rc
         ok, err = sensors.set_platform_profile(args.value[0])
         return 0 if ok else _fail(err)
     if args.target == "tdp":
@@ -103,18 +126,30 @@ def cmd_set(args) -> int:
             s, f, sl = args.stapm, args.fast, args.slow
             if s is None and f is None and sl is None:
                 return _fail("give a preset name or --stapm/--fast/--slow")
+        rc = _daemon_set({"target": "tdp", "stapm": s, "fast": f, "slow": sl})
+        if rc is not None:
+            return rc
         ok, err = sensors.set_ryzenadj_limits(fast_w=f, slow_w=sl, stapm_w=s)
         return 0 if ok else _fail(err)
     if args.target == "fan-boost":
         which, pct = args.value[0], int(args.value[1])
+        rc = _daemon_set({"target": "fan-boost", "which": which, "percent": pct})
+        if rc is not None:
+            return rc
         idxs = (1, 2) if which == "both" else (int(which),)
         raw = max(0, min(255, round(pct * 255 / 100)))
         errs = [err for i in idxs for ok, err in [sensors.set_fan_boost(i, raw)] if not ok]
         return 0 if not errs else _fail("; ".join(errs))
     if args.target == "battery":
+        rc = _daemon_set({"target": "battery", "value": int(args.value[0])})
+        if rc is not None:
+            return rc
         ok, err = sensors.set_battery_charge_limit(int(args.value[0]))
         return 0 if ok else _fail(err)
     if args.target == "nvpl":
+        rc = _daemon_set({"target": "nvpl", "value": int(args.value[0])})
+        if rc is not None:
+            return rc
         ok, err = sensors.set_nvidia_power_limit(int(args.value[0]))
         return 0 if ok else _fail(err)
     if args.target == "gpumode":
@@ -165,6 +200,18 @@ def cmd_profile(args) -> int:
         st = profiles.load_profile(args.name)
         if not st:
             return _fail(f"no such profile: {args.name}")
+        if control.available():
+            resp = control.call("apply_profile",
+                                {"name": args.name, "with_gpu_mode": args.with_gpu_mode})
+            if resp and resp.get("ok"):
+                rows = resp["result"].get("results", [])
+                if args.json:
+                    print(json.dumps(rows, indent=2))
+                    return 1 if any(not r["ok"] for r in rows) else 0
+                print("(via tuxthrottled)")
+                return _print_profile_results(rows)
+            if resp and not resp.get("ok"):
+                return _fail(resp.get("error", "daemon rejected apply_profile"))
         profiles.snapshot(label=f"pre-apply-{args.name}")
         rows = profiles.apply_state(st, with_gpu_mode=args.with_gpu_mode)
         if args.json:
@@ -211,7 +258,24 @@ def main() -> int:
     rb.add_argument("target", nargs="?", default="last")
     rb.add_argument("--with-gpu-mode", action="store_true")
 
+    dm = sub.add_parser("daemon", help="control-socket status / actions",
+                        parents=[common])
+    dm.add_argument("action", choices=["status", "ping", "reload"], nargs="?",
+                    default="status")
+
     args = ap.parse_args()
+    if args.cmd == "daemon":
+        pres = control.presence()
+        if pres != "up":
+            msg = ("running, but root-only — re-run with sudo"
+                   if pres == "root-only" else "not running")
+            print(json.dumps({"up": pres == "up", "state": pres}) if args.json
+                  else f"tuxthrottled control socket: {msg}")
+            return 1
+        method = {"status": "status", "ping": "ping", "reload": "reload"}[args.action]
+        resp = control.call(method)
+        _out(resp, args.json)
+        return 0 if resp and resp.get("ok") else 1
     if args.cmd == "status":
         _out(gather_status(), args.json)
         return 0

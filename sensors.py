@@ -11,6 +11,7 @@ gracefully on a different Dell model rather than crash, but haven't been
 verified on one.
 """
 import glob
+import json
 import os
 import re
 import shutil
@@ -57,6 +58,48 @@ def detect_model() -> dict:
         "is_target": is_target,
         "is_close": close,
     }
+
+
+_MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+_MODEL_CACHE: dict | None = None
+
+
+def _model_files() -> list[str]:
+    try:
+        return sorted(glob.glob(os.path.join(_MODELS_DIR, "*.json")))
+    except OSError:
+        return []
+
+
+def model_profile() -> dict:
+    """The per-board hardware profile for this machine (models/<slug>.json),
+    matched on DMI. Falls back to g15-5515 (the reference board), or a minimal
+    stub if that file is missing. Cached — DMI doesn't change at runtime."""
+    global _MODEL_CACHE
+    if _MODEL_CACHE is not None:
+        return _MODEL_CACHE
+    product, board = _dmi("product_name"), _dmi("board_name")
+    fallback: dict = {"id": "g15-5515", "name": TARGET_MODEL, "match": {}}
+    chosen = None
+    for path in _model_files():
+        try:
+            with open(path) as f:
+                prof = json.load(f)
+        except (OSError, ValueError):
+            continue
+        m = prof.get("match", {})
+        if (product and product in m.get("product_name", [])) or \
+           (board and board in m.get("board_name", [])):
+            chosen = prof
+            break
+        if prof.get("id") == "g15-5515":
+            fallback = prof
+    _MODEL_CACHE = chosen or fallback
+    return _MODEL_CACHE
+
+
+def model_id() -> str:
+    return str(model_profile().get("id", "g15-5515"))
 
 
 def read_cpu_freq_ghz() -> str:
@@ -620,6 +663,50 @@ def set_ryzenadj_limits(fast_w=None, slow_w=None, stapm_w=None) -> tuple[bool, s
         r = subprocess.run(args, capture_output=True, text=True, timeout=10)
         # ryzenadj prints "Setting ... to N ... : OK" per arg; a non-zero exit
         # with all-OK lines still means it worked on this SMU.
+        if r.returncode == 0 or "OK" in (r.stdout or ""):
+            return True, ""
+        return False, (r.stderr or r.stdout or "ryzenadj failed").strip()
+    except Exception as exc:  # noqa: BLE001
+        return False, str(exc)
+
+
+# --------------------------------------------------------------------------- #
+#  Ryzen Curve Optimizer (per-all-core undervolt) — Cezanne
+#
+#  `ryzenadj --set-coall=<n>` sets an all-core CO offset (negative = undervolt,
+#  0..-30 is the usual sane range). ryzenadj can't read the CO back, so the
+#  desired value is only ever tracked in a file (co.json). This is a genuinely
+#  risky knob: too aggressive an offset causes silent calculation errors, a
+#  segfault storm, or a hard hang — ALWAYS drive it through
+#  tuxthrottle_co_stress.py, which stress-tests and auto-reverts.
+# --------------------------------------------------------------------------- #
+
+def _cpu_is_amd() -> bool:
+    try:
+        with open("/proc/cpuinfo") as f:
+            return "AuthenticAMD" in f.read(4096)
+    except OSError:
+        return False
+
+
+def ryzenadj_co_supported() -> bool:
+    """CO is a Zen2+/Cezanne feature and needs ryzenadj. We can't verify the
+    SMU accepts it without writing, so this is 'ryzenadj present on an AMD CPU'."""
+    return ryzenadj_available() and _cpu_is_amd()
+
+
+def set_co_offset(all_core: int) -> tuple[bool, str]:
+    """Apply an all-core Curve Optimizer offset. `all_core` is the signed CO
+    count; clamped to -50..0 (negative = undervolt, 0 = stock). ryzenadj does
+    the negative -> SMU two's-complement conversion itself, so pass the plain
+    signed int."""
+    exe = which("ryzenadj")
+    if not exe:
+        return False, "ryzenadj is not installed (RyzenCurveOptimizer tweak)"
+    v = max(-50, min(0, int(round(float(all_core)))))
+    try:
+        r = subprocess.run([exe, f"--set-coall={v}"],
+                           capture_output=True, text=True, timeout=10)
         if r.returncode == 0 or "OK" in (r.stdout or ""):
             return True, ""
         return False, (r.stderr or r.stdout or "ryzenadj failed").strip()

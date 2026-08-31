@@ -47,6 +47,16 @@ python3 /opt/tuxthrottle/tuxthrottle_kbd.py rainbow-test >/dev/null 2>&1 \
 grep -rIl 'dellg15' /opt/tuxthrottle --include='*.py' >/dev/null 2>&1 \
     && no "'dellg15' still in /opt/tuxthrottle/*.py" || ok "no 'dellg15' token in installed .py"
 
+hdr "tier-3 modules"
+for f in /opt/tuxthrottle/tuxthrottle_control.py /opt/tuxthrottle/tuxthrottle_co_stress.py \
+         /opt/tuxthrottle/models/g15-5515.json /opt/tuxthrottle/clients/waybar/tuxthrottle-waybar; do
+    [ -e "$f" ] && ok "exists $f" || no "missing $f"
+done
+python3 -c "import sys; sys.path.insert(0,'/opt/tuxthrottle'); import tuxthrottle_control, tuxthrottle_co_stress, sensors; assert sensors.model_id()=='g15-5515', sensors.model_id(); print(1)" >/dev/null 2>&1 \
+    && ok "control + co_stress import; model_id=g15-5515" || no "tier-3 module import / model detect failed"
+tuxthrottlectl daemon status >/dev/null 2>&1; rc=$?
+[ "$rc" = 0 ] || [ "$rc" = 1 ] && ok "'tuxthrottlectl daemon status' runs (rc=$rc)" || no "'tuxthrottlectl daemon status' crashed (rc=$rc)"
+
 hdr "GUI — Report a Bug page"
 XAUTHORITY=$(ls -t /run/user/1000/xauth* 2>/dev/null | head -1) DISPLAY=:0 python3 - <<'PY' 2>&1 | sed 's/^/  /'
 import sys, time

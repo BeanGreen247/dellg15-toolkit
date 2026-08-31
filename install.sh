@@ -98,11 +98,11 @@ do_install() {
     if command -v rsync >/dev/null 2>&1; then
         rsync -a --exclude='.git' --exclude='.github' --exclude='__pycache__' \
               --exclude='.pytest_cache' --exclude='tests' --exclude='tasks' \
-              --exclude='install.sh' "$SRC"/ "$LIBDIR"/
+              --exclude='packaging' --exclude='install.sh' "$SRC"/ "$LIBDIR"/
     else
         cp -a "$SRC"/. "$LIBDIR"/
         rm -rf "$LIBDIR/.git" "$LIBDIR/.github" "$LIBDIR/.pytest_cache" \
-               "$LIBDIR/tests" "$LIBDIR/tasks" "$LIBDIR/install.sh"
+               "$LIBDIR/tests" "$LIBDIR/tasks" "$LIBDIR/packaging" "$LIBDIR/install.sh"
     fi
     find "$LIBDIR" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
     chmod -R a+rX "$LIBDIR"

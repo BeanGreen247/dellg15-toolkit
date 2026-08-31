@@ -9,8 +9,9 @@ HOME / XDG_RUNTIME_DIR / DBUS_SESSION_BUS_ADDRESS). Writes go through
 plain text substitution. Every action restarts plasmashell so it applies and
 doesn't flush a stale in-memory copy back over the file.
 
-  tuxthrottle_kde_panel.py clock-seconds {on|off}
-  tuxthrottle_kde_panel.py classic-menu  {on|off}
+  tuxthrottle_kde_panel.py clock-seconds  {on|off}
+  tuxthrottle_kde_panel.py classic-menu   {on|off}
+  tuxthrottle_kde_panel.py panel-floating {on|off}
 """
 import os
 import re
@@ -87,6 +88,45 @@ def classic_menu(enable: bool) -> int:
     return 0
 
 
+_CONT_HDR = re.compile(r"^\[Containments\]\[(\d+)\](\[.+\])?$")
+
+
+def find_panels() -> list[str]:
+    """[containment_id] for every org.kde.panel containment (the panels)."""
+    p = _cfg_path()
+    if not p.is_file():
+        return []
+    out, cur, is_panel = [], None, False
+    for line in p.read_text(errors="ignore").splitlines():
+        m = _CONT_HDR.match(line)
+        if m and not m.group(2):          # a new top-level [Containments][N]
+            if cur is not None and is_panel:
+                out.append(cur)
+            cur, is_panel = m.group(1), False
+        elif line.strip() == "plugin=org.kde.panel" and cur is not None:
+            is_panel = True
+    if cur is not None and is_panel:
+        out.append(cur)
+    return out
+
+
+def panel_floating(enable: bool) -> int:
+    """floating panel on = the ~few-mm gap from the screen edge; off = flush."""
+    panels = find_panels()
+    if not panels:
+        print("no panel containment in the desktop config", file=sys.stderr)
+        return 0  # nothing to do isn't an error
+    for cid in panels:
+        subprocess.run(
+            ["kwriteconfig6", "--file", APPLETS,
+             "--group", "Containments", "--group", cid, "--group", "General",
+             "--key", "floating", "true" if enable else "false"],
+            check=False)
+    print(f"panel floating -> {'on' if enable else 'off (flush)'} "
+          f"on {len(panels)} panel(s)")
+    return 0
+
+
 def restart_plasmashell() -> None:
     r = subprocess.run(
         ["systemctl", "--user", "restart", "plasma-plasmashell.service"],
@@ -107,6 +147,8 @@ def main() -> int:
         rc = clock_seconds(state)
     elif action == "classic-menu":
         rc = classic_menu(state)
+    elif action == "panel-floating":
+        rc = panel_floating(state)
     else:
         print(f"unknown action: {action}", file=sys.stderr)
         return 2

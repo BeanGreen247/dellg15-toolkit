@@ -73,9 +73,11 @@ verify (kernel-cmdline ones) are still best-effort — see "Known limitations".
 
 Every check/apply command in `config/*.json`, the sensor probes in
 `sensors.py`, and the dedicated-key capture were written against the single
-machine below. Values were pulled from live `dmesg`, `evtest`,
-`acpi_listen`, and `/proc/bus/input/devices` on that laptop (booted from a
-Linux live USB for the capture — Nobara install pending).
+machine below, and **the toolkit is developed and tested on it live** — running
+Nobara Linux, `sudo ./install.sh`, the GUI, `tuxthrottlectl`, the daemon and
+its control socket, and the module self-tests (`verify-install.sh`: 27 passed).
+The original evdev/dmesg/acpi values were pulled from a Linux live USB before
+the Nobara install; everything since is verified on the installed system.
 
 | Component | What's in the test machine | Identifiers / notes |
 |---|---|---|
@@ -92,8 +94,8 @@ Linux live USB for the capture — Nobara install pending).
 | **Touchpad** | Dell / ELAN I2C | `DELL0A6E:00 04F3:317E` (mouse + touchpad nodes) |
 | **Keyboard** | AT Translated Set 2 | dedicated G-key → `KEY_PERFORMANCE` (701) with Fn Lock **off**, `KEY_F9` with Fn Lock **on** |
 | **Vendor hotkeys** | in-tree `dell-wmi` (no extra driver) | "Dell WMI hotkeys" + "DELL Wireless hotkeys" input devices |
-| **Capture OS** | Linux `7.0.0-14-generic` live USB | used only for the evdev/dmesg/acpi captures |
-| **Target OS** | Nobara Linux (Fedora-based, `dnf`) | not yet run on the real hardware |
+| **Capture OS** | Linux `7.0.0-14-generic` live USB | used only for the initial evdev/dmesg/acpi captures |
+| **Running OS** | Nobara Linux (Fedora 43 base, `dnf`, KDE Plasma 6 / Wayland) | **installed and tested on the real hardware** — `install.sh`, GUI, CLI, daemon + control socket, `verify-install.sh` all green |
 
 Firmware notes seen at boot: `WQBC` WMI data-block and `_S0W`
 `AE_ALREADY_EXISTS` ACPI warnings — both harmless on this board.
@@ -108,6 +110,10 @@ them.
 cd tuxthrottle
 sudo ./install.sh
 ```
+
+*(An RPM / COPR path also exists — see `packaging/` — for a `dnf install`
+instead of the git clone. The tweaks stay opt-in either way; they are never
+applied from `%post`.)*
 
 Installs to `/opt/tuxthrottle`, a launcher at
 `/usr/local/bin/tuxthrottle`, the Tux throttle-gauge icon into the hicolor
@@ -194,6 +200,15 @@ ThrottleStop / the ASUS Armoury sliders:
 - **CPU power limits (ryzenadj)** — STAPM / fast / slow sliders (Watts) with
   Quiet / Balanced / Performance presets and a live "now" readout. On the
   5800H the SMU floors STAPM near the slow limit, so presets keep STAPM ≥ slow.
+- **Curve Optimizer (all-core undervolt)** — a `ryzenadj --set-coall` offset
+  slider (0 … −40) with an **"Apply & stress-test (5 min)"** button. It
+  snapshots, applies the offset, then hammers the CPU (+ a GPU load) for five
+  minutes while watching `dmesg` for MCE/WHEA and auto-reverts on any fault.
+  The offset is **not** kept across a reboot until you press **Keep (confirm)**;
+  the **RyzenCurveOptimizer** tweak's boot service only re-applies a *confirmed*
+  offset, so a bad value that hung the box before you confirmed it doesn't come
+  back. Genuinely risky — a too-aggressive undervolt can still hard-hang the
+  machine (recoverable only by a full power-off). Hidden on non-AMD CPUs.
 - **NVIDIA board power limit** — a slider where the GPU allows it; on the
   G15 5515's RTX 3050 Ti Mobile the limit is firmware-locked (Dynamic Boost),
   so the section shows that instead of a dead control.
@@ -206,9 +221,16 @@ ThrottleStop / the ASUS Armoury sliders:
 - **AC / battery auto-switch** — pick a bundle (profile + TDP preset) to
   apply automatically when the charger is plugged or pulled; handled by the
   same `tuxthrottle_powerd.py` daemon.
+- **Thermal-event alerts** — with the daemon running, sustained Tjmax, a
+  stalled fan while hot, or Performance-on-low-battery raise a desktop
+  notification plus a `journalctl -u tuxthrottle-powerd` line (config block
+  `thermal_notify` in `powerd.json`; off by default).
 
-State is written to `~/.config/tuxthrottle/{tdp,nvpl,battery,powerd}.json`
-and re-applied at boot by the matching tweaks' units.
+State is written to `~/.config/tuxthrottle/{tdp,nvpl,battery,co,powerd}.json`
+and re-applied at boot by the matching tweaks' units. When the daemon is up it
+also exposes a **root-only control socket** at `/run/tuxthrottle/control.sock`
+so the GUI and `tuxthrottlectl` route hardware writes through the one process
+that owns the hardware (they fall back to writing directly when it's not).
 
 ## The Profiles tab
 
@@ -246,6 +268,7 @@ the keys so Plasma returns to its defaults.
 | KWin compositor tuned for games | OpenGL/GLCore, fullscreen unredirect (`WindowsBlockCompositing`), `LatencyPolicy=Low`, bilinear texture filter |
 | Classic Application Menu | the old Win-95-style hierarchical start menu (`kicker`) instead of Kickoff |
 | Show seconds on the panel clock | `showSeconds=2` on every digital-clock widget |
+| Panel flush to the screen edge | turns off the Plasma 6 **Floating panel** (`[Containments][N][General] floating=false`) so the bottom panel stays pinned to the edge instead of lifting a few mm away when no window is maximised |
 | Disable all screen-edge actions | no hot-corner Overview/Grid triggers mid-game |
 | Stop Activities + recent-docs tracking | kills the `kactivitymanagerd` journal + file-open history |
 | Limit Dolphin thumbnail I/O | cap thumbnail size, no remote-folder thumbnails |
@@ -361,16 +384,21 @@ A stdlib CLI over `sensors.py` for scripts, keybinds and `ssh` sessions
 (installed to `/usr/local/bin/tuxthrottlectl`):
 
 ```bash
-tuxthrottlectl status --json                  # everything, machine-readable
-tuxthrottlectl get clocks                      # cpu/igpu/dgpu MHz
+tuxthrottlectl status --json                   # everything, machine-readable
+tuxthrottlectl get clocks                       # cpu/igpu/dgpu MHz
 tuxthrottlectl get tdp                          # current ryzenadj limits
-sudo tuxthrottlectl set profile performance
+sudo tuxthrottlectl set power-profile performance
 sudo tuxthrottlectl set tdp balanced           # or --stapm 42 --fast 54 --slow 42
 sudo tuxthrottlectl set fan-boost both 60
 sudo tuxthrottlectl gamemode toggle
+sudo tuxthrottlectl profile apply "quiet night"
+tuxthrottlectl daemon status                    # the tuxthrottled control socket
 ```
 
-`set` commands need root and exit non-zero on failure.
+`set` commands need root and exit non-zero on failure. When the
+**Fan-curve + AC-switch daemon** is running, `set` and `profile apply` are
+routed through its `/run/tuxthrottle/control.sock` so one process owns the
+hardware; otherwise they act directly.
 
 ## Hardware-aware gating
 
@@ -384,10 +412,17 @@ principle DAMX uses, done via one detection pass (`sensors.has_nvidia_gpu()`
 Sections that can't work on the running hardware degrade to an explanatory
 note instead of a dead control: the NVIDIA power-limit slider (firmware-locked
 on the 5515), the battery section (points you at the libsmbios tweak), the
-hybrid-graphics radios (until EnvyControl is installed). The
-**RaplPowerPermissions** tweak is hidden entirely on a box where the RAPL
-counters are already world-readable (Nobara 43's default) and it would be a
-no-op.
+hybrid-graphics radios (until EnvyControl is installed), the Curve Optimizer
+section (hidden on non-AMD CPUs). The **RaplPowerPermissions** tweak is hidden
+entirely on a box where the RAPL counters are already world-readable
+(Nobara 43's default) and it would be a no-op.
+
+**Per-board gate.** `models/<slug>.json` holds one hardware profile per
+supported laptop, matched on DMI (`sensors.model_profile()` — falls back to
+`g15-5515`, the reference board). A tweak or app entry can carry
+`"models": ["g15-5515", "..."]` to only appear on those boards; an entry with
+no `models` key applies everywhere, which is every entry today. See
+`models/README.md` for adding a second machine.
 
 ## Files
 
@@ -396,10 +431,15 @@ no-op.
 - `hotkey_listener.py` — the G-key → Game Mode binding (needs `python3-evdev`)
 - `sensors.py` — shared sensor reads + Game Mode logic + CPU TDP (ryzenadj), battery, NVIDIA/hybrid-GPU helpers, **no GUI dependency**, used by everything below so they never disagree on state
 - `tuxthrottle_profiles.py` — stdlib: capture / apply / snapshot / rollback of named full-state profiles; used by the Profiles tab, the CLI, the daemon and the `StateResume` tweak
-- `tuxthrottle_powerd.py` — stdlib daemon: closed-loop fan curve + AC/battery auto-switch + per-game auto-profiles (installed by the **Fan-curve + AC-switch daemon** tweak)
-- `tuxthrottle_kde_panel.py` — stdlib helper for the two panel-applet KDE tweaks (clock seconds, classic menu) — finds applet IDs and restarts `plasmashell`
-- `tuxthrottlectl.py` — headless CLI over `sensors.py` + profiles (`status` / `get` / `set` / `profile` / `snapshot` / `rollback` / `gamemode`, `--json`), installed as `/usr/local/bin/tuxthrottlectl`
-- `tests/` — `pytest` suite for the pure logic (parsers, fan-curve maths, profile engine); `.github/workflows/ci.yml` runs it on push
+- `tuxthrottle_powerd.py` — stdlib daemon: closed-loop fan curve + AC/battery auto-switch + per-game auto-profiles + **thermal-event alerts** + the **control socket** (installed by the **Fan-curve + AC-switch daemon** tweak)
+- `tuxthrottle_control.py` — stdlib: the newline-JSON RPC over `/run/tuxthrottle/control.sock` (server in the daemon, client in the GUI / `tuxthrottlectl`)
+- `tuxthrottle_co_stress.py` — stdlib, root: Ryzen Curve Optimizer undervolt with a stress-test-and-auto-revert harness (`apply` / `confirm` / `revert` / `reapply` / `status`)
+- `tuxthrottle_kde_panel.py` — stdlib helper for the panel-applet KDE tweaks (clock seconds, classic menu, panel-flush) — finds applet / panel containment IDs and restarts `plasmashell`
+- `tuxthrottlectl.py` — headless CLI over `sensors.py` + profiles (`status` / `get` / `set` / `profile` / `snapshot` / `rollback` / `gamemode` / `daemon`, `--json`), installed as `/usr/local/bin/tuxthrottlectl`
+- `models/` — per-board hardware profiles keyed by DMI (`g15-5515.json` is the reference); `sensors.model_profile()` picks one, and a tweak/app can gate itself with `"models": [ ... ]`
+- `clients/` — optional panel front-ends: a **waybar** module and a **KDE plasmoid**, both over `tuxthrottlectl status --json`
+- `packaging/` — the noarch RPM `.spec` + `.github/workflows/copr.yml` (SRPM on tag → COPR)
+- `tests/` — `pytest` suite for the pure logic (parsers, fan-curve maths, profile engine, control socket, thermal watcher, model profiles); `.github/workflows/ci.yml` runs it on push
 - `tuxthrottle_kbd.py` — AW-ELC RGB keyboard control: `openrgb` CLI wrapper for
   static/zone colours + firmware effects, plus stdlib software animation
   daemons (gradient / rainbow) that stream per-LED frames over a hand-rolled
@@ -547,8 +587,9 @@ side of the header so it can't be fat-fingered instead of a nav click.
 Recommended-by-default: `CstateFix` (Stability); the safe Performance set +
 the curated kernel cmdline; `PowerProfileScripts` / `RyzenAdjTDP` /
 `FanCurveDaemon` / `StateResume` / `GameModeBridge` / `KbdBacklightFix`
-(Power); `NvidiaDriver` / `nvidia-max-perf` (GPU); all 9 **KDE (Desktop GUI
-Tweaks)**.
+(Power); `NvidiaDriver` / `nvidia-max-perf` (GPU); all 10 **KDE (Desktop GUI
+Tweaks)**. `RyzenCurveOptimizer` is *not* recommended-by-default — it's opt-in
+and stress-tested on demand.
 
 - **Presets tab** — Safe Baseline, Competitive Gaming, Streaming Rig: one
   button applies a curated bundle.
@@ -563,16 +604,19 @@ Tweaks)**.
   this model), **RaplPowerPermissions** (see "Power reporting" below;
   auto-hidden where it's already a no-op), and the Power & Limits stack:
   **RyzenAdjTDP** (STAPM/fast/slow limits + boot/resume re-apply),
+  **RyzenCurveOptimizer** (all-core undervolt with a stress-test/auto-revert
+  harness; only re-applies a *confirmed* offset at boot),
   **BatteryChargeLimit** / **DellBatteryThreshold** (libsmbios) for a
   stop-charging percentage, **FanCurveDaemon** (`tuxthrottle_powerd.py` —
   closed-loop fan curve + AC/battery profile auto-switch + per-game
-  auto-profiles), **StateResume** (re-apply the last profile after
-  suspend/reboot), **GameModeBridge** (wires Feral gamemode's start/end
-  hooks to the toggle scripts).
-- **KDE (Desktop GUI Tweaks)** — 9 reversible Plasma-6 toggles (see the
+  auto-profiles + thermal-event alerts + the control socket), **StateResume**
+  (re-apply the last profile after suspend/reboot), **GameModeBridge** (wires
+  Feral gamemode's start/end hooks to the toggle scripts).
+- **KDE (Desktop GUI Tweaks)** — 10 reversible Plasma-6 toggles (see the
   "Desktop tweaks" section): animations off, KWin gaming compositor, classic
-  Application Menu, clock seconds, screen edges off, activities/recent-docs
-  off, thumbnail I/O limit, launch feedback off, splash off.
+  Application Menu, clock seconds, panel flush to the screen edge, screen edges
+  off, activities/recent-docs off, thumbnail I/O limit, launch feedback off,
+  splash off.
 - **Performance** — USB autosuspend off, flat mouse accel, swappiness, zram
   tuning, KDE Baloo indexer off. Plus a curated **kernel-cmdline** set
   (`split_lock_detect=off`, `nowatchdog`, `preempt=full`, `threadirqs`, … —
@@ -756,7 +800,7 @@ Same as the Windows tool: add an entry to `config/tweaks.json` or
 `{USER}` and `{TOOLKIT_DIR}` in any command are substituted — the user is
 resolved from `PKEXEC_UID`/`SUDO_UID` since the whole app runs elevated.
 
-## Known limitations (prototype)
+## Known limitations
 
 - The apply ledger (`state.json`) records *what the tool did* and surfaces
   drift, but it's not a full system snapshot — undo still relies on each
@@ -770,3 +814,8 @@ resolved from `PKEXEC_UID`/`SUDO_UID` since the whole app runs elevated.
   Rainbow Cycle for smooth+fast.
 - Fan settings and (currently) the keyboard effect don't persist a reboot
   unless the relevant tweak/service is installed.
+- The `models/` profiles are advisory today — `sensors.py` still hard-codes
+  the 5515's sysfs paths, so a second board needs code changes, not just a
+  new model file (the file + the `models:` gate are the groundwork).
+- The Curve Optimizer offset can't be read back from `ryzenadj`, so its
+  "current" value is only ever what the tool last wrote to `co.json`.
