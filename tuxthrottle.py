@@ -991,9 +991,10 @@ class ToolkitApp:
         # RAPL-permissions tweak is a no-op there — hide it unless it's needed
         # or the user has already applied it (so they can still undo).
         # per-board gate: hide an entry that names a `models` list this
-        # machine isn't in (nothing in config/*.json uses it yet — this is the
-        # multi-model hook, see models/README.md).
-        if item.requires_models and sensors.model_id() not in item.requires_models:
+        # machine isn't in, or that the model profile's `tweaks_skip` names.
+        # See models/README.md.
+        if (not sensors.model_allows(item.requires_models)
+                or sensors.model_skips_tweak(item.id)):
             item.hidden = True
             item.hw_supported = False
 

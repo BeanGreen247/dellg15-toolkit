@@ -18,6 +18,7 @@ A thin argparse wrapper over sensors.py so scripts, the tray, keybinds and
   tuxthrottlectl snapshot [<label>]                                # capture a rollback point
   tuxthrottlectl rollback [last|<file>]                            # restore one
   tuxthrottlectl daemon   {status|ping|reload}                     # the tuxthrottled control socket
+  tuxthrottlectl collect-model [--slug NAME] [--out PATH]          # models/<slug>.json scaffold for this machine
 
 When tuxthrottled (FanCurveDaemon) is running, `set` / `profile apply` are
 routed through its /run/tuxthrottle/control.sock so one process owns the
@@ -263,7 +264,17 @@ def main() -> int:
     dm.add_argument("action", choices=["status", "ping", "reload"], nargs="?",
                     default="status")
 
+    cm = sub.add_parser("collect-model",
+                        help="emit a models/<slug>.json scaffold for this machine")
+    cm.add_argument("--slug", help="model id / filename stem (default: from DMI)")
+    cm.add_argument("--out", help="write to this path instead of stdout")
+
     args = ap.parse_args()
+    if args.cmd == "collect-model":
+        import tuxthrottle_modelgen as modelgen
+        return modelgen.main(
+            (["--slug", args.slug] if args.slug else [])
+            + (["--out", args.out] if args.out else []))
     if args.cmd == "daemon":
         pres = control.presence()
         if pres != "up":

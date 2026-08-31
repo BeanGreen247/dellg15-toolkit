@@ -16,6 +16,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 from functools import lru_cache
 
@@ -65,8 +66,12 @@ _MODEL_CACHE: dict | None = None
 
 
 def _model_files() -> list[str]:
+    """All models/*.json except `_`-prefixed ones — those are work-in-progress
+    scaffolds (`collect-model --out models/_foo.json`) and test fixtures, and
+    must never be auto-matched against a real machine."""
     try:
-        return sorted(glob.glob(os.path.join(_MODELS_DIR, "*.json")))
+        return sorted(p for p in glob.glob(os.path.join(_MODELS_DIR, "*.json"))
+                      if not os.path.basename(p).startswith("_"))
     except OSError:
         return []
 
@@ -74,26 +79,43 @@ def _model_files() -> list[str]:
 def model_profile() -> dict:
     """The per-board hardware profile for this machine (models/<slug>.json),
     matched on DMI. Falls back to g15-5515 (the reference board), or a minimal
-    stub if that file is missing. Cached — DMI doesn't change at runtime."""
+    stub if that file is missing. Cached — DMI doesn't change at runtime.
+
+    Set ``TUXTHROTTLE_MODEL=<slug>`` to force a specific profile regardless of
+    DMI — a dev/testing lever for bringing up a new board, printed loudly to
+    stderr so it can't be left on by accident."""
     global _MODEL_CACHE
     if _MODEL_CACHE is not None:
         return _MODEL_CACHE
+    forced = os.environ.get("TUXTHROTTLE_MODEL", "").strip()
     product, board = _dmi("product_name"), _dmi("board_name")
     fallback: dict = {"id": "g15-5515", "name": TARGET_MODEL, "match": {}}
     chosen = None
-    for path in _model_files():
+    # the override may name a `_`-prefixed WIP/fixture file, so scan those too
+    paths = (sorted(glob.glob(os.path.join(_MODELS_DIR, "*.json")))
+             if forced else _model_files())
+    for path in paths:
         try:
             with open(path) as f:
                 prof = json.load(f)
         except (OSError, ValueError):
             continue
+        if forced and prof.get("id") == forced:
+            print(f"sensors: TUXTHROTTLE_MODEL override active — using "
+                  f"'{forced}' profile, not this machine's DMI", file=sys.stderr)
+            _MODEL_CACHE = prof
+            return _MODEL_CACHE
         m = prof.get("match", {})
-        if (product and product in m.get("product_name", [])) or \
-           (board and board in m.get("board_name", [])):
+        if not forced and (
+                (product and product in m.get("product_name", [])) or
+                (board and board in m.get("board_name", []))):
             chosen = prof
             break
         if prof.get("id") == "g15-5515":
             fallback = prof
+    if forced:
+        print(f"sensors: TUXTHROTTLE_MODEL='{forced}' set but no such "
+              f"models/*.json — falling back", file=sys.stderr)
     _MODEL_CACHE = chosen or fallback
     return _MODEL_CACHE
 
@@ -145,6 +167,19 @@ def _platform_profile_path() -> str:
 def _pwm_floor() -> int:
     """Lowest PWM a manual curve may command, so a fan is never stopped."""
     return int(_prof_section("fans").get("pwm_floor") or PWM_FLOOR)
+
+
+def model_allows(models) -> bool:
+    """Whether a config entry carrying this `models` list applies to the
+    current board. None / empty = applies everywhere (the default)."""
+    if not models:
+        return True
+    return model_id() in [str(m) for m in models]
+
+
+def model_skips_tweak(tweak_id: str) -> bool:
+    """Whether the current model profile's `tweaks_skip` names this tweak id."""
+    return tweak_id in (model_profile().get("tweaks_skip") or [])
 
 
 def read_cpu_freq_ghz() -> str:

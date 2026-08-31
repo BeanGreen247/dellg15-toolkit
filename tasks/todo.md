@@ -54,25 +54,25 @@ bridge only (post-game summary + scheduled profiles → backlog).
 
 ## Phase 1 — Second-model onboarding (B)
 
-- [ ] **1.1 `tuxthrottlectl collect-model`.** Emit `models/<slug>.json` scaffold
+- [x] **1.1 `tuxthrottlectl collect-model`.** Emit `models/<slug>.json` scaffold
       from the live machine: DMI match block, detected CPU/fan hwmon names, PCI
       ids, platform_profile path + choices, fan count, battery-method probe,
       OpenRGB device if present. Unknown fields → `null` + a `TODO` comment key.
       *Accept:* run on g15 reproduces every *detectable* field of
       `g15-5515.json`.
-- [ ] **1.2 `TUXTHROTTLE_MODEL=<slug>` override.** Force a profile regardless of
+- [x] **1.2 `TUXTHROTTLE_MODEL=<slug>` override.** Force a profile regardless of
       DMI; `sensors` logs a loud one-line warning; guarded so it's obviously
       dev-only.
       *Accept:* override selects the fixture profile under pytest; warning present.
-- [ ] **1.3 Gating audit.** `models/_test-fixture.json` (non-5515, with
+- [x] **1.3 Gating audit.** `models/_test-fixture.json` (non-5515, with
       `tweaks_skip` + `requires_models` entries). Verify `_apply_vendor_gate` /
       `Item.requires_models` / `tweaks_skip` hide the right tweaks/apps.
       *Accept:* fixture test asserts hidden vs shown item sets.
-- [ ] **1.4 `models/README.md` onboarding guide.** Step-by-step: run
+- [x] **1.4 `models/README.md` onboarding guide.** Step-by-step: run
       `--collect`, run `collect-model`, fill the TODO fields, test with
       `TUXTHROTTLE_MODEL`, add `requires_models` gates, PR.
       *Accept:* a reader with a new laptop could follow it unaided.
-- [ ] **1.5 Checkpoint 1.**
+- [x] **1.5 Checkpoint 1.**
 
 ## Phase 2 — Harden (C)
 

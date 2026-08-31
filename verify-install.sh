@@ -55,6 +55,10 @@ python3 -c "import sys; sys.path.insert(0,'/opt/tuxthrottle'); import tuxthrottl
     && ok "control + co_stress import; model_id=g15-5515" || no "tier-3 module import / model detect failed"
 tuxthrottlectl daemon status >/dev/null 2>&1; rc=$?
 [ "$rc" = 0 ] || [ "$rc" = 1 ] && ok "'tuxthrottlectl daemon status' runs (rc=$rc)" || no "'tuxthrottlectl daemon status' crashed (rc=$rc)"
+tuxthrottlectl collect-model 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); assert 'fans' in d and '_todo' in d" >/dev/null 2>&1 \
+    && ok "'tuxthrottlectl collect-model' emits a valid scaffold" || no "'tuxthrottlectl collect-model' failed"
+python3 -c "import sys,os; sys.path.insert(0,'/opt/tuxthrottle'); os.environ['TUXTHROTTLE_MODEL']='_test-fixture'; import sensors; assert sensors.model_id()=='_test-fixture' and sensors._pwm_floor()==90" >/dev/null 2>&1 \
+    && ok "TUXTHROTTLE_MODEL override + profile-routed accessors work" || no "TUXTHROTTLE_MODEL override failed"
 
 hdr "GUI — Report a Bug page"
 XAUTHORITY=$(ls -t /run/user/1000/xauth* 2>/dev/null | head -1) DISPLAY=:0 python3 - <<'PY' 2>&1 | sed 's/^/  /'

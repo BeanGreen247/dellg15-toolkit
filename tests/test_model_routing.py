@@ -69,6 +69,46 @@ def test_reference_profile_still_resolves_to_5515_values(monkeypatch):
 
 # --- tuxthrottle_kbd routes its device name/USB id through the profile --- #
 
+def test_env_override_selects_named_profile(monkeypatch):
+    _reset_cache()
+    monkeypatch.setenv("TUXTHROTTLE_MODEL", "_test-fixture")
+    monkeypatch.setattr(sensors, "_dmi",
+                        lambda k: "Dell G15 5515" if k == "product_name" else "")
+    prof = sensors.model_profile()
+    assert prof["id"] == "_test-fixture"          # DMI ignored
+    assert sensors._fan_hwmon() == "acme_ec"
+    assert sensors._pwm_floor() == 90
+    assert sensors._fan_indices() == (1, 2, 3)
+    _reset_cache()
+
+
+def test_env_override_unknown_slug_falls_back(monkeypatch):
+    _reset_cache()
+    monkeypatch.setenv("TUXTHROTTLE_MODEL", "does-not-exist")
+    monkeypatch.setattr(sensors, "_dmi", lambda k: "")
+    assert sensors.model_profile()["id"] == "g15-5515"
+    _reset_cache()
+
+
+def test_underscore_files_are_not_auto_matched():
+    files = [f for f in sensors._model_files()]
+    assert not any(f.rsplit("/", 1)[-1].startswith("_") for f in files)
+
+
+def test_gating_helpers(monkeypatch):
+    monkeypatch.setattr(sensors, "model_profile",
+                        lambda: {"id": "acme-x1",
+                                 "tweaks_skip": ["RyzenAdjTDP"]})
+    # models list gate
+    assert sensors.model_allows(None) is True
+    assert sensors.model_allows([]) is True
+    assert sensors.model_allows(["acme-x1", "g15-5515"]) is True
+    assert sensors.model_allows(["g15-5515"]) is False
+    # tweaks_skip gate
+    assert sensors.model_skips_tweak("RyzenAdjTDP") is True
+    assert sensors.model_skips_tweak("FanCurveDaemon") is False
+
+
 def test_kbd_reads_device_from_profile(monkeypatch):
     _reset_cache()
     monkeypatch.setattr(
