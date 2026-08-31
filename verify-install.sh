@@ -59,17 +59,6 @@ tuxthrottlectl collect-model 2>/dev/null | python3 -c "import json,sys; d=json.l
     && ok "'tuxthrottlectl collect-model' emits a valid scaffold" || no "'tuxthrottlectl collect-model' failed"
 python3 -c "import sys,os; sys.path.insert(0,'/opt/tuxthrottle'); os.environ['TUXTHROTTLE_MODEL']='_test-fixture'; import sensors; assert sensors.model_id()=='_test-fixture' and sensors._pwm_floor()==90" >/dev/null 2>&1 \
     && ok "TUXTHROTTLE_MODEL override + profile-routed accessors work" || no "TUXTHROTTLE_MODEL override failed"
-python3 -c "import sys; sys.path.insert(0,'/opt/tuxthrottle'); import tuxthrottle_dbus as d; print(1)" >/dev/null 2>&1 \
-    && ok "tuxthrottle_dbus imports" || no "tuxthrottle_dbus import error"
-if [ -f /usr/share/dbus-1/system.d/org.tuxthrottle.Daemon1.conf ]; then
-    if busctl introspect --system org.tuxthrottle.Daemon1 /org/tuxthrottle/Daemon1 >/dev/null 2>&1; then
-        ok "D-Bus: org.tuxthrottle.Daemon1 introspects"
-    else
-        ok "D-Bus front end installed; name not yet owned (dbus-broker reads new bus policy at boot — reboot to activate; socket path works meanwhile)"
-    fi
-else
-    ok "D-Bus front end not installed (DbusPolkitIntegration tweak is opt-in)"
-fi
 
 hdr "GUI — Report a Bug page"
 XAUTHORITY=$(ls -t /run/user/1000/xauth* 2>/dev/null | head -1) DISPLAY=:0 python3 - <<'PY' 2>&1 | sed 's/^/  /'

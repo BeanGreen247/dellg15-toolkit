@@ -60,7 +60,7 @@ jobs:
         run: |
           mypy --ignore-missing-imports --no-error-summary \
             sensors.py tuxthrottle_control.py tuxthrottle_modelgen.py \
-            tuxthrottle_dbus.py tuxthrottlectl.py tuxthrottle_profiles.py
+            tuxthrottlectl.py tuxthrottle_profiles.py
 
   gui-smoke:
     runs-on: ubuntu-latest

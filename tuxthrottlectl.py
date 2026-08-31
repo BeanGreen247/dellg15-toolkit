@@ -37,29 +37,13 @@ import sensors  # noqa: E402
 import tuxthrottle_control as control  # noqa: E402
 import tuxthrottle_profiles as profiles  # noqa: E402
 
-try:
-    import tuxthrottle_dbus as _dbus  # noqa: E402
-except Exception:  # noqa: BLE001
-    _dbus = None
-
 
 def _daemon_call(method: str, params: dict | None = None):
-    """Reach a running tuxthrottled: D-Bus first, then the control socket.
-    Returns the response dict, or None if neither transport answers."""
-    if _dbus is not None:
-        r = _dbus.call(method, params or {})
-        if r is not None:
-            return r
+    """Reach a running tuxthrottled via its control socket. Returns the
+    response dict, or None if the socket isn't answering."""
     if control.available():
         return control.call(method, params or {})
     return None
-
-
-def _daemon_transport() -> str | None:
-    """Which transport a live daemon is reachable on: 'D-Bus' | 'socket' | None."""
-    if _dbus is not None and _dbus.available_live():
-        return "D-Bus"
-    return "socket" if control.available() else None
 
 TDP_PRESETS = {
     "quiet": (25, 35, 25),
@@ -297,21 +281,17 @@ def main() -> int:
             (["--slug", args.slug] if args.slug else [])
             + (["--out", args.out] if args.out else []))
     if args.cmd == "daemon":
-        transport = _daemon_transport()
-        if transport is None:
-            pres = control.presence()
+        pres = control.presence()
+        if pres != "up":
             msg = ("running, but root-only — re-run with sudo"
                    if pres == "root-only" else "not running")
             print(json.dumps({"up": False, "state": pres}) if args.json
-                  else f"tuxthrottled: {msg}")
+                  else f"tuxthrottled control socket: {msg}")
             return 1
         if args.action == "ping":
-            print(json.dumps({"up": True, "transport": transport}) if args.json
-                  else f"tuxthrottled: up (via {transport})")
+            print(json.dumps({"up": True}) if args.json else "tuxthrottled: up")
             return 0
-        resp = _daemon_call(args.action)   # status | reload
-        if not args.json and resp is not None:
-            resp = {**resp, "_transport": transport}
+        resp = control.call(args.action)   # status | reload
         _out(resp, args.json)
         return 0 if resp and resp.get("ok") else 1
     if args.cmd == "status":

@@ -76,14 +76,14 @@ bridge only (post-game summary + scheduled profiles → backlog).
 
 ## Phase 2 — Harden (C)
 
-- [x] **2.1 D-Bus + polkit control plane.** `org.tuxthrottle.Daemon1` system
-      service in `tuxthrottle_powerd` (same dispatch as the socket); polkit
-      `.policy` for profile-apply / set / snapshot / rollback. `tuxthrottlectl`
-      + GUI try D-Bus → socket → direct. Remove sudoers rules the polkit actions
-      replace (tweak `undo` + re-`apply`).
-      *Accept:* `busctl introspect` shows the interface; non-root GUI profile
-      apply raises a polkit prompt; socket + direct fallbacks still pass their
-      tests.
+- [~] **2.1 D-Bus + polkit control plane — ATTEMPTED, REVERTED 2026-08-31.**
+      Built it (`tuxthrottle_dbus.py` system-bus service + `DbusPolkitIntegration`
+      tweak). The tweak's `dbus/*.conf` **hard-bricked the g15 boot**: dbus-broker
+      refuses to start the system bus when a `system.d` policy has a
+      `send_interface=` clause in an `<allow>` rule, and it only parses that file
+      at boot (passed a live `ReloadConfig`). Whole D-Bus layer removed; the
+      `/run/tuxthrottle/control.sock` socket stays the only control plane.
+      **Any retry: boot-test in a VM first, no `send_interface` in policy.**
 - [x] **2.2 Dead keyboard code** — pulled forward, see Phase P.
 - [x] **2.3 CI depth.** Headless Xvfb GUI-smoke job (build `ToolkitApp`, pump
       `update()`); `ruff` + `mypy` steps (start non-blocking, then gate); extra

@@ -229,10 +229,8 @@ ThrottleStop / the ASUS Armoury sliders:
 State is written to `~/.config/tuxthrottle/{tdp,nvpl,battery,co,powerd}.json`
 and re-applied at boot by the matching tweaks' units. When the daemon is up it
 also exposes a **root-only control socket** at `/run/tuxthrottle/control.sock`
-(and, with the **DbusPolkitIntegration** tweak, `org.tuxthrottle.Daemon1` on
-the system bus) so the GUI and `tuxthrottlectl` route hardware writes through
-the one process that owns the hardware (they fall back to writing directly
-when it's not).
+so the GUI and `tuxthrottlectl` route hardware writes through the one process
+that owns the hardware (they fall back to writing directly when it's not).
 
 ## The Battery tab
 

@@ -453,23 +453,16 @@ def run(cfg_path: Path, user=None, once: bool = False) -> int:
     reload_flag = [False]   # set true by the control socket's "reload" method
 
     srv = None
-    dbus_stop = None
     if not once and os.geteuid() == 0:
-        dispatch = _build_dispatch(user, reload_flag)
         try:
             srv = control.ControlServer()
-            for name, fn in dispatch.items():
+            for name, fn in _build_dispatch(user, reload_flag).items():
                 srv.register(name, fn)
             srv.start()
             log(f"control socket -> {srv.path}")
         except OSError as exc:
             log(f"control socket unavailable: {exc}")
             srv = None
-        try:
-            import tuxthrottle_dbus
-            dbus_stop = tuxthrottle_dbus.serve_in_thread(dispatch, log)
-        except Exception as exc:  # noqa: BLE001
-            log(f"d-bus init error: {exc}")
 
     log(f"start; config {cfg_path} ({'exists' if cfg_path.exists() else 'defaults'})")
     try:
@@ -511,8 +504,6 @@ def run(cfg_path: Path, user=None, once: bool = False) -> int:
         fans.restore()
         if srv is not None:
             srv.stop()
-        if dbus_stop is not None:
-            dbus_stop()
     return 0
 
 

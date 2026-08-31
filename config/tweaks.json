@@ -791,31 +791,6 @@
     ],
     "recommended": true
   },
-  "DbusPolkitIntegration": {
-    "Content": "D-Bus system service + polkit auth for the daemon",
-    "Description": "Adds a D-Bus front end to tuxthrottled: it also owns org.tuxthrottle.Daemon1 on the system bus (root-only, same privilege model as the /run/tuxthrottle/control.sock socket — the GUI/CLI use whichever transport is up), so 'busctl introspect --system org.tuxthrottle.Daemon1' works and desktop clients have a standard path in. Installs a polkit action (org.tuxthrottle.manage) + a rule granting passwordless TuxThrottle management to the 'wheel'/'sudo' groups, so 'pkexec tuxthrottlectl …' shows a proper auth dialog (or is passwordless for admins) instead of relying on a broad sudoers file. Needs python3-dbus + python3-gobject-base (already present on KDE/GNOME); the daemon runs socket-only without them. NOTE: on dbus-broker (the Fedora/Nobara default system bus) a newly-added bus policy is only read at boot, so the D-Bus name goes live after your next reboot — the polkit auth is live immediately, and until you reboot the daemon keeps using its control socket with no loss of function. Reversible — undo removes all three files and reloads polkit.",
-    "category": "Power",
-    "risk": "advanced",
-    "check": "test -f /usr/share/dbus-1/system.d/org.tuxthrottle.Daemon1.conf && test -f /usr/share/polkit-1/actions/org.tuxthrottle.policy && test -f /etc/polkit-1/rules.d/49-tuxthrottle.rules",
-    "reinstall_if": [
-      "/usr/share/dbus-1/system.d/org.tuxthrottle.Daemon1.conf",
-      "/usr/share/polkit-1/actions/org.tuxthrottle.policy"
-    ],
-    "apply": [
-      "install -Dm644 {TOOLKIT_DIR}/dbus/org.tuxthrottle.Daemon1.conf /usr/share/dbus-1/system.d/org.tuxthrottle.Daemon1.conf",
-      "install -Dm644 {TOOLKIT_DIR}/polkit/org.tuxthrottle.policy /usr/share/polkit-1/actions/org.tuxthrottle.policy",
-      "install -Dm644 {TOOLKIT_DIR}/polkit/49-tuxthrottle.rules /etc/polkit-1/rules.d/49-tuxthrottle.rules",
-      "systemctl reload dbus 2>/dev/null || systemctl reload dbus-broker 2>/dev/null || true",
-      "systemctl try-restart polkit 2>/dev/null || true",
-      "systemctl try-restart tuxthrottle-powerd.service 2>/dev/null || true"
-    ],
-    "undo": [
-      "rm -f /usr/share/dbus-1/system.d/org.tuxthrottle.Daemon1.conf /usr/share/polkit-1/actions/org.tuxthrottle.policy /etc/polkit-1/rules.d/49-tuxthrottle.rules",
-      "systemctl reload dbus 2>/dev/null || systemctl reload dbus-broker 2>/dev/null || true",
-      "systemctl try-restart polkit 2>/dev/null || true",
-      "systemctl try-restart tuxthrottle-powerd.service 2>/dev/null || true"
-    ]
-  },
   "DellBatteryThreshold": {
     "Content": "Dell battery threshold (libsmbios)",
     "Description": "The G15 5515 has no kernel charge_control_end_threshold, but Dell firmware supports a 'custom' charge interval stored in NVRAM. This installs libsmbios (smbios-battery-ctl); the Power & Limits tab then sets the stop-charging percentage through it and it persists in firmware across reboots \u2014 no service needed. Undo removes the package only; any interval you set stays in firmware until you set it back to 100 %/standard.",

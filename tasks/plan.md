@@ -84,8 +84,11 @@ non-5515 code paths under pytest.
 
 ### Phase 2 — Harden (C)  ·  ~4 tasks
 
-D-Bus + polkit control plane; dead keyboard-code deletion; CI depth (headless
-GUI smoke, `ruff`, `mypy`, more `powerd` tests).
+~~D-Bus + polkit control plane~~ (built then **reverted** — the tweak's
+system-bus policy bricked the g15 boot; dbus-broker rejects `send_interface=`
+in a policy `<allow>` and only parses it at boot. Socket stays the control
+plane; retry only with VM boot-testing). Dead keyboard-code deletion (Phase P);
+CI depth (headless GUI smoke, `ruff` blocking + clean, advisory `mypy`).
 
 ### Checkpoint 2
 - [ ] `busctl` shows `org.tuxthrottle.Daemon`; a polkit prompt gates a profile
