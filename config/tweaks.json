@@ -604,6 +604,20 @@
       "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus python3 {TOOLKIT_DIR}/tuxthrottle_kde_panel.py panel-floating on"
     ]
   },
+  "KdeKwalletOff": {
+    "Content": "KDE: disable KWallet (password wallet / GPG-SSH passphrase prompts)",
+    "Description": "Turns KWallet off entirely (kwalletrc [Wallet] Enabled=false + First Use=false) and stops the running kwalletd. KWallet is the KDE secret store that pops the 'unlock your wallet' dialog at login and caches GPG / SSH key passphrases and app secrets (Chromium, KMail, network passwords) behind it — this removes that prompt. Apps then fall back to their own storage (or an unencrypted plaintext store, or asking each time), so only apply this if the login-time wallet prompt bothers you more than per-app secret storage does. Fully reversible: undo deletes the keys (KWallet re-enables itself on next use). Takes effect next login; the current session's kwalletd is killed so it stops prompting now.",
+    "category": "KDE (Desktop GUI Tweaks)",
+    "risk": "safe",
+    "check": "[ \"$(sudo -u {USER} -H kreadconfig6 --file kwalletrc --group Wallet --key Enabled 2>/dev/null)\" = \"false\" ]",
+    "apply": [
+      "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file kwalletrc --group Wallet --key Enabled false; kwriteconfig6 --file kwalletrc --group Wallet --key \"First Use\" false; { kquitapp6 kwalletd6 || kquitapp6 kwalletd5 || pkill -x kwalletd6 || pkill -x kwalletd5 || pkill -x kwalletd; } >/dev/null 2>&1 || true'"
+    ],
+    "undo": [
+      "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file kwalletrc --group Wallet --key Enabled --delete; kwriteconfig6 --file kwalletrc --group Wallet --key \"First Use\" --delete'"
+    ],
+    "recommended": true
+  },
   "DesktopLauncher": {
     "Content": "Add to the application menu",
     "Description": "Installs a .desktop entry (with the flaming-gauge icon) into your application menu / launcher so you can start the Toolkit without a terminal. Points at wherever this repo currently lives. Reversible.",
