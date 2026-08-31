@@ -91,19 +91,18 @@ bridge only (post-game summary + scheduled profiles → backlog).
       *Accept:* CI green with the new jobs; lint baseline recorded.
 - [ ] **2.4 Checkpoint 2.**
 
-## Phase 3 — New capability (D) — user picks 2–3
+## Phase 3 — New capability (D) — user picked 3.1 + 3.2
 
-- [ ] **3.1 Battery health page** (recommend) — wear %, cycle count, design vs
-      full capacity + charge-limit controls on one nav page. Pure sysfs.
-- [ ] **3.2 Post-game session summary** (recommend) — daemon accumulates max
-      tctl / avg clocks / throttle seconds per game session →
-      `last_session.json` → GUI card.
-- [ ] **3.3 Scheduled / conditional profiles** — `powerd.json` `schedule` block
-      (time-of-day, AC state) → `apply_state`.
-- [ ] **3.4 (stretch) MangoHud bridge** — `clients/mangohud/` custom line.
-- [ ] **3.5 Checkpoint 3.**
+- [ ] **3.1 Battery health page** — wear %, cycle count, design vs full
+      capacity + charge-limit controls on one nav page. Pure sysfs, model-
+      agnostic.
+- [ ] **3.2 MangoHud bridge** — `clients/mangohud/` custom overlay line fed by
+      `tuxthrottlectl status --json` (profile / TDP / temps in-game).
+- [ ] **3.3 Checkpoint 3.**
 
 ## Deferred / not now
 
 - Direction A: COPR release, `v*` tag, CHANGELOG — after B/C/D land on the g15.
 - D-Bus item was also Tier-3-deferred; now folded into 2.1.
+- Phase 3 backlog (not this round): post-game session summary; scheduled /
+  conditional profiles (`powerd.json` `schedule` block).
