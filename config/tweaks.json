@@ -778,9 +778,9 @@
     "apply": [
       "chmod +x {TOOLKIT_DIR}/tuxthrottle_profiles.py",
       "mkdir -p /usr/lib/systemd/system-sleep",
-      "cat > /usr/lib/systemd/system-sleep/tuxthrottle-reassert <<'HOOK'\n#!/usr/bin/env bash\n[ \"$1\" = post ] && /usr/bin/python3 {TOOLKIT_DIR}/tuxthrottle_profiles.py reassert --user {USER} || true\nHOOK",
+      "cat > /usr/lib/systemd/system-sleep/tuxthrottle-reassert <<'HOOK'\n#!/usr/bin/env bash\n[ \"$1\" = post ] && /usr/bin/python3 {TOOLKIT_DIR}/tuxthrottle_profiles.py --user {USER} reassert || true\nHOOK",
       "chmod +x /usr/lib/systemd/system-sleep/tuxthrottle-reassert",
-      "cat > /etc/systemd/system/tuxthrottle-reassert.service <<'UNIT'\n[Unit]\nDescription=Re-apply last TuxThrottle power state at boot\nAfter=multi-user.target\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/usr/bin/python3 {TOOLKIT_DIR}/tuxthrottle_profiles.py reassert --user {USER}\n\n[Install]\nWantedBy=multi-user.target\nUNIT",
+      "cat > /etc/systemd/system/tuxthrottle-reassert.service <<'UNIT'\n[Unit]\nDescription=Re-apply last TuxThrottle power state at boot\nAfter=multi-user.target\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/usr/bin/python3 {TOOLKIT_DIR}/tuxthrottle_profiles.py --user {USER} reassert\n\n[Install]\nWantedBy=multi-user.target\nUNIT",
       "systemctl daemon-reload",
       "systemctl enable --now tuxthrottle-reassert.service || true"
     ],

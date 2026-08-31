@@ -314,20 +314,29 @@ def _print_results(rows: list[dict]) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(prog="tuxthrottle_profiles", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    # These flags are accepted BOTH before and after the subcommand — the boot
+    # service / sleep hook pass `--user NAME` and arg order there has bitten us.
+    # The top-level parser supplies the default; the parent (SUPPRESS) only
+    # overrides when the flag actually appears after the subcommand.
     ap.add_argument("--user")
     ap.add_argument("--with-gpu-mode", action="store_true")
     ap.add_argument("--json", action="store_true")
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--user", default=argparse.SUPPRESS)
+    common.add_argument("--with-gpu-mode", action="store_true",
+                        default=argparse.SUPPRESS)
+    common.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("capture", "apply", "show", "delete"):
-        sp = sub.add_parser(name)
+        sp = sub.add_parser(name, parents=[common])
         sp.add_argument("name")
-    sub.add_parser("list")
-    sp = sub.add_parser("snapshot")
+    sub.add_parser("list", parents=[common])
+    sp = sub.add_parser("snapshot", parents=[common])
     sp.add_argument("label", nargs="?", default="manual")
-    sub.add_parser("snapshots")
-    sp = sub.add_parser("rollback")
+    sub.add_parser("snapshots", parents=[common])
+    sp = sub.add_parser("rollback", parents=[common])
     sp.add_argument("target", nargs="?", default="last")
-    sub.add_parser("reassert")
+    sub.add_parser("reassert", parents=[common])
 
     a = ap.parse_args()
     u = a.user
