@@ -860,16 +860,16 @@
   },
   "SplitLockMitigateOff": {
     "Content": "Disable split-lock detection (removes a big stall penalty in some games)",
-    "Description": "The kernel's split-lock detector stalls a thread hard (tens of ms) whenever a misaligned locked memory op crosses a cache line — a pattern some games / anti-cheats hit, costing 20–40% FPS. Sets kernel.split_lock_mitigate=0 via /etc/sysctl.d/, applied now and at boot. No downside on a personal gaming machine. Reversible.",
+    "Description": "The kernel's split-lock detector stalls a thread hard (tens of ms) whenever a misaligned locked memory op crosses a cache line — a pattern some games / anti-cheats hit, costing 20–40% FPS. Sets kernel.split_lock_mitigate=0 via /etc/sysctl.d/, applied now and at boot. Only matters on CPUs that support split-lock detection (Intel Tremont+, AMD Zen 4+) — a harmless no-op on the Ryzen 7 5800H (Zen 3), which has no such sysctl. No downside on a personal gaming machine. Reversible.",
     "category": "Performance",
     "risk": "safe",
-    "check": "[ \"$(sysctl -n kernel.split_lock_mitigate 2>/dev/null)\" = \"0\" ]",
+    "check": "v=$(sysctl -n kernel.split_lock_mitigate 2>/dev/null); [ -z \"$v\" ] || [ \"$v\" = \"0\" ]",
     "reinstall_if": [
       "/etc/sysctl.d/99-tuxthrottle-splitlock.conf"
     ],
     "apply": [
       "printf 'kernel.split_lock_mitigate = 0\\n' > /etc/sysctl.d/99-tuxthrottle-splitlock.conf",
-      "sysctl -w kernel.split_lock_mitigate=0"
+      "sysctl -w kernel.split_lock_mitigate=0 2>/dev/null || true"
     ],
     "undo": [
       "rm -f /etc/sysctl.d/99-tuxthrottle-splitlock.conf",
@@ -878,21 +878,26 @@
   },
   "SchedExtGaming": {
     "Content": "sched-ext: run the scx_lavd low-latency scheduler (Steam Deck's)",
-    "Description": "Installs scx-scheds and runs scx_lavd — the sched_ext scheduler Valve ships on the Steam Deck, tuned for low frame-time variance under gaming load, and fine as a full-time desktop scheduler. Needs kernel 6.12+ with sched_ext (Nobara/Fedora 43 has it). Sets SCX_SCHEDULER=scx_lavd in /etc/default/scx and enables scx.service. Reversible with no reboot — undo stops the service and the kernel falls back to its default scheduler.",
+    "Description": "Installs scx-scheds and runs scx_lavd — the sched_ext scheduler Valve ships on the Steam Deck, tuned for low frame-time variance under gaming load, and fine as a full-time desktop scheduler. Needs kernel 6.12+ with sched_ext (Nobara/Fedora 43+ has it). Runs it as a small systemd service (tuxthrottle-scx.service) so it also comes up at boot; the kernel falls back to its default scheduler the moment the service stops. Reversible, no reboot.",
     "category": "Performance",
     "risk": "advanced",
-    "check": "[ -e /sys/kernel/sched_ext/root/ops ] && systemctl is-active --quiet scx.service 2>/dev/null",
+    "check": "systemctl is-active --quiet tuxthrottle-scx.service && [ -e /sys/kernel/sched_ext/root/ops ]",
     "reinstall_if": [
-      "/etc/default/scx"
+      "/etc/systemd/system/tuxthrottle-scx.service"
     ],
     "apply": [
       "command -v scx_lavd >/dev/null 2>&1 || dnf install -y scx-scheds",
-      "printf 'SCX_SCHEDULER=scx_lavd\\nSCX_FLAGS=\\\"\\\"\\n' > /etc/default/scx",
-      "systemctl enable --now scx.service"
+      "test -e /sys/kernel/sched_ext || { echo 'TuxThrottle: this kernel has no sched_ext (need 6.12+)'; exit 1; }",
+      "printf '%s\\n' '[Unit]' 'Description=TuxThrottle: scx_lavd sched-ext scheduler' 'ConditionPathExists=/sys/kernel/sched_ext' 'After=multi-user.target' '' '[Service]' 'Type=simple' 'ExecStart=/usr/bin/scx_lavd' 'Restart=on-failure' 'RestartSec=3' 'Nice=-5' '' '[Install]' 'WantedBy=multi-user.target' > /etc/systemd/system/tuxthrottle-scx.service",
+      "systemctl daemon-reload",
+      "systemctl enable --now tuxthrottle-scx.service",
+      "for k in $(seq 1 25); do [ -e /sys/kernel/sched_ext/root/ops ] && break; sleep 1; done",
+      "[ -e /sys/kernel/sched_ext/root/ops ] || { echo 'TuxThrottle: scx_lavd did not attach in 25s — see journalctl -u tuxthrottle-scx'; exit 1; }"
     ],
     "undo": [
-      "systemctl disable --now scx.service 2>/dev/null || true",
-      "rm -f /etc/default/scx"
+      "systemctl disable --now tuxthrottle-scx.service 2>/dev/null || true",
+      "rm -f /etc/systemd/system/tuxthrottle-scx.service",
+      "systemctl daemon-reload"
     ]
   },
   "MangoHudGamingPreset": {

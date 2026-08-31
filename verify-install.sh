@@ -43,6 +43,11 @@ python3 -c "import sys; sys.path.insert(0,'/opt/tuxthrottle'); import tuxthrottl
     && ok "tuxthrottle_kbd + sensors import" || no "module import error"
 python3 /opt/tuxthrottle/tuxthrottle_kbd.py --help >/dev/null 2>&1 \
     && ok "tuxthrottle_kbd CLI responds" || no "tuxthrottle_kbd CLI error"
+python3 -c "import sys; sys.path.insert(0,'/opt/tuxthrottle'); import sensors, json; \
+[getattr(sensors,f) for f in ('battery_health_info','battery_charge_mode','nvidia_powerd_status','amd_pstate_mode','vrr_status')]; \
+d=json.load(open('/opt/tuxthrottle/config/tweaks.json')); \
+assert all(k in d for k in ('NvidiaShaderCache','SchedExtGaming','SplitLockMitigateOff','KwinAllowTearing','MangoHudGamingPreset')), 'gaming tweaks missing'" >/dev/null 2>&1 \
+    && ok "gaming helpers + tweaks present" || no "gaming helpers/tweaks missing"
 grep -rIl 'dellg15' /opt/tuxthrottle --include='*.py' >/dev/null 2>&1 \
     && no "'dellg15' still in /opt/tuxthrottle/*.py" || ok "no 'dellg15' token in installed .py"
 

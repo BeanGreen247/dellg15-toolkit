@@ -1843,15 +1843,18 @@ class ToolkitApp:
         self._build_battery_section(frame, prefix="_bath_bat")
 
         # --- charging speed (Dell libsmbios) ---
-        mode = sensors.battery_charge_mode()
-        if mode is not None:
+        if sensors._smbios_battery_ctl():
+            mode = sensors.battery_charge_mode()
             cf = tb.Labelframe(frame, text="Charging speed", padding=12)
             cf.pack(fill="x", pady=6)
+            note = ("Express charges the pack faster (more heat, a little more "
+                    "wear); Standard is the gentler default. Firmware setting — "
+                    "persists with no service.")
+            if mode is None:
+                note += "  (current mode unreadable on this firmware — setting still works)"
             tb.Label(cf, bootstyle=SECONDARY, wraplength=1000, justify="left",
-                     text="Express charges the pack faster (more heat, a little "
-                          "more wear); Standard is the gentler default. Firmware "
-                          "setting — persists with no service.").pack(anchor="w", pady=(0, 6))
-            self._chg_mode = tk.StringVar(value=mode)
+                     text=note).pack(anchor="w", pady=(0, 6))
+            self._chg_mode = tk.StringVar(value=mode or "standard")
             row = tb.Frame(cf); row.pack(anchor="w")
             for m in ("standard", "express"):
                 tb.Radiobutton(row, text=m.capitalize(), value=m,
