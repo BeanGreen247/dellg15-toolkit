@@ -7,7 +7,9 @@ Thin read-mostly front-ends over `tuxthrottlectl status --json`. They ship as
 
 A `return-type: "json"` custom module: CPU/dGPU temp + a one-letter profile
 badge, a `class` of cool/warm/hot/critical for CSS, and `--toggle` on
-`on-click` to flip balanced ↔ performance.
+`on-click` to flip balanced ↔ performance. The toggle tries `tuxthrottlectl`
+directly, then `pkexec tuxthrottlectl` (passwordless with the
+**PolkitTuxthrottlectl** tweak, otherwise an auth dialog).
 
 ```jsonc
 "custom/tuxthrottle": {
@@ -37,9 +39,11 @@ kpackagetool6 --type Plasma/Applet --upgrade  clients/plasmoid/package
 
 Then add the **TuxThrottle** widget to a panel or the desktop.
 
-The profile buttons run `tuxthrottlectl set power-profile …`, which needs root —
-either the `tuxthrottled` control socket (FanCurveDaemon tweak) is up, or add a
-sudoers rule. Without one, the buttons are a no-op and the temps still update.
+The profile buttons run `pkexec /usr/local/bin/tuxthrottlectl set power-profile …`.
+Apply the **PolkitTuxthrottlectl** tweak (Power tab) and that runs passwordlessly
+for an active local user; otherwise `pkexec` shows a normal auth dialog (or the
+`tuxthrottled` control socket handles it if the FanCurveDaemon tweak is on). The
+temps update regardless.
 
 ## MangoHud — `mangohud/tuxthrottle-mangohud`
 

@@ -49,22 +49,21 @@ jobs:
 
   typecheck:
     runs-on: ubuntu-latest
-    continue-on-error: true   # advisory until the annotations catch up
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: pip install mypy
-      - name: mypy (core stdlib modules)
+      - name: mypy (core stdlib modules — gating)
         run: |
           mypy --ignore-missing-imports --no-error-summary \
+            --disable-error-code=annotation-unchecked \
             sensors.py tuxthrottle_control.py tuxthrottle_modelgen.py \
-            tuxthrottlectl.py tuxthrottle_profiles.py
+            tuxthrottlectl.py tuxthrottle_profiles.py tuxthrottle_powerd.py
 
   gui-smoke:
     runs-on: ubuntu-latest
-    continue-on-error: true   # headless Tk on CI is best-effort
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

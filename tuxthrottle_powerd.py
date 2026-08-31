@@ -54,13 +54,14 @@ import signal
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import sensors  # noqa: E402  (sibling module, stdlib-only)
 import tuxthrottle_control as control  # noqa: E402  (stdlib-only RPC socket)
 import tuxthrottle_profiles as profiles  # noqa: E402
 
-DEFAULTS = {
+DEFAULTS: dict[str, Any] = {
     "poll_s": 2,
     "fan_curve": {
         "enabled": False,

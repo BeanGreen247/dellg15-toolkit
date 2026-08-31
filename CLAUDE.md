@@ -272,14 +272,21 @@ ssh g15 'cd ~/tuxthrottle && sudo ./install.sh'    # system-install to /opt
   env override; `sensors.model_allows()` / `model_skips_tweak()` gate tweaks per
   board; a **Battery** health page + a `clients/mangohud/` bridge; CI gained
   `ruff` (blocking) + advisory `mypy` / headless GUI-smoke.
-- **D-Bus/polkit: attempted then reverted (2026-08-31).** A `DbusPolkitIntegration`
-  tweak that installed a system-bus policy + polkit rule **hard-bricked the g15's
-  boot** — `dbus-broker` refuses to start the system bus when a `system.d`
-  policy contains a `send_interface=` clause in an `<allow>` rule, and it only
-  parses that file at boot (so it passed a live `ReloadConfig`). Recovery =
-  boot with `3`, delete the three files, `systemctl disable tuxthrottle-powerd`.
-  The whole D-Bus layer (`tuxthrottle_dbus.py`, the tweak, `dbus/`, `polkit/`)
-  was removed; **the `/run/tuxthrottle/control.sock` socket stays the only
-  control plane.** Any future D-Bus work must be boot-tested in a VM first, and
-  never use `send_interface` in a policy `<allow>`.
+- **D-Bus system-bus service: attempted then reverted (2026-08-31).** A
+  `DbusPolkitIntegration` tweak's `system.d` bus policy **hard-bricked the g15's
+  boot** — `dbus-broker` refuses to start the system bus over a `send_interface=`
+  clause in an `<allow>` rule, and only parses that file at boot (passed a live
+  `ReloadConfig`). The whole D-Bus layer was removed; **`/run/tuxthrottle/control.sock`
+  is the only IPC control plane.** Any future D-Bus work: boot-test in a VM
+  first, never `send_interface` in a policy `<allow>`.
+- **polkit (no D-Bus): `PolkitTuxthrottlectl` tweak (2026-08-31).** Installs
+  ONE `.policy` file (`polkit/org.tuxthrottle.policy`) to
+  `/usr/share/polkit-1/actions/` — action `org.tuxthrottle.manage`,
+  `allow_active=yes` (`allow_any`/`allow_inactive`=`auth_admin`),
+  `exec.path=/usr/local/bin/tuxthrottlectl`. So `pkexec tuxthrottlectl set …` is
+  passwordless for an active local user. No `.rules` file, no bus policy — a
+  `.policy` file can't wedge anything; polkitd skips one it can't parse. The
+  `apply` verifies with `pkaction` and self-rolls-back on rejection. The
+  waybar (`_ctl_root`) + plasmoid (`setProfile`) clients use `pkexec
+  tuxthrottlectl` for the profile switch.
 - COPR release (direction A) still deferred. Full plan in `tasks/plan.md` + `tasks/todo.md`.

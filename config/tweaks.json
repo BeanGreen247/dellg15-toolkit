@@ -805,6 +805,26 @@
     ],
     "recommended": true
   },
+  "PolkitTuxthrottlectl": {
+    "Content": "polkit action for pkexec tuxthrottlectl (no broad sudoers)",
+    "Description": "Installs a single polkit action (org.tuxthrottle.manage) so 'pkexec tuxthrottlectl set …' / 'pkexec tuxthrottlectl profile apply …' run for an active local user WITHOUT a password prompt, instead of needing a broad sudoers rule or the daemon socket. This is what lets the waybar / KDE-plasmoid profile buttons switch the power profile on their own. Remote / ssh / inactive sessions still require admin auth (allow_any/allow_inactive = auth_admin). It is a plain .policy file in /usr/share/polkit-1/actions/ — NOT a D-Bus bus policy — so it can't wedge the system bus; polkitd simply ignores a file it can't parse. The apply step verifies the action loaded (pkaction) and rolls itself back if polkit rejected it. Reversible — undo removes the file and reloads polkit.",
+    "category": "Power",
+    "risk": "advanced",
+    "check": "pkaction --action-id org.tuxthrottle.manage >/dev/null 2>&1",
+    "reinstall_if": [
+      "/usr/share/polkit-1/actions/org.tuxthrottle.policy"
+    ],
+    "apply": [
+      "install -Dm644 {TOOLKIT_DIR}/polkit/org.tuxthrottle.policy /usr/share/polkit-1/actions/org.tuxthrottle.policy",
+      "systemctl try-restart polkit >/dev/null 2>&1 || true",
+      "sleep 1",
+      "if pkaction --action-id org.tuxthrottle.manage >/dev/null 2>&1; then echo 'TuxThrottle: polkit action org.tuxthrottle.manage registered'; else echo 'TuxThrottle: polkit did NOT accept the action — rolling back'; rm -f /usr/share/polkit-1/actions/org.tuxthrottle.policy; systemctl try-restart polkit >/dev/null 2>&1 || true; exit 1; fi"
+    ],
+    "undo": [
+      "rm -f /usr/share/polkit-1/actions/org.tuxthrottle.policy",
+      "systemctl try-restart polkit >/dev/null 2>&1 || true"
+    ]
+  },
   "DellBatteryThreshold": {
     "Content": "Dell battery threshold (libsmbios)",
     "Description": "The G15 5515 has no kernel charge_control_end_threshold, but Dell firmware supports a 'custom' charge interval stored in NVRAM. This installs libsmbios (smbios-battery-ctl); the Power & Limits tab then sets the stop-charging percentage through it and it persists in firmware across reboots \u2014 no service needed. Undo removes the package only; any interval you set stays in firmware until you set it back to 100 %/standard.",

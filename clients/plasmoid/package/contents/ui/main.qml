@@ -1,9 +1,11 @@
 /*
  * TuxThrottle plasmoid — reads `tuxthrottlectl status --json` on a timer and
  * shows CPU/GPU temps in the panel with a click-to-switch power profile.
- * Read-only except the two profile buttons (which shell `tuxthrottlectl set
- * power-profile ...` — that needs the sudoers rule from the RyzenAdjTDP tweak,
- * or the tuxthrottled control socket, to work without a password prompt).
+ * Read-only except the two profile buttons: they run
+ * `pkexec /usr/local/bin/tuxthrottlectl set power-profile ...`. The
+ * PolkitTuxthrottlectl tweak makes that passwordless for an active local
+ * user; without it (or the tuxthrottled control socket) pkexec shows a
+ * normal auth dialog.
  */
 import QtQuick
 import QtQuick.Layouts
@@ -59,7 +61,9 @@ PlasmoidItem {
     }
 
     function setProfile(p) {
-        exec.run("python3 " + root.ctl + " set power-profile " + p)
+        // pkexec against the installed launcher — path must match the
+        // PolkitTuxthrottlectl action's exec.path annotation exactly.
+        exec.run("pkexec /usr/local/bin/tuxthrottlectl set power-profile " + p)
     }
 
     toolTipMainText: "TuxThrottle"

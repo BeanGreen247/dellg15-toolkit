@@ -59,6 +59,13 @@ tuxthrottlectl collect-model 2>/dev/null | python3 -c "import json,sys; d=json.l
     && ok "'tuxthrottlectl collect-model' emits a valid scaffold" || no "'tuxthrottlectl collect-model' failed"
 python3 -c "import sys,os; sys.path.insert(0,'/opt/tuxthrottle'); os.environ['TUXTHROTTLE_MODEL']='_test-fixture'; import sensors; assert sensors.model_id()=='_test-fixture' and sensors._pwm_floor()==90" >/dev/null 2>&1 \
     && ok "TUXTHROTTLE_MODEL override + profile-routed accessors work" || no "TUXTHROTTLE_MODEL override failed"
+if [ -f /usr/share/polkit-1/actions/org.tuxthrottle.policy ]; then
+    pkaction --action-id org.tuxthrottle.manage >/dev/null 2>&1 \
+        && ok "polkit: org.tuxthrottle.manage action registered" \
+        || no "PolkitTuxthrottlectl installed but polkitd didn't load the action"
+else
+    ok "polkit action not installed (PolkitTuxthrottlectl tweak is opt-in)"
+fi
 
 hdr "GUI — Report a Bug page"
 XAUTHORITY=$(ls -t /run/user/1000/xauth* 2>/dev/null | head -1) DISPLAY=:0 python3 - <<'PY' 2>&1 | sed 's/^/  /'

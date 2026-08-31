@@ -28,6 +28,7 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 RUN_DIR = Path("/run/tuxthrottle")
 SOCKET_PATH = RUN_DIR / "control.sock"
@@ -96,7 +97,7 @@ class _RPCHandler(socketserver.StreamRequestHandler):
     timeout = 10
 
     def handle(self) -> None:
-        server = self.server  # the _Srv instance; carries .methods
+        server: Any = self.server  # the _Srv instance; carries .methods
         try:
             raw = self.rfile.readline()
         except OSError:
@@ -154,6 +155,7 @@ class ControlServer:
         class _Srv(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
             daemon_threads = True
             allow_reuse_address = True
+            methods: dict[str, Handler] = {}
 
         self._srv = _Srv(str(self.path), _RPCHandler)
         self._srv.methods = self.methods   # the handler reads this off self.server

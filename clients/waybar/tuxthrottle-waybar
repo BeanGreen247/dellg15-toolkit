@@ -19,6 +19,7 @@ waybar config:
     }
 """
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -31,6 +32,26 @@ def _ctl(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True, timeout=15)
 
 
+def _ctl_root(*args: str) -> subprocess.CompletedProcess:
+    """A privileged tuxthrottlectl call (set / profile apply). Tries directly
+    first (works when tuxthrottled's socket is up), then via `pkexec` — the
+    PolkitTuxthrottlectl tweak makes that passwordless for an active local
+    user; without it pkexec shows a normal auth dialog."""
+    r = _ctl(*args)
+    if r.returncode == 0 or os.geteuid() == 0:
+        return r
+    exe = shutil.which("pkexec")
+    ctl = shutil.which("tuxthrottlectl") or "/usr/local/bin/tuxthrottlectl"
+    if not exe:
+        return r
+    try:
+        return subprocess.run([exe, ctl, *args], capture_output=True,
+                              text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:
+        r.stderr = (r.stderr or "") + f"\npkexec: {exc}"
+        return r
+
+
 def _emit(obj: dict) -> None:
     print(json.dumps(obj), flush=True)
 
@@ -39,7 +60,7 @@ def toggle() -> int:
     st = _status()
     cur = (st.get("platform_profile") or "balanced").lower()
     nxt = "performance" if cur != "performance" else "balanced"
-    r = _ctl("set", "power-profile", nxt)
+    r = _ctl_root("set", "power-profile", nxt)
     _emit({"text": f" {nxt}", "tooltip": r.stdout.strip() or r.stderr.strip()})
     return r.returncode
 
