@@ -41,9 +41,8 @@ grep -qi 'tuxthrottle\|G15 5515' /tmp/tt_report.txt && ok "--report produced a s
 hdr "python modules"
 python3 -c "import sys; sys.path.insert(0,'/opt/tuxthrottle'); import tuxthrottle_kbd, sensors; print(1)" >/dev/null 2>&1 \
     && ok "tuxthrottle_kbd + sensors import" || no "module import error"
-python3 /opt/tuxthrottle/tuxthrottle_kbd.py rainbow-test >/dev/null 2>&1 \
-    && python3 /opt/tuxthrottle/tuxthrottle_kbd.py gradient-test >/dev/null 2>&1 \
-    && ok "kbd self-tests pass" || no "kbd self-tests fail"
+python3 /opt/tuxthrottle/tuxthrottle_kbd.py --help >/dev/null 2>&1 \
+    && ok "tuxthrottle_kbd CLI responds" || no "tuxthrottle_kbd CLI error"
 grep -rIl 'dellg15' /opt/tuxthrottle --include='*.py' >/dev/null 2>&1 \
     && no "'dellg15' still in /opt/tuxthrottle/*.py" || ok "no 'dellg15' token in installed .py"
 

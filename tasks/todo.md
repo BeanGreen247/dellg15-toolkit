@@ -1,33 +1,109 @@
-# TuxThrottle — todo
+# TuxThrottle — todo: "gaming-laptop tool, not one laptop's tool"
 
-## Done (2026-08-30)
-- Backlog phases 1-8: CPU TDP (ryzenadj), battery limit (sysfs + libsmbios),
-  NVIDIA power limit, GameMode bridge, closed-loop fan curve + AC/battery
-  auto-switch, tuxthrottlectl, hybrid-GPU switch, CPU/iGPU/dGPU clock gauges.
-- Polish: README/CLAUDE.md, dnf-metadata age, RAPL auto-hide.
-- Scrollable nav rail (256px) + pinned About/Report a Bug + About page + screenshot.
-- Tier 1: tuxthrottle_profiles.py (named profiles + auto snapshot/rollback),
-  Profiles tab, tuxthrottlectl profile|snapshot|rollback, snapshot-before-Apply,
-  StateResume tweak, Dashboard history sparklines + session CSV.
-- Tier 2: per-game auto-profiles (GameProfileController in the daemon + editor),
-  unified resume re-assert (StateResume).
-- KDE (Desktop GUI Tweaks) category — 7 Plasma-6 toggles.
-- tests/ (31 pytest) + .github/workflows/ci.yml.
-- install.sh dependency hardening.
-- KDE (Desktop GUI Tweaks): 9 toggles, all verified LIVE on g15 (2026-08-30).
-  Fixed 3 that were applied-but-no-op: KdeScreenEdgesOff (added [Effect-*]
-  BorderActivate=9 hot corners), KdeAnimationsOff (unloadEffect via D-Bus),
-  KdeActivitiesRecentOff (real ResourceScoringEnabled plugin key). qdbus6
-  doesn't exist on Nobara -> qdbus-qt6/dbus-send. See memory tuxthrottle-kde-tweaks.
-- README + CLAUDE.md updated (Profiles tab, KDE section, new helper files, KDE gotchas).
+Full plan: `tasks/plan.md`. Prior (completed) backlog archived at
+`tasks/*-archive-2026-08-backlog.md`. g15 stays the test machine; COPR release
+(direction A) deferred.
 
-## Tier 3 — deferred (full plan: ~/tuxthrottle-tier3-followups-2026-08-31.md)
-- [ ] COPR / RPM packaging
-- [ ] thermal-event notifications (in the daemon)
-- [ ] Ryzen Curve Optimizer undervolt + stress-test/auto-revert harness
-- [ ] multi-model DMI gating (needs another machine's --collect bundle)
-- [ ] KDE Plasmoid / waybar client (reads tuxthrottlectl --json)
-- [ ] single-writer control plane: powerd control socket, then D-Bus + polkit
+**Order:** dead-code deletion (was 2.2) is pulled to the front — it shrinks
+`tuxthrottle_kbd.py` before Phase 0 routes it through the model profile. Then
+Phase 0 → 1 → rest of 2 → 3. Phase 3 scope = Battery health page + MangoHud
+bridge only (post-game summary + scheduled profiles → backlog).
 
-## Deferred (own branch, needs kbd hardware)
-- [ ] delete dead rainbow_wave/gradient_wave/_Sdk/_stream_wave from tuxthrottle_kbd.py
+## Phase P — Dead keyboard code deletion (pulled forward from 2.2)
+
+- [x] **P.1 Branch `chore/kbd-dead-code`.** Audit every `stop_fx()` call-site in
+      live paths first; note what each does and its replacement (usually nothing).
+- [x] **P.2 Delete** `rainbow_wave` / `gradient_wave` / `_Sdk` / `_stream_wave` /
+      `stop_fx` and any now-orphaned helpers (`fx.pid` handling, SDK-socket code
+      kept only for the waves).
+- [x] **P.3 `verify-install.sh`** — drop the `rainbow-test` / `gradient-test`
+      invocations; keep the rest of the keyboard block.
+- [ ] **P.4 Deploy to g15 + camera-verify** solid colour, Spectrum Cycle,
+      brightness up/down, off. `verify-install.sh` still passes (minus removed).
+      *Accept:* ~600 fewer lines in `tuxthrottle_kbd.py`; no `stop_fx` references
+      anywhere; keyboard features work on the g15.
+- [ ] **P.5** Merge `chore/kbd-dead-code` → main.
+
+## Phase 0 — Model-profile plumbing (spine)
+
+- [ ] **0.1 Schema pass on `models/g15-5515.json`.** Confirm every hard-coded
+      value in `sensors.py` has a home in the schema; add missing fields with the
+      current 5515 value. Fields at least: `cpu.hwmon`, `fans.hwmon`,
+      `fans.pwm_hwmon`, `fans.pwm_floor`, `fans.platform_profile_path`,
+      `fans.count`, `battery.method`, `keyboard.*`, `gkey.*`.
+      *Accept:* schema documented in `models/README.md`; `g15-5515.json` validates
+      against it in CI.
+- [ ] **0.2 `sensors.py` accessors + routing.** Add `_prof_*()` helpers reading
+      `model_profile()` with the current constant as fallback. Route: `k10temp`
+      (L140), `_PLATFORM_PROFILE` (L440), `PWM_FLOOR` (L441), `alienware_wmi` /
+      `dell_smm` names, fan-index count, battery method branch.
+      *Accept:* no literal `"k10temp"` / `"alienware_wmi"` / `"dell_smm"` /
+      `/sys/firmware/acpi/platform_profile` left outside a `_prof_*` fallback;
+      `--report` on g15 unchanged.
+- [ ] **0.3 `tuxthrottle_kbd.py` + `hotkey_listener.py` routing.** OpenRGB device
+      name, zone count, effect list, `brightness_on` from `keyboard.*`; evdev
+      device + keycodes from `gkey.*`.
+      *Accept:* keyboard solid-colour + spectrum still work on g15; G-key still
+      toggles Game Mode.
+- [ ] **0.4 Fallback tests.** `tests/test_model_routing.py`: profile field
+      present → used; absent → 5515 fallback; unknown DMI → g15-5515 profile.
+      *Accept:* pytest green, coverage on every `_prof_*` helper.
+- [ ] **0.5 Checkpoint 0** — byte-diff `--report`, `verify-install.sh` 27/0,
+      headless GUI smoke, pytest. Commit `refactor(sensors): route hw specifics
+      through model_profile`.
+
+## Phase 1 — Second-model onboarding (B)
+
+- [ ] **1.1 `tuxthrottlectl collect-model`.** Emit `models/<slug>.json` scaffold
+      from the live machine: DMI match block, detected CPU/fan hwmon names, PCI
+      ids, platform_profile path + choices, fan count, battery-method probe,
+      OpenRGB device if present. Unknown fields → `null` + a `TODO` comment key.
+      *Accept:* run on g15 reproduces every *detectable* field of
+      `g15-5515.json`.
+- [ ] **1.2 `TUXTHROTTLE_MODEL=<slug>` override.** Force a profile regardless of
+      DMI; `sensors` logs a loud one-line warning; guarded so it's obviously
+      dev-only.
+      *Accept:* override selects the fixture profile under pytest; warning present.
+- [ ] **1.3 Gating audit.** `models/_test-fixture.json` (non-5515, with
+      `tweaks_skip` + `requires_models` entries). Verify `_apply_vendor_gate` /
+      `Item.requires_models` / `tweaks_skip` hide the right tweaks/apps.
+      *Accept:* fixture test asserts hidden vs shown item sets.
+- [ ] **1.4 `models/README.md` onboarding guide.** Step-by-step: run
+      `--collect`, run `collect-model`, fill the TODO fields, test with
+      `TUXTHROTTLE_MODEL`, add `requires_models` gates, PR.
+      *Accept:* a reader with a new laptop could follow it unaided.
+- [ ] **1.5 Checkpoint 1.**
+
+## Phase 2 — Harden (C)
+
+- [ ] **2.1 D-Bus + polkit control plane.** `org.tuxthrottle.Daemon1` system
+      service in `tuxthrottle_powerd` (same dispatch as the socket); polkit
+      `.policy` for profile-apply / set / snapshot / rollback. `tuxthrottlectl`
+      + GUI try D-Bus → socket → direct. Remove sudoers rules the polkit actions
+      replace (tweak `undo` + re-`apply`).
+      *Accept:* `busctl introspect` shows the interface; non-root GUI profile
+      apply raises a polkit prompt; socket + direct fallbacks still pass their
+      tests.
+- [x] **2.2 Dead keyboard code** — pulled forward, see Phase P.
+- [ ] **2.3 CI depth.** Headless Xvfb GUI-smoke job (build `ToolkitApp`, pump
+      `update()`); `ruff` + `mypy` steps (start non-blocking, then gate); extra
+      `powerd` tests (fan-curve interp, schedule).
+      *Accept:* CI green with the new jobs; lint baseline recorded.
+- [ ] **2.4 Checkpoint 2.**
+
+## Phase 3 — New capability (D) — user picks 2–3
+
+- [ ] **3.1 Battery health page** (recommend) — wear %, cycle count, design vs
+      full capacity + charge-limit controls on one nav page. Pure sysfs.
+- [ ] **3.2 Post-game session summary** (recommend) — daemon accumulates max
+      tctl / avg clocks / throttle seconds per game session →
+      `last_session.json` → GUI card.
+- [ ] **3.3 Scheduled / conditional profiles** — `powerd.json` `schedule` block
+      (time-of-day, AC state) → `apply_state`.
+- [ ] **3.4 (stretch) MangoHud bridge** — `clients/mangohud/` custom line.
+- [ ] **3.5 Checkpoint 3.**
+
+## Deferred / not now
+
+- Direction A: COPR release, `v*` tag, CHANGELOG — after B/C/D land on the g15.
+- D-Bus item was also Tier-3-deferred; now folded into 2.1.

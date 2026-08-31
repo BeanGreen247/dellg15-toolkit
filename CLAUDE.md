@@ -24,7 +24,7 @@ Edition** (Ryzen 7 5800H + RTX 3050 Ti Mobile) running **Nobara Linux** (Fedora
 | `tuxthrottle_co_stress.py` | **stdlib, root.** Ryzen Curve Optimizer undervolt harness. `apply <-N> [--minutes M] [--no-gpu]` → `profiles.snapshot("pre-curve-optimizer")`, write `co.json` `{offset, confirmed:false}`, arm `/run/tuxthrottle/co_watchdog`, `sensors.set_co_offset(-N)`, run `stress-ng --cpu 0` (fallback `yes`×nproc) + a GPU load (`glmark2`/`vkmark`/`glxgears`) for M min while polling `dmesg --level=err` for `mce|whea|hardware error|…` → **any fault reverts to 0, deletes co.json, exit 1**; clean run leaves it applied, exit 0. `confirm` sets `confirmed:true` (now the boot service re-applies it). `revert` → CO 0 + forget. `reapply` (boot/resume hook) applies `co.json` **only if `confirmed:true`** — an offset that hung the box pre-confirm never comes back. `status` (read-only, non-root OK). Wired to `RyzenCurveOptimizer` tweak + the GUI Power & Limits "Curve Optimizer" section (`_build_co_section` / `_co_stress` streams via `_run_stream`). |
 | `tuxthrottlectl.py` | **stdlib argparse CLI over `sensors.py` + `tuxthrottle_profiles` + `tuxthrottle_control`**, installed as `/usr/local/bin/tuxthrottlectl` by `install.sh`. `status` / `get {power-profile,tdp,fans,battery,nvpl,gamemode,clocks,gpumode}` / `set {power-profile,tdp,fan-boost,battery,nvpl,gpumode}` / `gamemode {on,off,toggle}` / `profile {list,apply,save,show,delete}` / `snapshot [label]` / `rollback [last\|<file>]` / `daemon {status,ping,reload}`; `--json`; non-zero exit on failure. `set`/`profile apply`/`rollback` need root. When `tuxthrottle_control.available()`, `set` and `profile apply` are routed through the daemon socket (`_daemon_set()`), else they act directly. |
 | `tuxthrottle_kde_panel.py` | **stdlib helper for the three panel-applet KDE tweaks.** `clock-seconds {on\|off}` finds every `org.kde.plasma.digitalclock` applet in `plasma-org.kde.plasma.desktop-appletsrc` (tracks the `[Containments][C][Applets][A]` header) and `kwriteconfig6`s `showSeconds`; `classic-menu {on\|off}` swaps `plugin=org.kde.plasma.{kickoff,kickerdash}` ↔ `kicker`; `panel-floating {on\|off}` finds every `org.kde.panel` containment (`find_panels`, tracks the top-level `[Containments][N]` header) and `kwriteconfig6`s `[General] floating` true/false — off = panel flush to the screen edge, on = the default floating gap. All restart `plasmashell` (`systemctl --user restart plasma-plasmashell.service`). Called by the tweaks via the shared user-session wrapper. |
-| `tuxthrottle_kbd.py` | AW-ELC RGB keyboard driver: an `openrgb` CLI wrapper. The 5515 keyboard is **one controllable zone** (see hardware notes) → whole-keyboard solid colour + brightness + the firmware **Spectrum Cycle** only. `set_zones`/`set_zone` collapse to `set_all`. The `rainbow_wave`/`gradient_wave` SDK-socket daemons (`_Sdk`, `<statedir>/fx.pid`, `stop_fx()`) are dead code kept only for the `*-test` self-checks. |
+| `tuxthrottle_kbd.py` | AW-ELC RGB keyboard driver: an `openrgb` CLI wrapper. The 5515 keyboard is **one controllable zone** (see hardware notes) → whole-keyboard solid colour + brightness + the firmware **Spectrum Cycle** only. `set_zones`/`set_zone` collapse to `set_all`. The `rainbow_wave`/`gradient_wave` software daemons + the `_Sdk` SDK-socket client + `stop_fx()`/`fx.pid` + the OKLab/OKLCH colour maths + `rainbow-test`/`gradient-test` self-checks were **deleted** 2026-08-31 (branch `chore/kbd-dead-code`) — 1293 → ~480 lines. |
 | `tuxthrottle_automount.py` | scans `lsblk`, adds `/etc/fstab` entries mounting fixed internal data disks at `/mnt/<label>` with `nofail`. |
 | `config/tweaks.json`, `apps.json`, `presets.json` | the data. Tweaks have `check` / `check_pending` (staged-but-needs-reboot) / `apply` / `undo` / optional `reinstall_if` (glob list for `apply_tweak.py --only-if-present`) / optional `recommended: true` (dev's curated pick — drives the per-section "★ Apply section recommendations" button in the `SidebarNav` header via `Item.recommended` → `_recommended_for(category)` / `_on_nav_page` / `_apply_ids_worker`; button only shows when that category has an un-applied recommendation). Apps have `manager` (`dnf`/`flatpak`/`shell`), `package`, `check`, optional `install`, and — for cross-manager "already installed" detection — optional `provides` (extra shell probes), `binary` (`command -v`), `flatpak_id`. `{USER}` and `{TOOLKIT_DIR}` are substituted (in `apply`/`undo` **and** inside the heredoc script bodies). Power & Limits tweaks: `RyzenAdjTDP` (installs ryzenadj from repo or source build + `/usr/local/bin/tuxthrottle-tdp` re-apply script + boot/resume unit + sudoers), `BatteryChargeLimit` (sysfs boot service), `DellBatteryThreshold` (just `dnf install libsmbios` — Dell stores the interval in NVRAM), `NvidiaPowerLimit` (boot service + sudoers, `requires_vendor: nvidia`), `FanCurveDaemon` (`tuxthrottle_powerd.py` unit, `RuntimeDirectory=tuxthrottle`), `RyzenCurveOptimizer` (`requires_vendor: amd`; boot service + sleep hook run `tuxthrottle_co_stress.py reapply` — confirmed offsets only; no sudoers, the GUI is already elevated), `StateResume` (systemd-sleep hook + boot service → `tuxthrottle_profiles.py reassert`), `GameModeBridge` (`dnf install gamemode` + `/etc/gamemode.ini` custom start/end → `gaming-performance` / `gaming-balanced`). **KDE (Desktop GUI Tweaks)** category — 10 Plasma-6 toggles (`KdeAnimationsOff`, `KwinGamingCompositor`, `KdeScreenEdgesOff` incl. the `[Effect-*] BorderActivate=9` hot corners, `KdeActivitiesRecentOff`, `KdeThumbnailIoLimit`, `KdeLaunchFeedbackOff`, `KdeSplashOff`, `KdeClockSeconds`, `KdeClassicMenu`, `KdePanelFlush` — the last three via `tuxthrottle_kde_panel.py`; `KdePanelFlush` sets `[Containments][N][General] floating=false` on every `org.kde.panel` containment so the panel sits flush to the screen edge, not the default floating gap): each runs `kwriteconfig6` **as the user with their session env** (`sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=.../bus bash -lc '…'`) then reloads the live component (KWin `reconfigure` via `qdbus-qt6`→`qdbus`→`dbus-send`, `kquitapp6 kactivitymanagerd`, or a `plasmashell` restart). `check`s use `kreadconfig6`. |
 | `tuxthrottle_prefix_relocate.py` | stdlib helper. Prefix side: `<appid>` moves a Steam game's `compatdata/<appid>` Proton prefix off an NTFS/exFAT drive (which can't host it — `:` in `dosdevices/c:` → `OSError [Errno 22]`, game won't start) onto the native Steam library and symlinks it back; `--check` = exit 1 if it needs moving; `--scan` lists all; `--all` does all. Save side: `--saves-scan` finds prefix known-folders (Documents / Saved Games / AppData) symlinked onto another filesystem **and** loose `Documents`/`My Games` folders at a Steam drive's root (orphaned Wine redirects); `--saves <appid>` / `--saves-all` pull the symlinked ones back into the prefix; `--saves-import <appid>` copies a drive's loose Documents into that game's prefix. All copy-not-delete; refuse root or a running Steam. Wired into the GUI's **Proton prefix & save-file tools** box; also standalone. |
@@ -92,10 +92,13 @@ ssh g15 'cd ~/tuxthrottle && sudo ./install.sh'    # system-install to /opt
   `brightness_min=100 / brightness_max=0`. Empirically **`-b 100` lights the
   backlight**, lower values dim it, `-b 0` = off. (A "fix" that special-cased
   `-b 0` for effects turned them off — reverted.)
-- **The software `rainbow_wave` / `gradient_wave` daemons are dead code** kept
-  only for `rainbow-test` / `gradient-test` (which `verify-install.sh` runs).
-  Not wired to any button. A software per-LED wave can't work here anyway: the
-  controller repaints irregularly at ~2–3 fps over USB *and* is single-zone.
+- **The software `rainbow_wave` / `gradient_wave` daemons were deleted**
+  2026-08-31 (branch `chore/kbd-dead-code`), along with `_Sdk`, `_stream_wave`,
+  `stop_fx`, `fx.pid`, the OKLab/OKLCH colour maths and the
+  `rainbow-test`/`gradient-test` self-checks. A software per-LED wave can't work
+  here anyway: the controller repaints irregularly at ~2–3 fps over USB *and*
+  is single-zone. `verify-install.sh` now just smoke-tests `tuxthrottle_kbd.py
+  --help`.
 - **DANGER — don't spam the AW-ELC with raw HID feature reports.** Programming
   user-animations (NEW/SELECT/ADD_ACTION/FINISH_PLAY) in a loop can **hard-hang
   the MCU**: it drops off USB entirely (`usb 3-3: device not accepting address,
@@ -231,9 +234,6 @@ ssh g15 'cd ~/tuxthrottle && sudo ./install.sh'    # system-install to /opt
   MangoHud / vkBasalt are native-only** — a Flatpak of these is *not* accepted
   (sandbox breaks controller/udev, mods, `LD_PRELOAD` layers; SteamOS ships
   Steam native too).
-- Colour maths in `tuxthrottle_kbd.py` is **stdlib only** (`colorsys` + a small
-  sRGB↔linear↔OKLab↔OKLCH set) — no numpy/Pillow.
-- No-hardware self-tests: `tuxthrottle_kbd.py rainbow-test` / `gradient-test`.
 - Diagnostics: `collect_debug_report()` (module-level, `_DEBUG_CMDS` list +
   `_diag_fans`) assembles the readable hw/OS/toolkit dump — every shell probe
   runs as `timeout -k 2 12 bash -lc …`. `collect_hw_bundle()` (`_HW_BUNDLE_FILES`
@@ -259,9 +259,13 @@ ssh g15 'cd ~/tuxthrottle && sudo ./install.sh'    # system-install to /opt
   (`tuxthrottle_co_stress.py` + `RyzenCurveOptimizer`), multi-model DMI gating
   groundwork (`models/`), panel-widget clients (`clients/`), and the single-writer
   control plane (`tuxthrottle_control.py` socket + daemon dispatch, GUI/CLI
-  fall back to direct writes) are **done + on the g15**. Still deferred: the
-  D-Bus/polkit step (socket is enough for now) and deleting the dead
-  `rainbow_wave`/`gradient_wave`/`_Sdk`/`_stream_wave`/`stop_fx` code from
-  `tuxthrottle_kbd.py` — that stays its own branch (interwoven ~600-line driver
-  refactor, `stop_fx()` in live paths, needs camera-verified keyboard testing;
-  `verify-install.sh` still runs `rainbow-test`/`gradient-test`).
+  fall back to direct writes) are **done + on the g15**. The dead
+  `rainbow_wave`/`gradient_wave`/`_Sdk`/`_stream_wave`/`stop_fx` keyboard code
+  was **deleted** 2026-08-31 (branch `chore/kbd-dead-code`, 1293 → ~480 lines).
+  Still deferred: the D-Bus/polkit step (socket is enough for now).
+
+- **Next effort (2026-08-31):** generalise to a multi-model gaming-laptop tool
+  — route `sensors.py`'s hard-coded 5515 paths through `models/<slug>.json`,
+  add a `collect-model` scaffold + onboarding guide, D-Bus/polkit control
+  plane, CI depth, plus a Battery-health page and a MangoHud bridge. Full plan
+  in `tasks/plan.md` + `tasks/todo.md`. COPR release deferred until that lands.

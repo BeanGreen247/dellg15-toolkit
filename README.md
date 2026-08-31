@@ -63,8 +63,8 @@ fixed in `tuxthrottle.py`'s own error message. `akmod-nvidia` lives in
 RPM Fusion's separate dist-git (unreachable from this check, but its name
 is standard/well-documented) rather than Fedora's own.
 
-**Status: running on the real laptop.** The keyboard RGB (incl. the software
-gradient / firmware Rainbow Cycle effects), the Fans tab, the Updates tab,
+**Status: running on the real laptop.** The keyboard RGB (whole-keyboard
+colour + firmware Spectrum Cycle), the Fans tab, the Updates tab,
 the sidebar UI and the tweak status checks have all been exercised on the
 actual Dell G15 5515 on Nobara. A few tweaks that need a reboot to fully
 verify (kernel-cmdline ones) are still best-effort — see "Known limitations".
@@ -440,10 +440,9 @@ no `models` key applies everywhere, which is every entry today. See
 - `clients/` — optional panel front-ends: a **waybar** module and a **KDE plasmoid**, both over `tuxthrottlectl status --json`
 - `packaging/` — the noarch RPM `.spec` + `.github/workflows/copr.yml` (SRPM on tag → COPR)
 - `tests/` — `pytest` suite for the pure logic (parsers, fan-curve maths, profile engine, control socket, thermal watcher, model profiles); `.github/workflows/ci.yml` runs it on push
-- `tuxthrottle_kbd.py` — AW-ELC RGB keyboard control: `openrgb` CLI wrapper for
-  static/zone colours + firmware effects, plus stdlib software animation
-  daemons (gradient / rainbow) that stream per-LED frames over a hand-rolled
-  OpenRGB SDK socket client
+- `tuxthrottle_kbd.py` — AW-ELC RGB keyboard control: a thin `openrgb` CLI
+  wrapper for whole-keyboard solid colour, brightness and the firmware
+  Spectrum Cycle (the 5515 keyboard is a single controllable zone)
 - `install.sh` / `uninstall.sh` — system install; uninstall removes the app
   (`uninstall.sh --purge` also undoes the tweaks' system bits)
 - `assets/` — `icon.svg` (Tux in a redlined throttle gauge with an amber boost
@@ -474,11 +473,11 @@ or the Dashboard switch) also raises a 10-second desktop notification —
 
 ## Keyboard tab (`tuxthrottle_kbd.py`)
 
-The 5515's 4-zone RGB keyboard is the Alienware **AW-ELC** (USB `187c:0550`)
-— no kernel driver, no `kbd_backlight` LED, and raw HID writes (feature
-*and* interrupt reports) are ACK'd but do nothing. What **does** work,
-verified on real hardware, is **OpenRGB** driving it as 16 logical zones, so
-`tuxthrottle_kbd.py` is a thin wrapper around the `openrgb` CLI.
+The 5515's RGB keyboard is the Alienware **AW-ELC** (USB `187c:0550`) — no
+kernel driver, no `kbd_backlight` LED, and raw HID writes (feature *and*
+interrupt reports) are ACK'd but do nothing. What **does** work, verified on
+real hardware, is **OpenRGB** driving it, so `tuxthrottle_kbd.py` is a thin
+wrapper around the `openrgb` CLI.
 
 Two prerequisites:
 - **OpenRGB installed** (the `OpenRGB` app, Software tab).
@@ -486,37 +485,26 @@ Two prerequisites:
   keys stay dark this is why — the firmware drives the backlight at POST and
   won't hand a *disabled* one to the OS.
 
-It's a **4-zone** board (Left / Middle / Right / Numpad) exposed by OpenRGB as
-16 logical LEDs, not per-key. The Keyboard tab gives a brightness slider,
-whole-keyboard colour + presets, per-zone pickers, a **Solid colour** button
-and a **↻ Reset backlight** button (see "quirks" below).
+**The 5515 keyboard is a single controllable zone.** OpenRGB advertises 4/16
+zones, but every zone-scoped write path (CLI `-z`, the SDK per-LED buffer, a
+raw HID per-zone animation) lands on the whole keyboard — camera-verified. So
+there is no per-zone colour and no travelling gradient. The Keyboard tab gives
+a brightness slider, whole-keyboard colour + presets, a **Spectrum Cycle**
+button and a **↻ Reset backlight** button (see "quirks" below).
 
-**Effects.** Two useful ones on this hardware:
-
-- **Rainbow Cycle** — the controller's own *firmware* Spectrum Cycle: the
-  whole board sweeps the hue wheel, smoothly and fast, timed by the MCU. It's
-  uniform (no left-to-right travelling gradient).
-- **Gradient wave** — a *software* per-LED effect: 1–6 anchor colours (taken
-  from the four per-zone swatches), interpolated in OKLab and drifting sideways;
-  a single anchor gives a looping "comet" brightness pulse. This one is a
-  **slow ambient** effect on purpose — see the quirk below.
+**Spectrum Cycle** is the controller's own *firmware* effect: the whole board
+sweeps the hue wheel, smoothly and fast, timed by the MCU (uniform — no
+left-to-right travel). It is the only firmware effect that animates on fw
+1.1.12 (Breathing / Flashing just hold a colour; Rainbow Wave is washed-out).
 
 ```bash
 python3 tuxthrottle_kbd.py on --color 00aaff --brightness 80
-python3 tuxthrottle_kbd.py zone 0 --color ff2200      # Left zone
-python3 tuxthrottle_kbd.py effect spectrum --speed 80 # firmware Rainbow Cycle
-python3 tuxthrottle_kbd.py gradient-wave --colors ff0000,00ff00,0000ff
-python3 tuxthrottle_kbd.py rainbow-test               # no-hardware self-test
+python3 tuxthrottle_kbd.py effect spectrum --speed 80   # firmware Spectrum Cycle
 python3 tuxthrottle_kbd.py off
 ```
 
 **Quirks (learned the hard way):**
 
-- **The controller only repaints ~2–4×/sec over USB.** The OpenRGB server
-  accepts frames instantly, but the device shows only a handful per second, so
-  a software wave *can't* move fast without visibly stepping. The software
-  gradient/rainbow daemons are therefore capped low and use long cycles; for a
-  smooth fast rainbow, use the firmware Rainbow Cycle.
 - **Brightness is inverted.** Every mode reports a degenerate range; `-b 100`
   is what actually lights the backlight, `-b 0` turns it off.
 - **Persistence** is opt-in: the **KbdBacklightFix** tweak (Power tab) installs
@@ -809,9 +797,9 @@ resolved from `PKEXEC_UID`/`SUDO_UID` since the whole app runs elevated.
 - Apply/preset runs are still one item at a time (log streams live, the
   overlay shows which item and the phase); the *status checks* on startup now
   fan out over a thread pool.
-- The software keyboard gradient/rainbow can't be made buttery-smooth — the
-  AW-ELC controller's USB repaint rate is the ceiling. Use the firmware
-  Rainbow Cycle for smooth+fast.
+- The 5515 keyboard is a single controllable zone — no per-zone colour and no
+  travelling gradient are possible; every zone-scoped write lands on the whole
+  board. Whole-keyboard colour + the firmware Spectrum Cycle are what's offered.
 - Fan settings and (currently) the keyboard effect don't persist a reboot
   unless the relevant tweak/service is installed.
 - The `models/` profiles are advisory today — `sensors.py` still hard-codes
