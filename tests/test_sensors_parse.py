@@ -3,7 +3,6 @@ import types
 
 import sensors
 
-
 RYZENADJ_I = """\
 CPU Family: Cezanne
 SMU BIOS Interface Version: 17

@@ -27,10 +27,10 @@ import subprocess
 import sys
 import threading
 import time
+import tkinter as tk
 import webbrowser
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox
 
@@ -43,7 +43,7 @@ sys.path.insert(0, str(BASE_DIR))
 
 try:
     import ttkbootstrap as tb
-    from ttkbootstrap.constants import SUCCESS, SECONDARY, WARNING, INFO, DANGER
+    from ttkbootstrap.constants import DANGER, INFO, SECONDARY, SUCCESS, WARNING
 except ImportError:
     print("ttkbootstrap not found. Install with: pip install --user ttkbootstrap")
     print("(not packaged in Fedora/Nobara's repos — pip is the only path)")
@@ -147,7 +147,7 @@ def _maximize(root: "tb.Window") -> None:
 
 def load_json(name: str) -> dict:
     path = CONFIG_DIR / name
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -1410,7 +1410,7 @@ class ToolkitApp:
 
     def _kbd_all_colors(self) -> dict[int, tuple[int, int, int]]:
         rgb = self._hex_to_rgb(self._safe_hex(self.kbd_all_hex.get()))
-        return {z: rgb for z in range(tuxthrottle_kbd.ZONE_COUNT)}
+        return dict.fromkeys(range(tuxthrottle_kbd.ZONE_COUNT), rgb)
 
     def _kbd_apply_brightness(self):
         b = self.kbd_brightness.get()
@@ -4043,9 +4043,7 @@ def _load_all_items() -> list:
     for kind, fn in (("tweak", "tweaks.json"), ("app", "apps.json")):
         for iid, data in load_json(fn).items():
             it = Item(iid, data, kind, user)
-            if it.requires_vendor == "nvidia" and not has_nv:
-                it.hw_supported = False
-            elif it.requires_vendor == "amd" and not has_amd:
+            if it.requires_vendor == "nvidia" and not has_nv or it.requires_vendor == "amd" and not has_amd:
                 it.hw_supported = False
             items.append(it)
     return items

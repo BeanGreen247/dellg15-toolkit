@@ -402,7 +402,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{k:15}: {v}")
         elif a.cmd == "on":
             set_all(a.color, a.brightness)
-            save_state({z: a.color for z in range(ZONE_COUNT)}, a.brightness)
+            save_state(dict.fromkeys(range(ZONE_COUNT), a.color), a.brightness)
             print(f"backlight on: #{a.color.lower()} @ {a.brightness}%")
         elif a.cmd == "off":
             off()
@@ -412,7 +412,7 @@ def main(argv: list[str] | None = None) -> int:
             print("backlight reset (server restarted, saved state re-applied)")
         elif a.cmd == "zone":
             st = load_state()
-            colors = st[0] if st else {z: "FFFFFF" for z in range(ZONE_COUNT)}
+            colors = st[0] if st else dict.fromkeys(range(ZONE_COUNT), "FFFFFF")
             br = a.brightness if a.brightness is not None else (st[1] if st else 100)
             colors[a.index] = a.color
             set_zones(colors, br)
@@ -420,7 +420,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"zone {a.index} ({ZONE_NAMES[a.index]}) -> #{a.color.lower()} @ {br}%")
         elif a.cmd == "effect":
             st = load_state()
-            colors = st[0] if st else {z: "FFFFFF" for z in range(ZONE_COUNT)}
+            colors = st[0] if st else dict.fromkeys(range(ZONE_COUNT), "FFFFFF")
             set_effect(a.name, a.speed, a.brightness)
             save_state(colors, a.brightness, mode=a.name, speed=a.speed)
             print(f"effect {a.name} @ speed {a.speed}, {a.brightness}%")

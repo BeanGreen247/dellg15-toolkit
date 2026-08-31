@@ -76,7 +76,7 @@ bridge only (post-game summary + scheduled profiles → backlog).
 
 ## Phase 2 — Harden (C)
 
-- [ ] **2.1 D-Bus + polkit control plane.** `org.tuxthrottle.Daemon1` system
+- [x] **2.1 D-Bus + polkit control plane.** `org.tuxthrottle.Daemon1` system
       service in `tuxthrottle_powerd` (same dispatch as the socket); polkit
       `.policy` for profile-apply / set / snapshot / rollback. `tuxthrottlectl`
       + GUI try D-Bus → socket → direct. Remove sudoers rules the polkit actions
@@ -85,11 +85,11 @@ bridge only (post-game summary + scheduled profiles → backlog).
       apply raises a polkit prompt; socket + direct fallbacks still pass their
       tests.
 - [x] **2.2 Dead keyboard code** — pulled forward, see Phase P.
-- [ ] **2.3 CI depth.** Headless Xvfb GUI-smoke job (build `ToolkitApp`, pump
+- [x] **2.3 CI depth.** Headless Xvfb GUI-smoke job (build `ToolkitApp`, pump
       `update()`); `ruff` + `mypy` steps (start non-blocking, then gate); extra
       `powerd` tests (fan-curve interp, schedule).
       *Accept:* CI green with the new jobs; lint baseline recorded.
-- [ ] **2.4 Checkpoint 2.**
+- [x] **2.4 Checkpoint 2.**
 
 ## Phase 3 — New capability (D) — user picked 3.1 + 3.2
 

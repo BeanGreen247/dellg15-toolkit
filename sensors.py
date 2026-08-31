@@ -18,10 +18,10 @@ import shutil
 import subprocess
 import sys
 import time
-from functools import lru_cache
+from functools import cache
 
 
-@lru_cache(maxsize=None)
+@cache
 def which(cmd: str):
     # PATH doesn't change over a session; cache so the hot dashboard/status
     # paths stop stat-walking PATH on every poll.

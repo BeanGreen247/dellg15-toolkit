@@ -34,8 +34,32 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import sensors  # noqa: E402
-import tuxthrottle_profiles as profiles  # noqa: E402
 import tuxthrottle_control as control  # noqa: E402
+import tuxthrottle_profiles as profiles  # noqa: E402
+
+try:
+    import tuxthrottle_dbus as _dbus  # noqa: E402
+except Exception:  # noqa: BLE001
+    _dbus = None
+
+
+def _daemon_call(method: str, params: dict | None = None):
+    """Reach a running tuxthrottled: D-Bus first, then the control socket.
+    Returns the response dict, or None if neither transport answers."""
+    if _dbus is not None:
+        r = _dbus.call(method, params or {})
+        if r is not None:
+            return r
+    if control.available():
+        return control.call(method, params or {})
+    return None
+
+
+def _daemon_transport() -> str | None:
+    """Which transport a live daemon is reachable on: 'D-Bus' | 'socket' | None."""
+    if _dbus is not None and _dbus.available_live():
+        return "D-Bus"
+    return "socket" if control.available() else None
 
 TDP_PRESETS = {
     "quiet": (25, 35, 25),
@@ -99,11 +123,9 @@ def _fail(msg: str) -> int:
 
 
 def _daemon_set(params: dict) -> int | None:
-    """Route a `set` through tuxthrottled's control socket when it's up.
+    """Route a `set` through tuxthrottled (D-Bus or socket) when it's up.
     Returns an exit code, or None to fall back to a direct sensors call."""
-    if not control.available():
-        return None
-    resp = control.call("set", params)
+    resp = _daemon_call("set", params)
     if resp is None:
         return None
     if resp.get("ok"):
@@ -201,18 +223,17 @@ def cmd_profile(args) -> int:
         st = profiles.load_profile(args.name)
         if not st:
             return _fail(f"no such profile: {args.name}")
-        if control.available():
-            resp = control.call("apply_profile",
-                                {"name": args.name, "with_gpu_mode": args.with_gpu_mode})
-            if resp and resp.get("ok"):
+        resp = _daemon_call("apply_profile",
+                            {"name": args.name, "with_gpu_mode": args.with_gpu_mode})
+        if resp is not None:
+            if resp.get("ok"):
                 rows = resp["result"].get("results", [])
                 if args.json:
                     print(json.dumps(rows, indent=2))
                     return 1 if any(not r["ok"] for r in rows) else 0
                 print("(via tuxthrottled)")
                 return _print_profile_results(rows)
-            if resp and not resp.get("ok"):
-                return _fail(resp.get("error", "daemon rejected apply_profile"))
+            return _fail(resp.get("error", "daemon rejected apply_profile"))
         profiles.snapshot(label=f"pre-apply-{args.name}")
         rows = profiles.apply_state(st, with_gpu_mode=args.with_gpu_mode)
         if args.json:
@@ -276,15 +297,21 @@ def main() -> int:
             (["--slug", args.slug] if args.slug else [])
             + (["--out", args.out] if args.out else []))
     if args.cmd == "daemon":
-        pres = control.presence()
-        if pres != "up":
+        transport = _daemon_transport()
+        if transport is None:
+            pres = control.presence()
             msg = ("running, but root-only — re-run with sudo"
                    if pres == "root-only" else "not running")
-            print(json.dumps({"up": pres == "up", "state": pres}) if args.json
-                  else f"tuxthrottled control socket: {msg}")
+            print(json.dumps({"up": False, "state": pres}) if args.json
+                  else f"tuxthrottled: {msg}")
             return 1
-        method = {"status": "status", "ping": "ping", "reload": "reload"}[args.action]
-        resp = control.call(method)
+        if args.action == "ping":
+            print(json.dumps({"up": True, "transport": transport}) if args.json
+                  else f"tuxthrottled: up (via {transport})")
+            return 0
+        resp = _daemon_call(args.action)   # status | reload
+        if not args.json and resp is not None:
+            resp = {**resp, "_transport": transport}
         _out(resp, args.json)
         return 0 if resp and resp.get("ok") else 1
     if args.cmd == "status":

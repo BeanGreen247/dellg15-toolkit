@@ -91,7 +91,7 @@ def test_env_override_unknown_slug_falls_back(monkeypatch):
 
 
 def test_underscore_files_are_not_auto_matched():
-    files = [f for f in sensors._model_files()]
+    files = list(sensors._model_files())
     assert not any(f.rsplit("/", 1)[-1].startswith("_") for f in files)
 
 

@@ -39,7 +39,7 @@ except ImportError:
     sys.exit(1)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from sensors import toggle_game_mode_external, model_profile  # noqa: E402
+from sensors import model_profile, toggle_game_mode_external  # noqa: E402
 
 # The dedicated key + its keyboard node come from the model profile
 # (models/<slug>.json → "gkey"), defaulting to the 5515's values. We still

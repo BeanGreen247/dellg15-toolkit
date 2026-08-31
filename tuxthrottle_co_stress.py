@@ -131,7 +131,7 @@ def cmd_apply(args) -> int:
         print("FAIL: ryzenadj / AMD CPU not available", file=sys.stderr)
         return 1
 
-    print(f"[co] snapshot (pre-CO) …")
+    print("[co] snapshot (pre-CO) …")
     profiles.snapshot(user, label="pre-curve-optimizer")
 
     started = time.time()

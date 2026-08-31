@@ -1,6 +1,5 @@
 import tuxthrottle_powerd as pd
 
-
 CURVE = [[45, 0], [60, 25], [72, 55], [82, 85], [90, 100]]
 
 

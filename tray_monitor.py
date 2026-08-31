@@ -27,8 +27,8 @@ import sensors  # noqa: E402
 
 try:
     from PySide6.QtCore import QTimer
-    from PySide6.QtGui import QIcon, QAction
-    from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QMessageBox
+    from PySide6.QtGui import QAction, QIcon
+    from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 except ImportError:
     print("PySide6 not found. Install with: dnf install python3-pyside6")
     print("(or: pip install --user PySide6)")

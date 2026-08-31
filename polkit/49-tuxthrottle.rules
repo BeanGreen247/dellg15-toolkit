@@ -1,0 +1,10 @@
+// Passwordless TuxThrottle management for administrators (wheel group).
+// Installed to /etc/polkit-1/rules.d/ by the DbusPolkitIntegration tweak.
+// Remove this file (or the tweak's undo) to require a password every time.
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.tuxthrottle.manage" &&
+        subject.active && subject.local &&
+        (subject.isInGroup("wheel") || subject.isInGroup("sudo"))) {
+        return polkit.Result.YES;
+    }
+});

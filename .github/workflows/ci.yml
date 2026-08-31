@@ -16,11 +16,14 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install test deps
-        run: pip install pytest
+      - name: Install deps
+        run: pip install pytest ruff
 
       - name: Byte-compile every module
-        run: python -m compileall -q *.py
+        run: python -m compileall -q *.py tests/*.py
+
+      - name: ruff
+        run: ruff check --output-format=github .
 
       - name: Validate JSON config
         run: |
@@ -34,7 +37,7 @@ jobs:
 
       - name: Validate model profiles
         run: |
-          for f in models/*.json; do python -c "import json; d=json.load(open('$f')); assert d['id']=='$f'.split('/')[-1][:-5]; print('ok', '$f')"; done
+          for f in models/*.json; do python -c "import json; d=json.load(open('$f')); assert d['id']=='$f'.split('/')[-1][:-5], d['id']; print('ok', '$f')"; done
 
       - name: RPM spec lint
         run: |
@@ -43,3 +46,48 @@ jobs:
 
       - name: Unit tests
         run: python -m pytest tests/ -q
+
+  typecheck:
+    runs-on: ubuntu-latest
+    continue-on-error: true   # advisory until the annotations catch up
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install mypy
+      - name: mypy (core stdlib modules)
+        run: |
+          mypy --ignore-missing-imports --no-error-summary \
+            sensors.py tuxthrottle_control.py tuxthrottle_modelgen.py \
+            tuxthrottle_dbus.py tuxthrottlectl.py tuxthrottle_profiles.py
+
+  gui-smoke:
+    runs-on: ubuntu-latest
+    continue-on-error: true   # headless Tk on CI is best-effort
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: System deps for headless Tk
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb python3-tk
+      - name: Python deps
+        run: pip install ttkbootstrap
+      - name: Build the GUI headless
+        run: |
+          xvfb-run -a python - <<'PY'
+          import time
+          import tuxthrottle as t
+          t.self_elevate = lambda: None
+          import ttkbootstrap as tb
+          r = tb.Window(themename="darkly")
+          a = t.ToolkitApp(r)
+          for _ in range(12):
+              r.update(); time.sleep(0.05)
+          pages = [x for x, f, b in a.notebook._pages]
+          assert pages, "no nav pages built"
+          assert pages[-1] == "Report a Bug", pages[-1]
+          print(f"GUI built OK — {len(pages)} nav pages, last = {pages[-1]!r}")
+          r.destroy()
+          PY

@@ -26,8 +26,8 @@ import socket
 import socketserver
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 RUN_DIR = Path("/run/tuxthrottle")
 SOCKET_PATH = RUN_DIR / "control.sock"
