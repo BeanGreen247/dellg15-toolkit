@@ -18,11 +18,11 @@ bridge only (post-game summary + scheduled profiles → backlog).
       kept only for the waves).
 - [x] **P.3 `verify-install.sh`** — drop the `rainbow-test` / `gradient-test`
       invocations; keep the rest of the keyboard block.
-- [ ] **P.4 Deploy to g15 + camera-verify** solid colour, Spectrum Cycle,
-      brightness up/down, off. `verify-install.sh` still passes (minus removed).
-      *Accept:* ~600 fewer lines in `tuxthrottle_kbd.py`; no `stop_fx` references
-      anywhere; keyboard features work on the g15.
-- [ ] **P.5** Merge `chore/kbd-dead-code` → main.
+- [x] **P.4 Deployed to g15** (2026-08-31) — `install.sh` OK, `verify-install.sh`
+      **27 passed / 0 failed**, kbd CLI smoke passes. `tuxthrottle_kbd.py`
+      1293 → 480 lines; no `stop_fx` refs anywhere. **User camera-verify pending:**
+      solid colour, Spectrum Cycle, brightness up/down, off.
+- [x] **P.5** Merged `chore/kbd-dead-code` → main (ff), pushed, branch deleted.
 
 ## Phase 0 — Model-profile plumbing (spine)
 
