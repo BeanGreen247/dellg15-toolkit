@@ -12,6 +12,8 @@ A thin argparse wrapper over sensors.py so scripts, the tray, keybinds and
   tuxthrottlectl set   battery <percent>
   tuxthrottlectl set   nvpl <watts>
   tuxthrottlectl set   gpumode <integrated|hybrid|nvidia>
+  tuxthrottlectl set   refresh <hz>
+  tuxthrottlectl set   gpu-clock {<max-mhz> [--min MHZ] | reset}
   tuxthrottlectl gamemode {on|off|toggle}
 
   tuxthrottlectl profile  {list|apply|save|show|delete} [<name>]   # full-state bundles
@@ -164,6 +166,35 @@ def cmd_set(args) -> int:
         if ok:
             print("switched — log out or reboot to apply")
         return 0 if ok else _fail(err)
+    if args.target == "refresh":
+        if not args.value:
+            return _fail("give a refresh rate in Hz")
+        rc = _daemon_set({"target": "refresh", "value": int(args.value[0])})
+        if rc is not None:
+            return rc
+        ok, err = sensors.set_panel_refresh(int(args.value[0]))
+        return 0 if ok else _fail(err)
+    if args.target == "gpu-clock":
+        val = (args.value[0].lower() if args.value else "")
+        params = {"target": "gpu-clock", "value": val or "reset"}
+        if val and val not in ("reset", "unlock", "off", "0"):
+            params["value"] = int(args.value[0])
+            if args.min is not None:
+                params["min"] = int(args.min)
+        rc = _daemon_set(params)
+        if rc is not None:
+            return rc
+        if params["value"] in ("reset", "unlock", "off", "0"):
+            ok, err = sensors.reset_nvidia_clocks()
+            profiles.write_config("nvclk.json", None)
+        else:
+            info = sensors.nvidia_clock_info() or {}
+            hi = int(params["value"])
+            lo = int(params.get("min") or info.get("gr_min") or 210)
+            ok, err = sensors.set_nvidia_clock_lock(lo, hi)
+            if ok:
+                profiles.write_config("nvclk.json", {"gr_min": lo, "gr_max": hi})
+        return 0 if ok else _fail(err)
     return _fail(f"unknown target {args.target}")
 
 
@@ -242,11 +273,13 @@ def main() -> int:
 
     s = sub.add_parser("set", help="change one thing")
     s.add_argument("target", choices=["power-profile", "tdp", "fan-boost",
-                                      "battery", "nvpl", "gpumode"])
+                                      "battery", "nvpl", "gpumode", "refresh",
+                                      "gpu-clock"])
     s.add_argument("value", nargs="*")
     s.add_argument("--stapm", type=int)
     s.add_argument("--fast", type=int)
     s.add_argument("--slow", type=int)
+    s.add_argument("--min", type=int, help="gpu-clock: minimum lock MHz")
 
     gm = sub.add_parser("gamemode", help="Game Mode on/off/toggle")
     gm.add_argument("action", choices=["on", "off", "toggle"])

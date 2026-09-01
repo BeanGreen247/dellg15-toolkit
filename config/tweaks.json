@@ -593,10 +593,10 @@
   },
   "KdePanelFlush": {
     "Content": "KDE: panel flush to the screen edge (no floating gap)",
-    "Description": "Turns off the Plasma 6 \"floating panel\" behaviour so the bottom panel stays pinned flush to the screen edge instead of lifting a few millimetres away from it when no window is maximised (the r/Fedora 'taskbar isn't flush' behaviour). Sets floating=false on every org.kde.panel containment in plasma-org.kde.plasma.desktop-appletsrc and restarts plasmashell so it applies (the panel reloads for ~2 s). Reversible (back to floating).",
+    "Description": "Turns off the Plasma 6 \"floating panel\" behaviour so the bottom panel stays pinned flush to the screen edge instead of lifting a few millimetres away from it when no window is maximised (the r/Fedora 'taskbar isn't flush' behaviour). Sets floating false on every org.kde.panel containment in plasma-org.kde.plasma.desktop-appletsrc AND floating=0 on the matching [PlasmaViews][Panel N] group in plasmashellrc (the one that actually drives the gap), then restarts plasmashell so it applies (the panel reloads for ~2 s). Reversible (back to floating).",
     "category": "KDE (Desktop GUI Tweaks)",
     "risk": "safe",
-    "check": "grep -q \"^floating=false$\" /home/{USER}/.config/plasma-org.kde.plasma.desktop-appletsrc 2>/dev/null",
+    "check": "! grep -q \"^floating=1$\" /home/{USER}/.config/plasmashellrc 2>/dev/null && grep -q \"^floating=false$\" /home/{USER}/.config/plasma-org.kde.plasma.desktop-appletsrc 2>/dev/null",
     "apply": [
       "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus python3 {TOOLKIT_DIR}/tuxthrottle_kde_panel.py panel-floating off"
     ],
@@ -617,6 +617,20 @@
       "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file kwalletrc --group Wallet --key Enabled --delete; kwriteconfig6 --file kwalletrc --group Wallet --key \"First Use\" --delete'"
     ],
     "recommended": true
+  },
+  "KdeMetaKeyOff": {
+    "Content": "KDE: disable the Meta (Super / Win) key opening the launcher",
+    "Description": "Stops a lone tap of the Meta / Super / Windows key from opening the application launcher (kwinrc [ModifierOnlyShortcuts] Meta=\"\"). The classic 'the Win key yanked me out of my fullscreen game' fix — every Meta+<key> combo shortcut still works, only the press-and-release-alone action is removed. Reloads KWin live. Reversible (restores the default launcher binding).",
+    "category": "KDE (Desktop GUI Tweaks)",
+    "risk": "safe",
+    "recommended": true,
+    "check": "[ \"$(sudo -u {USER} -H kreadconfig6 --file kwinrc --group ModifierOnlyShortcuts --key Meta --default __UNSET__ 2>/dev/null)\" = \"\" ]",
+    "apply": [
+      "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file kwinrc --group ModifierOnlyShortcuts --key Meta \"\"; { qdbus-qt6 org.kde.KWin /KWin reconfigure || qdbus org.kde.KWin /KWin reconfigure || dbus-send --session --type=method_call --dest=org.kde.KWin /KWin org.kde.KWin.reconfigure; } >/dev/null 2>&1 || true'"
+    ],
+    "undo": [
+      "sudo -u {USER} -H env XDG_RUNTIME_DIR=/run/user/$(id -u {USER}) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u {USER})/bus bash -lc 'command -v kwriteconfig6 >/dev/null 2>&1 || { echo \"TuxThrottle: this tweak needs KDE Plasma 6\"; exit 1; }; kwriteconfig6 --file kwinrc --group ModifierOnlyShortcuts --key Meta --delete; { qdbus-qt6 org.kde.KWin /KWin reconfigure || qdbus org.kde.KWin /KWin reconfigure || dbus-send --session --type=method_call --dest=org.kde.KWin /KWin org.kde.KWin.reconfigure; } >/dev/null 2>&1 || true'"
+    ]
   },
   "DesktopLauncher": {
     "Content": "Add to the application menu",
@@ -712,6 +726,35 @@
     "undo": [
       "systemctl disable --now tuxthrottle-nvpl.service 2>/dev/null || true",
       "rm -f /etc/systemd/system/tuxthrottle-nvpl.service /usr/local/bin/tuxthrottle-nvpl /etc/sudoers.d/tuxthrottle-nvpl",
+      "systemctl daemon-reload"
+    ]
+  },
+  "NvidiaClockLock": {
+    "Content": "NVIDIA GPU clock-lock persistence",
+    "Description": "Lets the Power & Limits tab clamp the RTX 3050 Ti's graphics clock (nvidia-smi --lock-gpu-clocks) \u2014 the one GPU lever that still works when the board power limit is firmware-locked, so you can under-clock the dGPU for heat / battery. Installs tuxthrottle-nvclk + a boot service and a systemd-sleep hook that re-apply ~/.config/tuxthrottle/nvclk.json (gr_min/gr_max MHz) after a reboot or resume, plus a scoped sudoers rule. Requires the NVIDIA driver. Reversible (clears the lock).",
+    "category": "GPU",
+    "risk": "advanced",
+    "requires_vendor": "nvidia",
+    "check": "test -x /usr/local/bin/tuxthrottle-nvclk && systemctl is-enabled tuxthrottle-nvclk.service 2>/dev/null | grep -q enabled",
+    "reinstall_if": [
+      "/etc/systemd/system/tuxthrottle-nvclk.service"
+    ],
+    "apply": [
+      "cat > /usr/local/bin/tuxthrottle-nvclk <<'SCRIPT'\n#!/usr/bin/env bash\n# Re-apply a saved dGPU graphics-clock lock from nvclk.json (MHz).\nF=\"${1:-/home/{USER}/.config/tuxthrottle/nvclk.json}\"\ncommand -v nvidia-smi >/dev/null 2>&1 || exit 0\n[ -r \"$F\" ] || exit 0\nMN=$(grep -oE '\"gr_min\"[ ]*:[ ]*[0-9]+' \"$F\" | grep -oE '[0-9]+$')\nMX=$(grep -oE '\"gr_max\"[ ]*:[ ]*[0-9]+' \"$F\" | grep -oE '[0-9]+$')\n[ -n \"$MX\" ] || exit 0\n[ -n \"$MN\" ] || MN=$MX\nnvidia-smi -pm 1 >/dev/null 2>&1 || true\nnvidia-smi --lock-gpu-clocks=\"${MN},${MX}\" >/dev/null 2>&1 || true\nexit 0\nSCRIPT",
+      "chmod +x /usr/local/bin/tuxthrottle-nvclk",
+      "cat > /etc/systemd/system/tuxthrottle-nvclk.service <<'UNIT'\n[Unit]\nDescription=Re-apply saved NVIDIA GPU clock lock (TuxThrottle)\nAfter=multi-user.target\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/usr/local/bin/tuxthrottle-nvclk\n\n[Install]\nWantedBy=multi-user.target\nUNIT",
+      "cat > /usr/lib/systemd/system-sleep/tuxthrottle-nvclk <<'HOOK'\n#!/usr/bin/env bash\n[ \"$1\" = post ] && /usr/local/bin/tuxthrottle-nvclk || true\nHOOK",
+      "chmod +x /usr/lib/systemd/system-sleep/tuxthrottle-nvclk",
+      "printf '{USER} ALL=(root) NOPASSWD: /usr/local/bin/tuxthrottle-nvclk\\n' > /etc/sudoers.d/tuxthrottle-nvclk",
+      "chmod 0440 /etc/sudoers.d/tuxthrottle-nvclk",
+      "visudo -c -f /etc/sudoers.d/tuxthrottle-nvclk",
+      "systemctl daemon-reload",
+      "systemctl enable --now tuxthrottle-nvclk.service || true"
+    ],
+    "undo": [
+      "systemctl disable --now tuxthrottle-nvclk.service 2>/dev/null || true",
+      "command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --reset-gpu-clocks >/dev/null 2>&1 || true",
+      "rm -f /etc/systemd/system/tuxthrottle-nvclk.service /usr/local/bin/tuxthrottle-nvclk /usr/lib/systemd/system-sleep/tuxthrottle-nvclk /etc/sudoers.d/tuxthrottle-nvclk",
       "systemctl daemon-reload"
     ]
   },

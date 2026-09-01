@@ -2,8 +2,9 @@
 """TuxThrottle profiles + snapshots — stdlib only, no GUI deps.
 
 A **profile** is a named full-state bundle: platform_profile + CPU TDP
-(ryzenadj) + battery charge limit + NVIDIA power limit + fan curve +
-AC/battery auto-switch + (optionally) hybrid-GPU mode + keyboard colour.
+(ryzenadj) + battery charge limit + NVIDIA power limit + NVIDIA GPU
+clock lock + panel refresh rate + fan curve + AC/battery auto-switch +
+(optionally) hybrid-GPU mode + keyboard colour.
 
 A **snapshot** is the same shape, auto-captured *before* anything risky
 (applying a profile, rolling back, or the GUI's "Apply Selected" tweak run)
@@ -97,6 +98,17 @@ def _write_json(path: Path, data: dict, user: str | None) -> None:
     _chown_tree(path, user)
 
 
+def write_config(name: str, data, user: str | None = None) -> None:
+    """Write (data=dict) or delete (data=None) ~/.config/tuxthrottle/<name>.
+    Used by the CLI + daemon so a `set` of a persisted lever (e.g. the NVIDIA
+    GPU clock lock → nvclk.json) is re-applied by its boot service too."""
+    p = _config_dir(user) / name
+    if data is None:
+        p.unlink(missing_ok=True)
+    else:
+        _write_json(p, data, user)
+
+
 def _read_json(path: Path) -> dict:
     try:
         d = json.loads(path.read_text())
@@ -131,6 +143,17 @@ def capture_state(user=None) -> dict:
     nvpl = sensors.nvidia_power_limit_info()
     if nvpl and nvpl.get("supported") and nvpl.get("current"):
         st["nvpl"] = {"watts": int(nvpl["current"])}
+
+    pm = sensors.panel_modes()
+    if pm and pm.get("current_hz"):
+        st["refresh_hz"] = int(round(pm["current_hz"]))
+
+    # the GPU clock lock can't be queried back (like the Curve Optimizer), so
+    # nvclk.json is the record of truth — absent when no lock is set.
+    nvclk = _read_json(_config_dir(user) / "nvclk.json")
+    if nvclk.get("gr_max"):
+        st["nvclk"] = {"gr_min": int(nvclk.get("gr_min") or nvclk["gr_max"]),
+                       "gr_max": int(nvclk["gr_max"])}
 
     gm = sensors.gpu_mode_get()
     if gm:
@@ -177,6 +200,24 @@ def apply_state(state: dict, user=None, with_gpu_mode: bool = False) -> list[dic
         else:
             ok, err = sensors.set_nvidia_power_limit(state["nvpl"]["watts"])
             rec("nvpl", ok, err)
+
+    if "refresh_hz" in state:
+        ok, msg = sensors.set_panel_refresh(int(state["refresh_hz"]))
+        rec("refresh_hz", ok, msg)
+
+    if "nvclk" in state:
+        n = state["nvclk"]
+        lo = int(n.get("gr_min") or n["gr_max"])
+        hi = int(n["gr_max"])
+        info = sensors.nvidia_clock_info()
+        if info is None:
+            rec("nvclk", True, "dGPU asleep — saved for the boot service")
+        else:
+            ok, err = sensors.set_nvidia_clock_lock(lo, hi)
+            rec("nvclk", ok, err)
+        # persist so the NvidiaClockLock boot/resume service re-applies it
+        _write_json(_config_dir(user) / "nvclk.json",
+                    {"gr_min": lo, "gr_max": hi}, user)
 
     if with_gpu_mode and state.get("gpu_mode") and state["gpu_mode"] != sensors.gpu_mode_get():
         ok, err = sensors.gpu_mode_set(state["gpu_mode"])

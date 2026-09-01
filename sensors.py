@@ -1140,3 +1140,227 @@ def gamemode_status() -> dict:
     except Exception:  # noqa: BLE001
         pass
     return st
+
+
+# --------------------------------------------------------------------------- #
+#  Run a command inside the real user's graphical session. kscreen-doctor /
+#  kwriteconfig6-style tools need XDG_RUNTIME_DIR + the session bus; the GUI
+#  runs elevated (pkexec/sudo) so we have to hop back to the user for those.
+# --------------------------------------------------------------------------- #
+
+_SESSION_USER: "str | None" = None
+
+
+def set_session_user(name: "str | None") -> None:
+    """Tell the module which login user's graphical session to target for
+    `_session_cmd()` (kscreen-doctor etc.). The GUI/CLI inherit SUDO_USER /
+    PKEXEC_UID and don't need this; `tuxthrottled` runs straight from systemd
+    with none of those set, so it calls this with its `--user` value."""
+    global _SESSION_USER
+    _SESSION_USER = name or None
+
+
+def _real_user_uid() -> "tuple[str, int] | None":
+    import pwd
+    if _SESSION_USER:
+        try:
+            p = pwd.getpwnam(_SESSION_USER)
+            if p.pw_uid != 0:
+                return p.pw_name, p.pw_uid
+        except KeyError:
+            pass
+    for env in ("SUDO_USER", "PKEXEC_USER"):
+        val = os.environ.get(env)
+        if val and val != "root":
+            try:
+                p = pwd.getpwnam(val)
+                return p.pw_name, p.pw_uid
+            except KeyError:
+                pass
+    for env in ("PKEXEC_UID", "SUDO_UID"):
+        val = os.environ.get(env)
+        if val:
+            try:
+                p = pwd.getpwuid(int(val))
+                if p.pw_uid != 0:
+                    return p.pw_name, p.pw_uid
+            except (KeyError, ValueError):
+                pass
+    try:
+        p = pwd.getpwuid(os.getuid())
+        if p.pw_uid != 0:
+            return p.pw_name, p.pw_uid
+    except KeyError:
+        pass
+    return None
+
+
+def _session_cmd(argv: list) -> list:
+    """Wrap argv so it runs in the real user's Wayland/D-Bus session when we
+    are root; return argv unchanged when we already are that user."""
+    try:
+        if os.geteuid() != 0:
+            return argv
+    except AttributeError:      # non-POSIX; shouldn't happen on this tool
+        return argv
+    ru = _real_user_uid()
+    if not ru:
+        return argv
+    name, uid = ru
+    rundir = f"/run/user/{uid}"
+    return ["sudo", "-u", name, "-H", "env",
+            f"XDG_RUNTIME_DIR={rundir}",
+            f"DBUS_SESSION_BUS_ADDRESS=unix:path={rundir}/bus",
+            "WAYLAND_DISPLAY=wayland-0", "DISPLAY=:0", *argv]
+
+
+# --------------------------------------------------------------------------- #
+#  Panel refresh rate (KDE / KScreen). The G15 5515 panel is 120 Hz; dropping
+#  to 60 on battery is a real power lever. kscreen-doctor persists the choice
+#  in kscreen's own config, so no boot service is needed.
+# --------------------------------------------------------------------------- #
+
+def panel_modes() -> "dict | None":
+    """{'output', 'current_id', 'current_hz', 'modes':[{id,w,h,hz}], 'rates':[hz]}.
+    None if kscreen-doctor is missing or KScreen/KWin isn't reachable."""
+    if not which("kscreen-doctor"):
+        return None
+    try:
+        r = subprocess.run(_session_cmd(["kscreen-doctor", "-j"]),
+                           capture_output=True, text=True, timeout=12)
+        if r.returncode != 0 or not r.stdout.strip():
+            return None
+        data = json.loads(r.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    outs = data.get("outputs", []) or []
+    if not outs:
+        return None
+
+    def _key(o):
+        n = (o.get("name") or "").upper()
+        return (0 if n.startswith(("EDP", "LVDS")) else 1,
+                0 if o.get("enabled") else 1)
+
+    o = sorted(outs, key=_key)[0]
+    cur_id = str(o.get("currentModeId", ""))
+    modes, rates, cur_hz = [], set(), None
+    for m in o.get("modes", []) or []:
+        size = m.get("size", {}) or {}
+        w, h, hz = size.get("width"), size.get("height"), m.get("refreshRate")
+        if not (w and h and hz):
+            continue
+        hz = round(float(hz), 3)
+        mid = str(m.get("id", ""))
+        modes.append({"id": mid, "w": int(w), "h": int(h), "hz": hz})
+        rates.add(round(hz))
+        if mid == cur_id:
+            cur_hz = hz
+    return {"output": o.get("name"), "current_id": cur_id, "current_hz": cur_hz,
+            "modes": modes, "rates": sorted(rates)}
+
+
+def set_panel_refresh(hz: int) -> "tuple[bool, str]":
+    """Switch the internal panel to ~`hz`, keeping the current resolution when
+    a matching mode exists there. Runs in the user's session."""
+    info = panel_modes()
+    if not info:
+        return False, "kscreen-doctor not available (KDE / KScreen only)"
+    if not info["modes"]:
+        return False, "no modes reported for the panel"
+    want = float(hz)
+    cur = next((m for m in info["modes"] if m["id"] == info["current_id"]), None)
+    pool = info["modes"]
+    if cur:
+        same_res = [m for m in pool if m["w"] == cur["w"] and m["h"] == cur["h"]]
+        if same_res:
+            pool = same_res
+    best = min(pool, key=lambda m: (abs(m["hz"] - want), -(m["w"] * m["h"])))
+    tag = f"{best['w']}x{best['h']}@{round(best['hz'])}"
+    for spec in (f"output.{info['output']}.mode.{best['id']}",
+                 f"output.{info['output']}.mode.{tag}"):
+        try:
+            r = subprocess.run(_session_cmd(["kscreen-doctor", spec]),
+                               capture_output=True, text=True, timeout=15)
+            if r.returncode == 0:
+                return True, tag
+            last = (r.stderr or r.stdout or "").strip()
+        except (OSError, subprocess.SubprocessError) as exc:
+            last = str(exc)
+    return False, last or "kscreen-doctor failed"
+
+
+# --------------------------------------------------------------------------- #
+#  NVIDIA graphics-clock lock. Unlike -pl (firmware-locked on the 3050 Ti),
+#  `nvidia-smi --lock-gpu-clocks` works in both directions — underclocking for
+#  battery / heat is the useful one on this chassis.
+# --------------------------------------------------------------------------- #
+
+def nvidia_clock_info() -> "dict | None":
+    """{'supported', 'gr_min', 'gr_max', 'gr_cur', 'mem_max', 'mem_cur'} MHz.
+    None if the dGPU is asleep / nvidia-smi missing (don't wake it to poll)."""
+    if not which("nvidia-smi") or not dgpu_is_awake():
+        return None
+    try:
+        out = subprocess.run(
+            ["nvidia-smi",
+             "--query-gpu=clocks.max.graphics,clocks.max.memory,"
+             "clocks.graphics,clocks.memory",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=6)
+        if out.returncode != 0:
+            return None
+        gmax, mmax, gcur, mcur = [_f(x.strip()) for x in out.stdout.strip().split(",")]
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    gr_min = None
+    try:
+        q = subprocess.run(["nvidia-smi", "-q", "-d", "SUPPORTED_CLOCKS"],
+                           capture_output=True, text=True, timeout=8)
+        vals = [int(v) for v in re.findall(r"Graphics\s*:\s*(\d+)\s*MHz", q.stdout or "")]
+        if vals:
+            gr_min = min(vals)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        pass
+    return {"supported": gmax is not None,
+            "gr_min": gr_min or 210,
+            "gr_max": round(gmax) if gmax else None,
+            "gr_cur": round(gcur) if gcur else None,
+            "mem_max": round(mmax) if mmax else None,
+            "mem_cur": round(mcur) if mcur else None}
+
+
+def set_nvidia_clock_lock(gr_min: int, gr_max: int) -> "tuple[bool, str]":
+    """Clamp the dGPU graphics clock to [gr_min, gr_max] MHz. Needs root."""
+    if not which("nvidia-smi"):
+        return False, "nvidia-smi not installed"
+    info = nvidia_clock_info()
+    if info and info.get("gr_max"):
+        floor, ceil = int(info.get("gr_min") or 210), int(info["gr_max"])
+        gr_min = max(floor, min(ceil, int(gr_min)))
+        gr_max = max(gr_min, min(ceil, int(gr_max)))
+    else:
+        gr_min, gr_max = int(gr_min), max(int(gr_min), int(gr_max))
+    try:
+        subprocess.run(["nvidia-smi", "-pm", "1"], capture_output=True, timeout=8)
+        r = subprocess.run(["nvidia-smi", f"--lock-gpu-clocks={gr_min},{gr_max}"],
+                           capture_output=True, text=True, timeout=12)
+        blob = ((r.stdout or "") + (r.stderr or "")).lower()
+        if r.returncode == 0 and "not supported" not in blob:
+            return True, f"{gr_min}-{gr_max} MHz"
+        return False, (r.stderr or r.stdout or "lock-gpu-clocks failed").strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc)
+
+
+def reset_nvidia_clocks() -> "tuple[bool, str]":
+    if not which("nvidia-smi"):
+        return False, "nvidia-smi not installed"
+    try:
+        r = subprocess.run(["nvidia-smi", "--reset-gpu-clocks"],
+                           capture_output=True, text=True, timeout=12)
+        if r.returncode == 0:
+            return True, ""
+        return False, (r.stderr or r.stdout or "reset failed").strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc)

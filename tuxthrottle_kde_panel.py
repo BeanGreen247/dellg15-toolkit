@@ -110,6 +110,28 @@ def find_panels() -> list[str]:
     return out
 
 
+def _plasmashell_view_groups(cid: str) -> list[list[str]]:
+    """Group chains in plasmashellrc that hold this panel's view state.
+
+    Plasma 6 keeps the *effective* panel geometry (the floating gap) in
+    `plasmashellrc` under `[PlasmaViews][Panel <cid>]` (and sometimes a
+    per-screen `[PlasmaViews][Panel <cid>][Screen N]` child), NOT in the
+    appletsrc containment. Writing only the appletsrc key leaves the panel
+    visually floating — this was the "flush tweak does nothing" bug.
+    """
+    base = ["PlasmaViews", f"Panel {cid}"]
+    groups = [base]
+    rc = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config")) \
+        / "plasmashellrc"
+    if rc.is_file():
+        pat = re.compile(rf"^\[PlasmaViews\]\[Panel {re.escape(cid)}\]\[([^\]]+)\]$")
+        for line in rc.read_text(errors="ignore").splitlines():
+            m = pat.match(line)
+            if m and m.group(1) != "Defaults":
+                groups.append(base + [m.group(1)])
+    return groups
+
+
 def panel_floating(enable: bool) -> int:
     """floating panel on = the ~few-mm gap from the screen edge; off = flush."""
     panels = find_panels()
@@ -117,11 +139,19 @@ def panel_floating(enable: bool) -> int:
         print("no panel containment in the desktop config", file=sys.stderr)
         return 0  # nothing to do isn't an error
     for cid in panels:
+        # 1. the appletsrc containment hint (true/false)
         subprocess.run(
             ["kwriteconfig6", "--file", APPLETS,
              "--group", "Containments", "--group", cid, "--group", "General",
              "--key", "floating", "true" if enable else "false"],
             check=False)
+        # 2. the plasmashellrc view state that actually drives the gap (1/0)
+        for chain in _plasmashell_view_groups(cid):
+            args = ["kwriteconfig6", "--file", "plasmashellrc"]
+            for g in chain:
+                args += ["--group", g]
+            args += ["--key", "floating", "1" if enable else "0"]
+            subprocess.run(args, check=False)
     print(f"panel floating -> {'on' if enable else 'off (flush)'} "
           f"on {len(panels)} panel(s)")
     return 0

@@ -39,6 +39,11 @@ CONFIG_DIR = BASE_DIR / "config"
 ASSETS_DIR = BASE_DIR / "assets"
 PROJECT_URL = "https://github.com/BeanGreen247/tuxthrottle"
 PROJECT_ISSUES_URL = PROJECT_URL + "/issues"
+
+# Editable points in the custom fan-curve editor. powerd's interp() is generic
+# over any N, and old (5-point) powerd.json configs still load — the editor
+# resamples them up to this count on open.
+FAN_CURVE_POINTS = 10
 sys.path.insert(0, str(BASE_DIR))
 
 try:
@@ -851,6 +856,7 @@ class ToolkitApp:
     def __init__(self, root: "tb.Window"):
         self.root = root
         self.user = resolve_real_user()
+        sensors.set_session_user(self.user)  # for kscreen-doctor when elevated
         root.title("TuxThrottle — Nobara Linux")
         root.geometry("1080x760")  # fallback size if the WM ignores maximise
         _maximize(root)
@@ -1554,12 +1560,39 @@ class ToolkitApp:
 
     # --- closed-loop fan curve (tuxthrottle_powerd.py) ---
 
-    _FANCURVE_DEFAULT = [[45, 0], [60, 25], [72, 55], [82, 85], [90, 100]]
+    _FANCURVE_DEFAULT = [[40, 0], [48, 12], [55, 25], [62, 38], [69, 52],
+                         [75, 66], [81, 78], [86, 88], [91, 95], [95, 100]]
+
+    @staticmethod
+    def _fc_resample(pts, n=FAN_CURVE_POINTS):
+        """Piecewise-linearly resample an arbitrary point list to n points
+        evenly spaced across its temperature range (used when loading an old
+        5-point powerd.json into the n-row editor)."""
+        clean = sorted([[float(t), float(b)] for t, b in pts
+                        if t is not None and b is not None])
+        if len(clean) == n:
+            return [[int(round(t)), int(round(b))] for t, b in clean]
+        if len(clean) < 2:
+            return [list(p) for p in ToolkitApp._FANCURVE_DEFAULT[:n]]
+
+        def at(temp):
+            for (a_t, a_b), (b_t, b_b) in zip(clean, clean[1:]):
+                if temp <= b_t:
+                    if b_t == a_t:
+                        return a_b
+                    f = (temp - a_t) / (b_t - a_t)
+                    return a_b + f * (b_b - a_b)
+            return clean[-1][1]
+
+        t0, t1 = clean[0][0], clean[-1][0]
+        return [[int(round(t0 + (t1 - t0) * i / (n - 1))),
+                 int(round(at(t0 + (t1 - t0) * i / (n - 1))))]
+                for i in range(n)]
 
     def _build_fancurve_section(self, parent):
         cfg = self._read_power_state("powerd.json") or {}
         fc = cfg.get("fan_curve", {})
-        pts = fc.get("points") or self._FANCURVE_DEFAULT
+        pts = self._fc_resample(fc.get("points") or self._FANCURVE_DEFAULT)
 
         lf = tb.Labelframe(parent, text="Custom fan curve (closed-loop)", padding=12)
         lf.pack(fill="x", pady=(14, 6))
@@ -1580,17 +1613,24 @@ class ToolkitApp:
             tb.Radiobutton(top, text=lbl, value=val, variable=self._fc_sensor,
                            bootstyle="toolbutton").pack(side="left", padx=3)
 
+        # n rows, split into two side-by-side blocks so 10+ points stay compact
         grid = tb.Frame(lf); grid.pack(anchor="w", pady=(10, 4))
-        tb.Label(grid, text="Temp °C", width=10, bootstyle=SECONDARY).grid(row=0, column=0)
-        tb.Label(grid, text="Boost %", width=10, bootstyle=SECONDARY).grid(row=0, column=1)
+        half = (FAN_CURVE_POINTS + 1) // 2
+        for blk in (0, 1):
+            col0 = blk * 3
+            tb.Label(grid, text="Temp °C", width=9, bootstyle=SECONDARY
+                     ).grid(row=0, column=col0)
+            tb.Label(grid, text="Boost %", width=9, bootstyle=SECONDARY
+                     ).grid(row=0, column=col0 + 1)
         self._fc_rows = []
-        for r in range(5):
-            t, b = (pts[r] if r < len(pts) else self._FANCURVE_DEFAULT[r])
+        for r in range(FAN_CURVE_POINTS):
+            t, b = pts[r]
             tv = tk.IntVar(value=int(t)); bv = tk.IntVar(value=int(b))
-            tb.Spinbox(grid, from_=30, to=100, textvariable=tv, width=8,
-                       command=self._fc_redraw).grid(row=r + 1, column=0, padx=4, pady=2)
-            tb.Spinbox(grid, from_=0, to=100, textvariable=bv, width=8,
-                       command=self._fc_redraw).grid(row=r + 1, column=1, padx=4, pady=2)
+            gr, gc = (r + 1, 0) if r < half else (r - half + 1, 3)
+            tb.Spinbox(grid, from_=25, to=105, textvariable=tv, width=7,
+                       command=self._fc_redraw).grid(row=gr, column=gc, padx=4, pady=2)
+            tb.Spinbox(grid, from_=0, to=100, textvariable=bv, width=7,
+                       command=self._fc_redraw).grid(row=gr, column=gc + 1, padx=4, pady=2)
             self._fc_rows.append((tv, bv))
 
         self._fc_canvas = tk.Canvas(lf, height=120, bg="#0e1116", highlightthickness=0)
@@ -1602,10 +1642,27 @@ class ToolkitApp:
         self._fc_hys = tk.IntVar(value=int(fc.get("hysteresis_c", 3)))
         tb.Spinbox(hr, from_=0, to=10, textvariable=self._fc_hys, width=6).pack(side="left", padx=6)
         tb.Label(hr, text="°C").pack(side="left")
+        tb.Button(hr, text="Linear fill", bootstyle=(INFO, "outline"),
+                  command=self._fc_linfill).pack(side="left", padx=(16, 0))
         tb.Button(hr, text="Save curve", bootstyle=SUCCESS,
-                  command=self._fc_save).pack(side="left", padx=(16, 0))
+                  command=self._fc_save).pack(side="left", padx=(8, 0))
         self._fc_live = tb.Label(hr, text="", bootstyle=SECONDARY)
         self._fc_live.pack(side="left", padx=12)
+        self._fc_redraw()
+
+    def _fc_linfill(self):
+        """Spread every intermediate point on a straight line between the
+        first and last row, so the user only has to place the two endpoints."""
+        rows = self._fc_rows
+        n = len(rows)
+        t0, tN = rows[0][0].get(), rows[-1][0].get()
+        b0, bN = rows[0][1].get(), rows[-1][1].get()
+        if tN <= t0:
+            tN = t0 + n
+        for i, (tv, bv) in enumerate(rows):
+            f = i / (n - 1)
+            tv.set(int(round(t0 + (tN - t0) * f)))
+            bv.set(int(round(b0 + (bN - b0) * f)))
         self._fc_redraw()
 
     def _fc_points(self) -> list:
@@ -1920,8 +1977,10 @@ class ToolkitApp:
         self._build_tdp_section(frame)
         self._build_co_section(frame)
         self._build_nvpl_section(frame)
+        self._build_gpuclock_section(frame)
         self._build_gpumode_section(frame)
         self._build_battery_section(frame)
+        self._build_refresh_section(frame)
         self._build_autoswitch_section(frame)
 
         self._power_live = True
@@ -2125,6 +2184,128 @@ class ToolkitApp:
 
         threading.Thread(target=work, daemon=True).start()
 
+    # --- NVIDIA graphics-clock lock (works where -pl is firmware-locked) ---
+
+    def _build_gpuclock_section(self, parent):
+        if not self.has_nvidia:
+            return
+        info = sensors.nvidia_clock_info()
+        lf = tb.Labelframe(parent, text="NVIDIA GPU clock lock — RTX 3050 Ti",
+                           padding=12)
+        lf.pack(fill="x", pady=6)
+        tb.Label(lf, wraplength=1000, justify="left", bootstyle=SECONDARY, text=(
+            "Clamps the dGPU graphics clock. Lowering the ceiling is the one GPU "
+            "lever that works on this chassis (the board power limit is "
+            "firmware-locked) — good for heat and battery; raising it back to the "
+            "max is the default. Applies immediately; the “GPU clock lock at "
+            "boot” tweak re-applies it after a reboot / resume.")
+            ).pack(anchor="w", pady=(0, 8))
+        if not info:
+            self._gpuclk_note = tb.Label(lf, bootstyle=SECONDARY, text=(
+                "dGPU is asleep — run something on it to read the clock range."))
+            self._gpuclk_note.pack(anchor="w")
+            return
+
+        saved = self._read_power_state("nvclk.json")
+        lo = int(info.get("gr_min") or 210)
+        hi = int(info.get("gr_max") or 2100)
+        self._gpuclk_min, self._gpuclk_max = lo, hi
+        self._gpuclk_var = tk.IntVar(value=int(saved.get("gr_max") or hi))
+        r = tb.Frame(lf); r.pack(fill="x", pady=4)
+        tb.Label(r, text="Max graphics clock", width=20, anchor="w").pack(side="left")
+        sc = tb.Scale(r, from_=lo, to=hi, variable=self._gpuclk_var,
+                      orient="horizontal", length=300)
+        sc.pack(side="left", fill="x", expand=True)
+        sc.bind("<ButtonRelease-1>", lambda _e: self._gpuclk_apply())
+        tb.Label(r, textvariable=self._gpuclk_var, width=5).pack(side="left")
+        tb.Label(r, text="MHz").pack(side="left", padx=(0, 8))
+        self._gpuclk_live = tb.Label(r, text="now: — MHz", width=14, bootstyle=SECONDARY)
+        self._gpuclk_live.pack(side="left")
+
+        br = tb.Frame(lf); br.pack(anchor="w", pady=(8, 0))
+        for lbl, frac in (("Battery (−45%)", 0.55), ("Cool (−25%)", 0.75),
+                          ("Full", 1.0)):
+            mhz = lo if frac == 0.0 else round(lo + (hi - lo) * frac)
+            tb.Button(br, text=lbl, bootstyle=(INFO, "outline"),
+                      command=lambda m=mhz: (self._gpuclk_var.set(m),
+                                             self._gpuclk_apply())
+                      ).pack(side="left", padx=3)
+        tb.Button(br, text="Unlock / reset", bootstyle=(SECONDARY, "outline"),
+                  command=self._gpuclk_reset).pack(side="left", padx=(12, 0))
+        tb.Label(lf, bootstyle=WARNING, wraplength=1000, justify="left", text=(
+            "After applying, watch the Report a Bug log / dmesg for Xid errors; "
+            "if the GPU misbehaves, hit “Unlock / reset”.")).pack(anchor="w", pady=(6, 0))
+
+    def _gpuclk_apply(self):
+        hi = int(self._gpuclk_var.get())
+        lo = int(getattr(self, "_gpuclk_min", 210))
+        self._write_power_state("nvclk.json", {"gr_min": lo, "gr_max": hi})
+
+        def work():
+            ok, err = sensors.set_nvidia_clock_lock(lo, hi)
+            self._log(f"[Power] GPU clock lock → {lo}-{hi} MHz"
+                      + ("" if ok else f"  FAILED: {err}"))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _gpuclk_reset(self):
+        try:
+            self._power_state_path("nvclk.json").unlink()
+        except (OSError, AttributeError):
+            pass
+        if getattr(self, "_gpuclk_var", None) is not None:
+            self._gpuclk_var.set(int(getattr(self, "_gpuclk_max", 2100)))
+
+        def work():
+            ok, err = sensors.reset_nvidia_clocks()
+            self._log("[Power] GPU clock lock → reset (unlocked)"
+                      + ("" if ok else f"  FAILED: {err}"))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    # --- Panel refresh rate (KDE / KScreen) ---
+
+    def _build_refresh_section(self, parent):
+        info = sensors.panel_modes()
+        lf = tb.Labelframe(parent, text="Panel refresh rate", padding=12)
+        lf.pack(fill="x", pady=6)
+        if not info or len(info.get("rates", [])) < 2:
+            tb.Label(lf, bootstyle=SECONDARY, wraplength=1000, justify="left", text=(
+                "Needs kscreen-doctor (KDE) and a panel with more than one "
+                "refresh rate. Nothing to switch here.")).pack(anchor="w")
+            return
+        tb.Label(lf, wraplength=1000, justify="left", bootstyle=SECONDARY, text=(
+            "Dropping the high-refresh panel to 60 Hz on battery is a real power "
+            "saving. Resolution is kept; KScreen remembers the choice across "
+            "reboots.")).pack(anchor="w", pady=(0, 8))
+        row = tb.Frame(lf); row.pack(anchor="w")
+        cur = info.get("current_hz")
+        self._refresh_var = tk.IntVar(
+            value=int(round(cur)) if cur else info["rates"][-1])
+        for hz in info["rates"]:
+            tb.Radiobutton(row, text=f"{hz} Hz", value=hz,
+                           variable=self._refresh_var, bootstyle="toolbutton",
+                           command=lambda h=hz: self._refresh_apply(h)
+                           ).pack(side="left", padx=4)
+        self._refresh_now = tb.Label(
+            lf, bootstyle=SECONDARY,
+            text=f"current: {round(cur)} Hz" if cur else "current: unknown")
+        self._refresh_now.pack(anchor="w", pady=(6, 0))
+        tb.Label(lf, wraplength=1000, justify="left", bootstyle=SECONDARY, text=(
+            "Tip: set the AC/battery auto-switch below to flip this with the "
+            "charger — “AC → 120 Hz, battery → 60 Hz”.")).pack(anchor="w", pady=(6, 0))
+
+    def _refresh_apply(self, hz: int):
+        def work():
+            ok, msg = sensors.set_panel_refresh(hz)
+            self._log(f"[Power] panel refresh → {hz} Hz"
+                      + (f"  ({msg})" if ok else f"  FAILED: {msg}"))
+            if ok:
+                self.root.after(0, lambda: self._refresh_now.configure(
+                    text=f"current: {hz} Hz"))
+
+        threading.Thread(target=work, daemon=True).start()
+
     # --- Battery charge limit ---
 
     def _build_battery_section(self, parent, prefix: str = "_bat"):
@@ -2254,8 +2435,36 @@ class ToolkitApp:
         tb.Label(row, text="On battery →", width=12, anchor="w").pack(side="left")
         tb.Combobox(row, textvariable=self._aw_on_bat, values=self._AUTOSWITCH_BUNDLES,
                     state="readonly", width=14).pack(side="left")
+
+        self._aw_refresh_rates = []
+        pm = sensors.panel_modes()
+        if pm and len(pm.get("rates", [])) > 1:
+            self._aw_refresh_rates = pm["rates"]
+            opts = ["leave alone"] + [f"{h} Hz" for h in pm["rates"]]
+
+            def _cur(key):
+                v = int(aw.get(key) or 0)
+                return f"{v} Hz" if v in pm["rates"] else "leave alone"
+
+            rr = tb.Frame(lf); rr.pack(anchor="w", pady=(8, 0))
+            self._aw_hz_ac = tk.StringVar(value=_cur("refresh_ac"))
+            self._aw_hz_bat = tk.StringVar(value=_cur("refresh_battery"))
+            tb.Label(rr, text="Refresh AC →", width=12, anchor="w").pack(side="left")
+            tb.Combobox(rr, textvariable=self._aw_hz_ac, values=opts,
+                        state="readonly", width=14).pack(side="left", padx=(0, 16))
+            tb.Label(rr, text="Refresh batt →", width=12, anchor="w").pack(side="left")
+            tb.Combobox(rr, textvariable=self._aw_hz_bat, values=opts,
+                        state="readonly", width=14).pack(side="left")
+
         tb.Button(lf, text="Save auto-switch", bootstyle=SUCCESS,
                   command=self._aw_save).pack(anchor="w", pady=(10, 0))
+
+    @staticmethod
+    def _aw_hz_val(s: str) -> int:
+        try:
+            return int(str(s).split()[0])
+        except (ValueError, IndexError):
+            return 0
 
     def _aw_save(self):
         merged = self._read_power_state("powerd.json") or {}
@@ -2264,6 +2473,9 @@ class ToolkitApp:
             "on_ac": self._aw_on_ac.get(),
             "on_battery": self._aw_on_bat.get(),
         }
+        if self._aw_refresh_rates:
+            merged["autoswitch"]["refresh_ac"] = self._aw_hz_val(self._aw_hz_ac.get())
+            merged["autoswitch"]["refresh_battery"] = self._aw_hz_val(self._aw_hz_bat.get())
         self._write_power_state("powerd.json", merged)
         self._log(f"[Power] auto-switch saved ({'on' if self._aw_enabled.get() else 'off'}: "
                   f"AC→{self._aw_on_ac.get()}, battery→{self._aw_on_bat.get()})")
@@ -2283,12 +2495,13 @@ class ToolkitApp:
         tdp = sensors.read_ryzenadj_info() if getattr(self, "_tdp_val_labels", None) else None
         nvpl = sensors.nvidia_power_limit_info() if getattr(self, "_nvpl_live", None) is not None else None
         bat = sensors.battery_charge_limit_info() if getattr(self, "_bat_live", None) is not None else None
+        nvclk = sensors.nvidia_clock_info() if getattr(self, "_gpuclk_live", None) is not None else None
         try:
-            self.root.after(0, lambda: self._power_poll_apply(tdp, nvpl, bat))
+            self.root.after(0, lambda: self._power_poll_apply(tdp, nvpl, bat, nvclk))
         except (RuntimeError, tk.TclError):
             pass  # window torn down while this worker was in flight
 
-    def _power_poll_apply(self, tdp, nvpl, bat):
+    def _power_poll_apply(self, tdp, nvpl, bat, nvclk=None):
         if tdp is not None:
             for key, lab in self._tdp_val_labels.items():
                 v = tdp.get(f"{key}_limit")
@@ -2306,6 +2519,13 @@ class ToolkitApp:
             try:
                 self._bat_live.configure(
                     text=f"now: {bat['current']} %" if bat["current"] is not None else "now: — %")
+            except tk.TclError:
+                pass
+        if getattr(self, "_gpuclk_live", None) is not None:
+            try:
+                self._gpuclk_live.configure(
+                    text=f"now: {nvclk['gr_cur']} MHz" if nvclk and nvclk.get("gr_cur")
+                    else "now: asleep")
             except tk.TclError:
                 pass
 

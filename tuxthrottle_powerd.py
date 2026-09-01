@@ -38,7 +38,9 @@ Power & Limits tabs), re-read live when its mtime changes:
     "autoswitch": {
       "enabled": false,
       "on_ac": "Balanced",        # Quiet | Balanced | Performance
-      "on_battery": "Quiet"
+      "on_battery": "Quiet",
+      "refresh_ac": 0,            # panel Hz on AC (0 = leave alone), KDE only
+      "refresh_battery": 0        # panel Hz on battery (0 = leave alone)
     }
   }
 
@@ -69,7 +71,8 @@ DEFAULTS: dict[str, Any] = {
         "hysteresis_c": 3,
         "points": [[45, 0], [60, 25], [72, 55], [82, 85], [90, 100]],
     },
-    "autoswitch": {"enabled": False, "on_ac": "Balanced", "on_battery": "Quiet"},
+    "autoswitch": {"enabled": False, "on_ac": "Balanced", "on_battery": "Quiet",
+                   "refresh_ac": 0, "refresh_battery": 0},
     # per-game auto-profiles: when a matched process (or, with "*", any Feral
     # GameMode client) is running, apply a named profile; restore `default`
     # (or roll back the pre-game snapshot when default is null) once it exits.
@@ -559,6 +562,21 @@ def _build_dispatch(user, reload_flag: list):
             ok, err = (not errs), "; ".join(errs)
         elif target == "gpumode":
             ok, err = sensors.gpu_mode_set(str(p["value"]))
+        elif target == "refresh":
+            ok, err = sensors.set_panel_refresh(int(p["value"]))
+        elif target == "gpu-clock":
+            val = str(p.get("value", "")).lower()
+            if val in ("reset", "unlock", "off", "0", ""):
+                ok, err = sensors.reset_nvidia_clocks()
+                profiles.write_config("nvclk.json", None, user)
+            else:
+                info = sensors.nvidia_clock_info() or {}
+                hi = int(p["value"])
+                lo = int(p.get("min") or info.get("gr_min") or 210)
+                ok, err = sensors.set_nvidia_clock_lock(lo, hi)
+                if ok:
+                    profiles.write_config("nvclk.json",
+                                          {"gr_min": lo, "gr_max": hi}, user)
         else:
             raise ValueError(f"unknown set target: {target}")
         if not ok:
@@ -627,6 +645,11 @@ def run(cfg_path: Path, user=None, once: bool = False) -> int:
                     bundle = cfg["autoswitch"]["on_ac" if ac else "on_battery"]
                     log(f"power source -> {'AC' if ac else 'battery'}; apply '{bundle}'")
                     apply_bundle(bundle)
+                    hz = cfg["autoswitch"].get("refresh_ac" if ac else "refresh_battery")
+                    if hz:
+                        ok, msg = sensors.set_panel_refresh(int(hz))
+                        log(f"autoswitch: panel refresh -> {hz} Hz"
+                            + ("" if ok else f" FAILED {msg}"))
                     last_ac = ac
 
             gp_poll = max(3, int(cfg["game_profiles"].get("poll_s", 6)))
@@ -654,6 +677,7 @@ def main() -> int:
     if os.geteuid() != 0:
         log("warning: not root — fan/profile writes will fail")
     user = args.user or os.environ.get("SUDO_USER")
+    sensors.set_session_user(user)   # systemd gives us no SUDO_*/PKEXEC_* env
     cfg_path = args.config or _config_path(user)
     return run(cfg_path, user=user, once=(args.mode == "once"))
 

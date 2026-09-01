@@ -20,6 +20,8 @@ class FakeSensors:
     def battery_charge_limit_info(self): return {"current": self.battery}
     def nvidia_power_limit_info(self): return {"supported": False}
     def gpu_mode_get(self): return self.gpu
+    def panel_modes(self): return {"current_hz": 144.0, "rates": [60, 144]}
+    def nvidia_clock_info(self): return {"supported": True, "gr_min": 210, "gr_max": 2100}
 
     # apply side
     def set_platform_profile(self, v): self.applied.append(("profile", v)); self.profile = v; return True, ""
@@ -28,6 +30,9 @@ class FakeSensors:
     def set_battery_charge_limit(self, p): self.applied.append(("battery", p)); self.battery = p; return True, ""
     def set_nvidia_power_limit(self, w): return False, "locked"
     def gpu_mode_set(self, m): self.applied.append(("gpu", m)); return True, ""
+    def set_panel_refresh(self, hz): self.applied.append(("refresh", hz)); return True, ""
+    def set_nvidia_clock_lock(self, lo, hi): self.applied.append(("nvclk", (lo, hi))); return True, ""
+    def reset_nvidia_clocks(self): self.applied.append(("nvclk", "reset")); return True, ""
 
 
 def _isolate(monkeypatch, tmp_path):

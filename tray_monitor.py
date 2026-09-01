@@ -19,11 +19,33 @@ nvidia-max-perf helper scripts installed by tuxthrottle.py's tweaks —
 install those first (Presets > Safe Baseline covers the power-profile ones;
 Competitive Gaming covers the GPU perf-state ones).
 """
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import sensors  # noqa: E402
+
+
+def _ctl(*args: str) -> tuple[bool, str]:
+    """Run `tuxthrottlectl <args>` with privilege. `set` needs root; pkexec +
+    the PolkitTuxthrottlectl policy make it passwordless for an active local
+    user, and tuxthrottlectl itself routes through the daemon socket when it
+    is up. Falls back to `sudo -n`."""
+    ctl = shutil.which("tuxthrottlectl") or "/usr/local/bin/tuxthrottlectl"
+    for launcher in (["pkexec"], ["sudo", "-n"], []):
+        if launcher and not shutil.which(launcher[0]):
+            continue
+        try:
+            r = subprocess.run([*launcher, ctl, *args],
+                               capture_output=True, text=True, timeout=20)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return False, str(exc)
+        if r.returncode == 0:
+            return True, (r.stdout or "").strip()
+        last = (r.stderr or r.stdout or "").strip()
+    return False, last or "tuxthrottlectl failed"
 
 try:
     from PySide6.QtCore import QTimer
@@ -62,6 +84,19 @@ class TrayMonitor:
         self.gamemode_action = QAction("Game Mode", checkable=True)
         self.gamemode_action.toggled.connect(self._on_gamemode_toggled)
         self.menu.addAction(self.gamemode_action)
+
+        prof_menu = self.menu.addMenu("Power profile")
+        for label, value in (("Balanced", "balanced"),
+                             ("Performance", "performance")):
+            act = QAction(label, prof_menu)
+            act.triggered.connect(lambda _c=False, v=value: self._set_profile(v))
+            prof_menu.addAction(act)
+
+        fan_menu = self.menu.addMenu("Fan boost")
+        for label, pct in (("Off (0%)", 0), ("Half (50%)", 50), ("Max (100%)", 100)):
+            act = QAction(label, fan_menu)
+            act.triggered.connect(lambda _c=False, p=pct: self._set_fan_boost(p))
+            fan_menu.addAction(act)
 
         self.menu.addSeparator()
         quit_action = QAction("Quit")
@@ -118,6 +153,18 @@ class TrayMonitor:
         if not ok:
             QMessageBox.warning(None, "Game Mode", f"Failed: {err}")
             self._sync_gamemode_state()
+        self._refresh()
+
+    def _set_profile(self, value: str):
+        ok, msg = _ctl("set", "power-profile", value)
+        if not ok:
+            QMessageBox.warning(None, "Power profile", f"Failed: {msg}")
+        self._refresh()
+
+    def _set_fan_boost(self, pct: int):
+        ok, msg = _ctl("set", "fan-boost", "both", str(pct))
+        if not ok:
+            QMessageBox.warning(None, "Fan boost", f"Failed: {msg}")
         self._refresh()
 
     def _on_tray_activated(self, reason):
