@@ -6,8 +6,10 @@ show live numbers.
 
 Reference platform: Dell G15 5515 Ryzen Edition (Ryzen 7 5800H, RTX 3050 Ti
 Mobile). Board specifics — CPU/fan hwmon names, the platform_profile path, the
-PWM floor, fan count — come from the model profile (`models/<slug>.json` via
-`model_profile()`), defaulting to the 5515 values when no profile matches.
+PWM floor, fan count, the per-fan boost attribute, the max RPM, and which
+platform_profile value equals Game Mode — come from the model profile
+(`models/<slug>.json` via `model_profile()`), defaulting to the 5515 values
+when no profile matches.
 GPU lookups auto-detect by PCI vendor ID (0x1002 AMD / nvidia-smi for NVIDIA).
 """
 import glob
@@ -167,6 +169,24 @@ def _platform_profile_path() -> str:
 def _pwm_floor() -> int:
     """Lowest PWM a manual curve may command, so a fan is never stopped."""
     return int(_prof_section("fans").get("pwm_floor") or PWM_FLOOR)
+
+
+def _fan_boost_attr(i: int) -> str:
+    """hwmon attribute for fan `i`'s additive AWCC-style boost."""
+    names = _prof_section("fans").get("additive_boost") or []
+    if 1 <= i <= len(names) and names[i - 1]:
+        return str(names[i - 1])
+    return f"fan{i}_boost"
+
+
+def _fan_rpm_max() -> int:
+    """Best-guess top fan RPM, for the Fans-tab gauge when `fanN_max` is absent."""
+    return int(_prof_section("fans").get("rpm_max") or 4700)
+
+
+def _game_mode_value() -> str:
+    """The platform_profile value that = Game Mode / G-Mode on this board."""
+    return str(_prof_section("game_mode").get("value") or "performance")
 
 
 def model_allows(models) -> bool:
@@ -418,7 +438,7 @@ def get_game_mode_state() -> bool:
         return False
     try:
         out = subprocess.run(["powerprofilesctl", "get"], capture_output=True, text=True, timeout=5)
-        return out.stdout.strip() == "performance"
+        return out.stdout.strip() == _game_mode_value()
     except Exception:  # noqa: BLE001
         return False
 
@@ -566,8 +586,8 @@ def read_fans() -> list:
             "index": i,
             "label": label,
             "rpm": rpm,
-            "max": _read_int(f"{base}/fan{i}_max") or 4700,
-            "boost": _read_int(f"{aw}/fan{i}_boost") if aw else None,
+            "max": _read_int(f"{base}/fan{i}_max") or _fan_rpm_max(),
+            "boost": _read_int(f"{aw}/{_fan_boost_attr(i)}") if aw else None,
         })
     return fans
 
@@ -576,7 +596,7 @@ def get_fan_boost() -> list:
     aw = _hwmon_by_name(_fan_hwmon())
     if not aw:
         return []
-    return [(_read_int(f"{aw}/fan{i}_boost") or 0) for i in _fan_indices()]
+    return [(_read_int(f"{aw}/{_fan_boost_attr(i)}") or 0) for i in _fan_indices()]
 
 
 def set_fan_boost(index: int, value_0_255: int) -> tuple[bool, str]:
@@ -585,7 +605,7 @@ def set_fan_boost(index: int, value_0_255: int) -> tuple[bool, str]:
         return False, f"{_fan_hwmon()} hwmon not present"
     v = max(0, min(255, int(value_0_255)))
     try:
-        with open(f"{aw}/fan{index}_boost", "w") as f:
+        with open(f"{aw}/{_fan_boost_attr(index)}", "w") as f:
             f.write(str(v))
         return True, ""
     except OSError as exc:

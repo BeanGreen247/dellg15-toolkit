@@ -15,6 +15,7 @@ A thin argparse wrapper over sensors.py so scripts, the tray, keybinds and
   tuxthrottlectl set   refresh <hz>
   tuxthrottlectl set   gpu-clock {<max-mhz> [--min MHZ] | reset}
   tuxthrottlectl gamemode {on|off|toggle}
+  tuxthrottlectl schedule {show|on|off}          # time-of-day profile schedule (powerd.json)
 
   tuxthrottlectl profile  {list|apply|save|show|delete} [<name>]   # full-state bundles
   tuxthrottlectl snapshot [<label>]                                # capture a rollback point
@@ -198,6 +199,30 @@ def cmd_set(args) -> int:
     return _fail(f"unknown target {args.target}")
 
 
+def cmd_schedule(args) -> int:
+    """Show or toggle the time-of-day schedule in powerd.json. Rule editing
+    stays in the GUI / the file itself."""
+    import json as _json
+    p = profiles._config_dir(None) / "powerd.json"
+    try:
+        cfg = _json.loads(p.read_text())
+    except (OSError, ValueError):
+        cfg = {}
+    sc = cfg.get("schedule") if isinstance(cfg.get("schedule"), dict) else {}
+    if args.action == "show":
+        _out(sc or {"enabled": False, "rules": [], "outside": None}, args.json)
+        return 0
+    sc.setdefault("poll_s", 60)
+    sc.setdefault("rules", [])
+    sc.setdefault("outside", None)
+    sc["enabled"] = (args.action == "on")
+    cfg["schedule"] = sc
+    profiles.write_config("powerd.json", cfg)   # chowns back to the real user
+    print(f"schedule: {'enabled' if sc['enabled'] else 'disabled'} "
+          f"({len(sc['rules'])} rule(s))")
+    return 0
+
+
 def cmd_gamemode(action: str) -> int:
     if action == "toggle":
         ok, err = sensors.toggle_game_mode_external()
@@ -284,6 +309,11 @@ def main() -> int:
     gm = sub.add_parser("gamemode", help="Game Mode on/off/toggle")
     gm.add_argument("action", choices=["on", "off", "toggle"])
 
+    scd = sub.add_parser("schedule", help="time-of-day profile schedule",
+                         parents=[common])
+    scd.add_argument("action", choices=["show", "on", "off"], nargs="?",
+                     default="show")
+
     pr = sub.add_parser("profile", help="named full-state bundles", parents=[common])
     pr.add_argument("action", choices=["list", "apply", "save", "show", "delete"])
     pr.add_argument("name", nargs="?")
@@ -337,6 +367,8 @@ def main() -> int:
         return cmd_set(args)
     if args.cmd == "gamemode":
         return cmd_gamemode(args.action)
+    if args.cmd == "schedule":
+        return cmd_schedule(args)
     if args.cmd == "profile":
         return cmd_profile(args)
     if args.cmd == "snapshot":

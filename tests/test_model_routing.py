@@ -30,6 +30,9 @@ def test_accessors_read_from_profile(monkeypatch):
             "platform_profile_path": "/sys/acme/profile",
         },
     }
+    fake["fans"].update({"additive_boost": ["pwm1_boost", "pwm2_boost"],
+                         "rpm_max": 5200})
+    fake["game_mode"] = {"value": "turbo"}
     monkeypatch.setattr(sensors, "model_profile", lambda: fake)
     assert sensors._cpu_temp_hwmon() == "coretemp"
     assert sensors._fan_hwmon() == "acme_ec"
@@ -37,6 +40,10 @@ def test_accessors_read_from_profile(monkeypatch):
     assert sensors._pwm_floor() == 90
     assert sensors._fan_indices() == (1, 2, 3)
     assert sensors._platform_profile_path() == "/sys/acme/profile"
+    assert sensors._fan_boost_attr(1) == "pwm1_boost"
+    assert sensors._fan_boost_attr(3) == "fan3_boost"   # past the list -> convention
+    assert sensors._fan_rpm_max() == 5200
+    assert sensors._game_mode_value() == "turbo"
 
 
 # --- profile field absent -> 5515 fallback ------------------------------- #
@@ -49,6 +56,9 @@ def test_accessors_fall_back_when_profile_empty(monkeypatch):
     assert sensors._pwm_floor() == sensors.PWM_FLOOR == 77
     assert sensors._fan_indices() == (1, 2)
     assert sensors._platform_profile_path() == "/sys/firmware/acpi/platform_profile"
+    assert sensors._fan_boost_attr(1) == "fan1_boost"
+    assert sensors._fan_rpm_max() == 4700
+    assert sensors._game_mode_value() == "performance"
 
 
 def test_fan_indices_derives_count_from_rpm_inputs(monkeypatch):

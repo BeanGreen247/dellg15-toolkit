@@ -8,10 +8,13 @@ returns the first file whose `match` block matches, falling back to
 ## Why it exists
 
 `sensors.py` reads the CPU/fan hwmon names, the `platform_profile` path, the
-PWM floor and the fan count from the matched profile (accessors `_cpu_temp_hwmon`
-/ `_fan_hwmon` / `_fan_pwm_hwmon` / `_platform_profile_path` / `_pwm_floor` /
-`_fan_indices`), and `tuxthrottle_kbd.py` / `hotkey_listener.py` read the RGB
-device name + USB id and the G-key node + keycode. Every one of those falls
+PWM floor, the fan count, the per-fan boost attribute, the max fan RPM, and
+which `platform_profile` value equals Game Mode from the matched profile
+(accessors `_cpu_temp_hwmon` / `_fan_hwmon` / `_fan_pwm_hwmon` /
+`_platform_profile_path` / `_pwm_floor` / `_fan_indices` / `_fan_boost_attr` /
+`_fan_rpm_max` / `_game_mode_value`), and `tuxthrottle_kbd.py` /
+`hotkey_listener.py` read the RGB device name + USB id and the G-key node +
+keycode. Every one of those falls
 back to the reference 5515 value when a field (or the whole profile) is absent,
 so a machine with no matching file behaves exactly as before. The
 `config/*.json` `check`/`apply` command strings are still 5515-specific — gate
@@ -42,8 +45,8 @@ those per model with `"models": [...]`.
 | `match` | `{product_name: [...], board_name: [...]}` — any value matches |
 | `cpu` | `vendor`, `codename`, **`hwmon`** (temp hwmon `name`, e.g. `k10temp`), `ryzenadj`, `stock_ppt_w` `[stapm, fast, slow]` |
 | `igpu` / `dgpu` | vendor, driver, PCI id, `power_limit_locked` |
-| `fans` | **`hwmon`** (RPM + additive boost), **`pwm_hwmon`** (real `pwmN`), `rpm_inputs`, `additive_boost`, `pwm`, `pwm_enable`, **`count`** (fan count; else derived from `rpm_inputs`), **`pwm_floor`** (min manual PWM), **`platform_profile_path`**, `platform_profiles` |
-| `game_mode` | how Game Mode is toggled on this board |
+| `fans` | **`hwmon`** (RPM + additive boost), **`pwm_hwmon`** (real `pwmN`), `rpm_inputs`, **`additive_boost`** (per-fan boost attr names; else `fanN_boost`), `rpm_max` (gauge top; else 4700), `pwm`, `pwm_enable`, **`count`** (fan count; else derived from `rpm_inputs`), **`pwm_floor`** (min manual PWM), **`platform_profile_path`**, `platform_profiles` |
+| `game_mode` | how Game Mode is toggled on this board — **`value`** is the `platform_profile` that == Game Mode (default `performance`); `mechanism`, `driver` are informational |
 | `keyboard` | `rgb` backend, **`openrgb_device`** (OpenRGB device name), **`usb`** (`vid:pid`), `zones`, `effects`, `brightness_on` |
 | `gkey` | **`device`** (evdev name), `evdev` path, **`keycode_fnlock_off`** (the `KEY_*` name the listener acts on), `keycode_fnlock_on` |
 | `battery` | `sysfs_threshold` vs `method: "libsmbios"`, `interval`, `min_gap` |

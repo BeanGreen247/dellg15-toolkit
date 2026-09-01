@@ -268,8 +268,9 @@ back.
   any Feral GameMode session.
 - **Time schedule** — apply a preset (Quiet / Balanced / Performance) or a
   saved profile by time of day, e.g. Quiet 22:00–07:00. Rules may wrap past
-  midnight and run every day; a running per-game profile wins. Config block
-  `schedule` in `powerd.json`.
+  midnight and carry a weekday mask (all days by default); a running per-game
+  profile wins. Config block `schedule` in `powerd.json`; toggle from the CLI
+  with `tuxthrottlectl schedule {show|on|off}`.
 - **CLI** — `tuxthrottlectl profile list|apply|save`, `tuxthrottlectl
   snapshot`, `tuxthrottlectl rollback [last]`.
 - **Suspend/resume** — the **StateResume** tweak re-applies the last applied
@@ -427,6 +428,7 @@ sudo tuxthrottlectl set fan-boost both 60
 sudo tuxthrottlectl set refresh 60             # panel Hz (KDE / kscreen-doctor)
 sudo tuxthrottlectl set gpu-clock 1500          # lock the dGPU graphics clock (--min N); "reset" to unlock
 sudo tuxthrottlectl gamemode toggle
+tuxthrottlectl schedule show                    # the time-of-day schedule (schedule on|off to toggle)
 sudo tuxthrottlectl profile apply "quiet night"
 tuxthrottlectl daemon status                    # the tuxthrottled control socket
 ```
@@ -471,7 +473,7 @@ no `models` key applies everywhere, which is every entry today. See
 - `tuxthrottle_control.py` — stdlib: the newline-JSON RPC over `/run/tuxthrottle/control.sock` (server in the daemon, client in the GUI / `tuxthrottlectl`)
 - `tuxthrottle_co_stress.py` — stdlib, root: Ryzen Curve Optimizer undervolt with a stress-test-and-auto-revert harness (`apply` / `confirm` / `revert` / `reapply` / `status`)
 - `tuxthrottle_kde_panel.py` — stdlib helper for the panel-applet KDE tweaks (clock seconds, classic menu, panel-flush) — finds applet / panel containment IDs and restarts `plasmashell`
-- `tuxthrottlectl.py` — headless CLI over `sensors.py` + profiles (`status` / `get` / `set {power-profile,tdp,fan-boost,battery,nvpl,gpumode,refresh,gpu-clock}` / `profile` / `snapshot` / `rollback` / `gamemode` / `daemon`, `--json`), installed as `/usr/local/bin/tuxthrottlectl`
+- `tuxthrottlectl.py` — headless CLI over `sensors.py` + profiles (`status` / `get` / `set {power-profile,tdp,fan-boost,battery,nvpl,gpumode,refresh,gpu-clock}` / `profile` / `snapshot` / `rollback` / `gamemode` / `schedule` / `daemon`, `--json`), installed as `/usr/local/bin/tuxthrottlectl`
 - `models/` — per-board hardware profiles keyed by DMI (`g15-5515.json` is the reference); `sensors.model_profile()` picks one, and a tweak/app can gate itself with `"models": [ ... ]`
 - `clients/` — optional panel front-ends: a **waybar** module and a **KDE plasmoid**, both over `tuxthrottlectl status --json`
 - `packaging/` — the noarch RPM `.spec` + `.github/workflows/copr.yml` (SRPM on tag → COPR)

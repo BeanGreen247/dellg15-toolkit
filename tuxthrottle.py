@@ -2612,15 +2612,18 @@ class ToolkitApp:
         tb.Label(lf, wraplength=1000, justify="left", bootstyle=SECONDARY, text=(
             "The daemon applies a profile by time of day — e.g. Quiet 22:00–07:00. "
             "“Apply” is a preset (Quiet / Balanced / Performance) or a saved "
-            "profile name; times are 24-hour and may wrap past midnight; rules "
-            "run every day. A running per-game profile wins. Needs the "
-            "“Fan-curve + AC-switch daemon” tweak enabled.")).pack(anchor="w", pady=(0, 8))
+            "profile name; times are 24-hour and may wrap past midnight. Tick the "
+            "weekdays a rule runs on (all ticked = every day). A running per-game "
+            "profile wins. Needs the “Fan-curve + AC-switch daemon” tweak "
+            "enabled.")).pack(anchor="w", pady=(0, 8))
         self._sched_enabled = tk.BooleanVar(value=bool(sc.get("enabled")))
         tb.Checkbutton(lf, text="Time schedule enabled", variable=self._sched_enabled,
                        bootstyle="round-toggle").pack(anchor="w")
         grid = tb.Frame(lf); grid.pack(anchor="w", pady=(8, 4))
         for c, t in enumerate(("From", "To", "Apply")):
             tb.Label(grid, text=t, width=[8, 8, 20][c], bootstyle=SECONDARY).grid(row=0, column=c)
+        for c, d in enumerate(("M", "T", "W", "T", "F", "S", "S")):
+            tb.Label(grid, text=d, width=2, bootstyle=SECONDARY).grid(row=0, column=3 + c)
         self._sched_rows = []
         rules = sc.get("rules", []) or []
         for r in range(self._SCHED_ROWS):
@@ -2632,7 +2635,14 @@ class ToolkitApp:
             tb.Entry(grid, textvariable=tv, width=8).grid(row=r + 1, column=1, padx=3, pady=2)
             cb = tb.Combobox(grid, textvariable=av, width=18, state="readonly")
             cb.grid(row=r + 1, column=2, padx=3, pady=2)
-            self._sched_rows.append((fv, tv, av, cb))
+            days = rule.get("days")
+            dvars = []
+            for c in range(7):
+                dv = tk.BooleanVar(value=(days is None) or (c in days))
+                tb.Checkbutton(grid, variable=dv, bootstyle="toolbutton", width=1
+                               ).grid(row=r + 1, column=3 + c, padx=1)
+                dvars.append(dv)
+            self._sched_rows.append((fv, tv, av, cb, dvars))
         drow = tb.Frame(lf); drow.pack(anchor="w", pady=(4, 0))
         tb.Label(drow, text="Outside every rule →").pack(side="left")
         self._sched_outside = tk.StringVar(value=sc.get("outside") or "")
@@ -2646,10 +2656,15 @@ class ToolkitApp:
 
     def _schedule_save(self):
         rules = []
-        for fv, tv, av, _cb in self._sched_rows:
+        for fv, tv, av, _cb, dvars in self._sched_rows:
             f, t, a = fv.get().strip(), tv.get().strip(), av.get().strip()
-            if f and t and a:
-                rules.append({"from": f, "to": t, "apply": a})
+            if not (f and t and a):
+                continue
+            days = [i for i, dv in enumerate(dvars) if dv.get()]
+            rule = {"from": f, "to": t, "apply": a}
+            if 0 < len(days) < 7:            # all (or none) selected = every day
+                rule["days"] = days
+            rules.append(rule)
         merged = self._read_power_state("powerd.json") or {}
         merged["schedule"] = {
             "enabled": bool(self._sched_enabled.get()),
@@ -2692,7 +2707,7 @@ class ToolkitApp:
             cb.configure(values=[""] + names)
         if getattr(self, "_gp_default_cb", None) is not None:
             self._gp_default_cb.configure(values=[""] + names)
-        for _fv, _tv, _av, cb in getattr(self, "_sched_rows", []):
+        for _fv, _tv, _av, cb, _dv in getattr(self, "_sched_rows", []):
             cb.configure(values=sched_opts)
         if getattr(self, "_sched_outside_cb", None) is not None:
             self._sched_outside_cb.configure(values=sched_opts)
