@@ -43,6 +43,8 @@ python3 -c "import sys; sys.path.insert(0,'/opt/tuxthrottle'); import tuxthrottl
     && ok "tuxthrottle_kbd + sensors import" || no "module import error"
 python3 /opt/tuxthrottle/tuxthrottle_kbd.py --help >/dev/null 2>&1 \
     && ok "tuxthrottle_kbd CLI responds" || no "tuxthrottle_kbd CLI error"
+python3 /opt/tuxthrottle/tuxthrottle_shadercache.py show >/dev/null 2>&1 \
+    && ok "tuxthrottle_shadercache CLI responds" || no "tuxthrottle_shadercache CLI error"
 python3 -c "import sys; sys.path.insert(0,'/opt/tuxthrottle'); import sensors, json; \
 [getattr(sensors,f) for f in ('battery_health_info','battery_charge_mode','nvidia_powerd_status','amd_pstate_mode','vrr_status')]; \
 d=json.load(open('/opt/tuxthrottle/config/tweaks.json')); \

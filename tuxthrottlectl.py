@@ -5,6 +5,7 @@ A thin argparse wrapper over sensors.py so scripts, the tray, keybinds and
 `ssh` sessions can read state and set limits without the GUI. stdlib only.
 
   tuxthrottlectl status [--json]
+  tuxthrottlectl watch [interval]                # live status summary, refreshes every N s (default 2)
   tuxthrottlectl get   {power-profile|tdp|fans|battery|nvpl|gamemode|clocks|gpumode} [--json]
   tuxthrottlectl set   power-profile <balanced|performance|...>
   tuxthrottlectl set   tdp {<preset>|--stapm W --fast W --slow W}
@@ -33,6 +34,7 @@ and the command exits non-zero.
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -86,6 +88,52 @@ def gather_status() -> dict:
         "nvidia_power_limit": sensors.nvidia_power_limit_info(),
         "gamemode": sensors.gamemode_status(),
     }
+
+
+def _r(x, nd=0):
+    """Round for display; '?' when the reading is missing."""
+    if x is None:
+        return "?"
+    return int(round(x)) if nd == 0 else round(x, nd)
+
+
+def _status_oneliner() -> str:
+    s = gather_status()
+    cpu, dg = s["cpu"], s["dgpu"]
+    tdp = s.get("tdp") or {}
+    fans = s.get("fans") or []
+    bat = s.get("battery_charge_limit") or {}
+    if dg.get("awake"):
+        dgpu = (f"dGPU {_r(dg.get('temp_c'))}°C {_r(dg.get('clock_mhz'))}MHz "
+                f"{_r(dg.get('util_pct'))}% {_r(dg.get('power_w'))}W")
+    else:
+        dgpu = "dGPU asleep"
+    parts = [
+        time.strftime("%H:%M:%S"),
+        f"prof={s.get('platform_profile') or '?'}",
+        f"game={'on' if s.get('game_mode') else 'off'}",
+        (f"CPU {_r(cpu.get('temp_c'))}°C {_r(cpu.get('freq_ghz'), 1)}GHz "
+         f"{_r(cpu.get('power_w'))}W"),
+        (f"TDP {_r(tdp.get('stapm_limit'))}/{_r(tdp.get('fast_limit'))}/"
+         f"{_r(tdp.get('slow_limit'))}W" if tdp else ""),
+        dgpu,
+        ("fans " + "/".join(str(f.get("rpm")) for f in fans) + "rpm") if fans else "",
+        (f"bat {bat['current']}%" if bat.get("current") is not None else ""),
+    ]
+    return "  ".join(p for p in parts if p)
+
+
+def cmd_watch(interval: float, as_json: bool) -> int:
+    try:
+        while True:
+            if as_json:
+                print(json.dumps(gather_status(), default=str), flush=True)
+            else:
+                sys.stdout.write("\x1b[2J\x1b[H")   # clear screen, cursor home
+                print(_status_oneliner(), flush=True)
+            time.sleep(max(0.5, interval))
+    except KeyboardInterrupt:
+        return 0
 
 
 def cmd_get(what: str) -> dict:
@@ -292,6 +340,11 @@ def main() -> int:
 
     sub.add_parser("status", help="full state dump", parents=[common])
 
+    w = sub.add_parser("watch", help="reprint a status summary every N seconds",
+                       parents=[common])
+    w.add_argument("interval", nargs="?", type=float, default=2.0,
+                   help="seconds between refreshes (default 2)")
+
     g = sub.add_parser("get", help="read one thing", parents=[common])
     g.add_argument("what", choices=["power-profile", "tdp", "fans", "battery",
                                     "nvpl", "gamemode", "clocks", "gpumode"])
@@ -360,6 +413,8 @@ def main() -> int:
     if args.cmd == "status":
         _out(gather_status(), args.json)
         return 0
+    if args.cmd == "watch":
+        return cmd_watch(args.interval, args.json)
     if args.cmd == "get":
         _out(cmd_get(args.what), args.json)
         return 0

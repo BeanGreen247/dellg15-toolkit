@@ -30,7 +30,7 @@ import time
 import tkinter as tk
 import webbrowser
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from tkinter import messagebox
 
@@ -154,6 +154,83 @@ def load_json(name: str) -> dict:
     path = CONFIG_DIR / name
     with open(path, encoding="utf-8") as f:
         return json.load(f)
+
+
+def _human_bytes(n: float) -> str:
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if n < 1024:
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024.0
+    return f"{n:.1f} TiB"
+
+
+class _Tooltip:
+    """Lightweight hover tooltip (ttkbootstrap 2.2.x has no ToolTip class).
+    A borderless Toplevel below the widget after a short hover; hides on
+    leave / click / destroy, auto-hides after a few seconds, and is placed
+    well clear of the pointer so it can't cause an Enter/Leave flicker loop
+    (a real source of "the GUI froze" on some Wayland setups)."""
+
+    def __init__(self, widget, text: str, delay: int = 500):
+        self.widget, self.text, self.delay = widget, text, delay
+        self.tip = None
+        self._after = self._autohide = None
+        self._last_hide = 0.0
+        for ev, fn in (("<Enter>", self._schedule), ("<Leave>", self._hide),
+                       ("<ButtonPress>", self._hide), ("<Destroy>", self._hide)):
+            widget.bind(ev, fn, add="+")
+
+    def _schedule(self, _e=None):
+        self._cancel()
+        # break a tight Enter/Leave flicker loop (tooltip landing under cursor)
+        if time.monotonic() - self._last_hide < 0.2:
+            return
+        try:
+            self._after = self.widget.after(self.delay, self._show)
+        except tk.TclError:
+            pass
+
+    def _cancel(self):
+        for h in ("_after", "_autohide"):
+            hid = getattr(self, h)
+            if hid:
+                try:
+                    self.widget.after_cancel(hid)
+                except tk.TclError:
+                    pass
+                setattr(self, h, None)
+
+    def _show(self):
+        self._after = None
+        if self.tip or not self.text:
+            return
+        try:
+            if self.widget.winfo_toplevel().grab_current():
+                return                       # a modal dialog / busy overlay is up
+            x = self.widget.winfo_rootx() + 18
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 12
+        except tk.TclError:
+            return
+        try:
+            self.tip = tw = tk.Toplevel(self.widget)
+            tw.wm_overrideredirect(True)
+            tw.wm_geometry(f"+{x}+{y}")
+            tk.Label(tw, text=self.text, justify="left", background="#0f1620",
+                     foreground="#e6edf3", relief="solid", borderwidth=1,
+                     wraplength=380, padx=8, pady=6, font=("Sans", 9)).pack()
+            self._autohide = self.widget.after(5000, self._hide)
+        except tk.TclError:
+            self.tip = None
+
+    def _hide(self, _e=None):
+        self._cancel()
+        self._last_hide = time.monotonic()
+        if self.tip:
+            try:
+                self.tip.destroy()
+            except tk.TclError:
+                pass
+            self.tip = None
 
 
 # --------------------------------------------------------------------------- #
@@ -855,8 +932,13 @@ def evaluate_item(item: "Item", ledger: dict) -> None:
 class ToolkitApp:
     def __init__(self, root: "tb.Window"):
         self.root = root
+        # Size + maximise the window before any widgets exist so the WM has the
+        # final geometry from the first map. (An earlier version withdrew the
+        # window until _build_ui finished — but if a startup probe stalls, that
+        # leaves a blank invisible window and looks like a hang, so it's gone.)
         self.user = resolve_real_user()
         sensors.set_session_user(self.user)  # for kscreen-doctor when elevated
+        self._tooltips: list = []            # keep refs so bindings stay alive
         root.title("TuxThrottle — Nobara Linux")
         root.geometry("1080x760")  # fallback size if the WM ignores maximise
         _maximize(root)
@@ -871,6 +953,15 @@ class ToolkitApp:
 
         self.has_nvidia = sensors.has_nvidia_gpu()
         self.has_amd = sensors.has_amd_gpu()
+
+        # Fan the slow read-only hardware probes out over threads *now*, so the
+        # dozen tab sections that each need one don't run them back-to-back on
+        # the UI thread during _build_ui (that was ~seconds of dead time at
+        # startup, much worse with the dGPU asleep). _probe() below reads the
+        # result, waiting on the in-flight thread only if it's not ready yet.
+        self._pw: dict = {}
+        self._pw_pending: set = set()
+        self._prewarm_probes()
 
         self.items: dict[str, Item] = {}
         self._load_items()
@@ -914,11 +1005,25 @@ class ToolkitApp:
         self.root.after(100, self._poll_status_queue)
         self.root.after(120, self._poll_busy_queue)
         self.root.after(130, self._poll_games_queue)
-        threading.Thread(target=self._refresh_all_status, daemon=True).start()
+        # The 95 status checks each fork a privileged helper (sudo/kreadconfig/
+        # flatpak/rpm). Firing them all at launch starved power-profiles-daemon
+        # hard enough to trip scx_lavd's stall watchdog once — so hold them
+        # until the window is up and interactive, then run them narrow.
+        self.root.after(1200, lambda: threading.Thread(
+            target=self._refresh_all_status, daemon=True).start())
 
         self.dash_running = True
-        threading.Thread(target=self._dashboard_loop, daemon=True).start()
+        # start the sensor-polling thread a beat after the window is up, so its
+        # nvidia-smi reads don't pile onto the startup probe burst
+        self.root.after(1800, self._start_dash_loop)
         root.protocol("WM_DELETE_WINDOW", self._on_close)
+        root.update_idletasks()
+        _maximize(root)
+
+    def _start_dash_loop(self):
+        if self.dash_running and not getattr(self, "_dash_loop_started", False):
+            self._dash_loop_started = True
+            threading.Thread(target=self._dashboard_loop, daemon=True).start()
 
     def _on_close(self):
         self.dash_running = False
@@ -962,6 +1067,15 @@ class ToolkitApp:
                 cv.yview_scroll(step, "units")
                 return
 
+    def _tip(self, widget, text: str):
+        """Attach a hover tooltip. Returns the widget so it chains onto a
+        `.pack()` call: `self._tip(tb.Button(...), "…").pack(...)`."""
+        try:
+            self._tooltips.append(_Tooltip(widget, text))
+        except tk.TclError:
+            pass
+        return widget
+
     def _set_window_icon(self, root):
         for name in ("icon-256.png", "icon-128.png", "icon.png"):
             path = ASSETS_DIR / name
@@ -973,6 +1087,65 @@ class ToolkitApp:
             except tk.TclError:
                 pass
             return
+
+    # slow-ish, side-effect-free probes each used once at build time — value is
+    # stable for the life of the window, so warm them up front. The ones that
+    # shell out to nvidia-smi share ONE worker and run one-at-a-time: a burst of
+    # concurrent nvidia-smi can wake and wedge a runtime-suspended dGPU.
+    _PREWARM = {
+        "panel_modes":    lambda: sensors.panel_modes(),
+        "gpu_mode":       lambda: sensors.gpu_mode_get(),
+        "bat_limit":      lambda: sensors.battery_charge_limit_info(),
+        "bat_health":     lambda: sensors.battery_health_info(),
+        "bat_mode":       lambda: sensors.battery_charge_mode(),
+        "vrr":            lambda: sensors.vrr_status(),
+        "ryzenadj_avail": lambda: sensors.ryzenadj_available(),
+        "ryzenadj_co":    lambda: sensors.ryzenadj_co_supported(),
+    }
+    _PREWARM_NVIDIA = {
+        "gpu_devs":       lambda: sensors.gpu_devices(),
+        "nvpl":           lambda: sensors.nvidia_power_limit_info(),
+        "nvclk":          lambda: sensors.nvidia_clock_info(),
+    }
+
+    def _prewarm_probes(self):
+        def run(name, fn):
+            try:
+                self._pw[name] = fn()
+            except Exception:  # noqa: BLE001
+                self._pw[name] = None
+            finally:
+                self._pw_pending.discard(name)
+
+        def run_chain(items):
+            for name, fn in items:
+                run(name, fn)
+
+        self._pw_pending.update(self._PREWARM)
+        self._pw_pending.update(self._PREWARM_NVIDIA)
+        for name, fn in self._PREWARM.items():
+            threading.Thread(target=run, args=(name, fn), daemon=True).start()
+        threading.Thread(target=run_chain,
+                         args=(list(self._PREWARM_NVIDIA.items()),),
+                         daemon=True).start()
+
+    def _probe(self, name: str, fn=None, *, timeout: float = 3.0):
+        """Cached value of a prewarmed probe. Blocks only until the in-flight
+        prewarm thread for `name` finishes (or `timeout`); falls back to a
+        direct call for a key that was never prewarmed."""
+        if name in self._pw:
+            return self._pw[name]
+        end = time.monotonic() + timeout
+        while name in self._pw_pending and time.monotonic() < end:
+            time.sleep(0.02)
+        if name in self._pw:
+            return self._pw[name]
+        try:
+            call = fn or self._PREWARM.get(name) or self._PREWARM_NVIDIA[name]
+            self._pw[name] = call()
+        except Exception:  # noqa: BLE001
+            self._pw[name] = None
+        return self._pw.get(name)
 
     def _load_items(self):
         tweaks = load_json("tweaks.json")
@@ -1071,6 +1244,7 @@ class ToolkitApp:
         self._build_updates_tab()
         if self.games:
             self._build_games_tab()
+        self._build_gametools_tab()
 
         categories = sorted(
             {item.category for item in self.items.values() if not item.hidden},
@@ -1091,6 +1265,9 @@ class ToolkitApp:
             self.notebook._header_actions,  # noqa: SLF001
             text="★  Apply section recommendations", bootstyle=(SUCCESS, "outline"),
             takefocus=False, command=self._on_apply_recommended)
+        self._tip(self._rec_btn, "Apply the developer's curated picks for THIS "
+                  "category in one go (a snapshot is taken first). Only shows "
+                  "when something's still unapplied.")
         self.notebook.on_select = self._on_nav_page
         self._on_nav_page(self.notebook.tab(0))
 
@@ -1101,12 +1278,21 @@ class ToolkitApp:
         btn_refresh = tb.Button(btn_bar, text="↻  Refresh Status", bootstyle=(INFO, "outline"),
                                 command=self._on_refresh_click)
         btn_refresh.pack(side="left")
+        self._tip(btn_refresh, "Re-run every item's check command and update the "
+                  "✓ Applied / Installed marks to the real current state.")
         btn_apply = tb.Button(btn_bar, text="✓  Apply Selected", bootstyle=SUCCESS,
                               command=self._on_apply_click)
         btn_apply.pack(side="left", padx=8)
+        self._tip(btn_apply, "Act on the ticks: apply ticked-but-not-applied "
+                  "tweaks, install ticked-but-missing apps, and undo unticked "
+                  "tweaks that are currently applied. Already-done items are "
+                  "skipped. A snapshot is taken first.")
         btn_report = tb.Button(btn_bar, text="≣  Status report", bootstyle=(SECONDARY, "outline"),
                                command=self._show_status_report)
         btn_report.pack(side="left")
+        self._tip(btn_report, "Open a copyable table: every item, its state, the "
+                  "exact check command + exit code, and what the toolkit last "
+                  "did to it.")
         self._footer_btns = [btn_refresh, btn_apply, btn_report]
         self.status_var = tk.StringVar(value="Ready.")
         tb.Label(btn_bar, textvariable=self.status_var, bootstyle=SECONDARY,
@@ -1178,10 +1364,94 @@ class ToolkitApp:
             if self._log_collapsed:
                 self._toggle_log_collapse()
 
+    _DASH_SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
     def _build_dashboard_tab(self):
         outer = tb.Frame(self.notebook)
         self.notebook.add(outer, text="Dashboard")
-        frame = self._scroll_body(outer, pad=16)
+        # host frame stays; the heavy gauge/chart body is built on entering the
+        # tab and torn down on leaving it, with a spinner shown until the first
+        # sensor sample lands (keeps launch cheap, frees the polling otherwise)
+        self._dash_outer = self._scroll_body(outer, pad=16)
+        self._dash_body = None
+        self._dash_built = False
+        self._dash_active = False
+        self._dash_shown = False
+        self._dash_first_data = False
+        self._dash_spin_i = 0
+        self._dash_spin_job = None
+        self._csv_file = None
+        self._csv_writer = None
+        self._csv_logging = tk.BooleanVar(value=False)
+        self._dash_spinner = tb.Label(self._dash_outer, font=("Monospace", 13),
+                                      bootstyle=SECONDARY, text="Loading sensors…")
+
+    def _dash_spin(self):
+        if self._dash_spin_job is None:
+            return
+        ch = self._DASH_SPIN[self._dash_spin_i % len(self._DASH_SPIN)]
+        self._dash_spin_i += 1
+        try:
+            self._dash_spinner.configure(text=f"{ch}   Loading sensors…")
+        except tk.TclError:
+            return
+        self._dash_spin_job = self.root.after(90, self._dash_spin)
+
+    def _dash_start_spinner(self):
+        self._dash_spinner.pack(anchor="w", padx=8, pady=48)
+        if self._dash_spin_job is None:
+            self._dash_spin_job = self.root.after(0, self._dash_spin)
+
+    def _dash_stop_spinner(self):
+        if self._dash_spin_job is not None:
+            try:
+                self.root.after_cancel(self._dash_spin_job)
+            except tk.TclError:
+                pass
+            self._dash_spin_job = None
+        try:
+            self._dash_spinner.pack_forget()
+        except tk.TclError:
+            pass
+
+    def _dash_enter(self):
+        self._dash_active = True
+        if self._dash_built:
+            return
+        self._dash_first_data = False
+        self._dash_start_spinner()
+        self.root.after(60, self._dash_build_body)   # let the spinner paint first
+
+    def _dash_leave(self):
+        self._dash_active = False
+        self._dash_stop_spinner()
+        if self._csv_writer is not None:             # don't log a torn-down tab
+            self._csv_logging.set(False)
+            self._toggle_csv_log()
+        if self._dash_body is not None:
+            try:
+                self._dash_body.destroy()
+            except tk.TclError:
+                pass
+            self._dash_body = None
+        self._dash_built = False
+        self._dash_first_data = False
+
+    def _dash_reveal(self):
+        """First real sample arrived — swap the spinner for the live body."""
+        if self._dash_first_data or not self._dash_built:
+            return
+        self._dash_first_data = True
+        self._dash_stop_spinner()
+        if self._dash_body is not None:
+            self._dash_body.pack(fill="both", expand=True)
+
+    def _dash_build_body(self):
+        if self._dash_built or not self._dash_active:
+            return
+        frame = tb.Frame(self._dash_outer)      # stays unpacked until first data
+        self._dash_body = frame
+        self._dash_built = True
 
         gauges = tb.Frame(frame)
         gauges.pack(fill="x", pady=(0, 18))
@@ -1235,15 +1505,12 @@ class ToolkitApp:
             hgrid.columnconfigure(i % 2, weight=1)
             self._hist_charts[key] = c
         logrow = tb.Frame(hist); logrow.pack(anchor="w", pady=(6, 0))
-        self._csv_logging = tk.BooleanVar(value=False)
         tb.Checkbutton(logrow, text="Log this session to CSV",
                        variable=self._csv_logging, bootstyle="round-toggle",
                        command=self._toggle_csv_log).pack(side="left")
         self._csv_path_lbl = tb.Label(logrow, text="", bootstyle=SECONDARY,
                                       font=("Monospace", 8))
         self._csv_path_lbl.pack(side="left", padx=10)
-        self._csv_file = None
-        self._csv_writer = None
 
         toggle_frame = tb.Labelframe(frame, text="Game Mode", padding=16)
         toggle_frame.pack(fill="x")
@@ -1637,17 +1904,38 @@ class ToolkitApp:
         self._fc_canvas.pack(fill="x", pady=(6, 6))
         self._fc_canvas.bind("<Configure>", lambda _e: self._fc_redraw())
 
-        hr = tb.Frame(lf); hr.pack(anchor="w")
+        pr = tb.Frame(lf); pr.pack(anchor="w", pady=(6, 0))
+        tb.Label(pr, text="Presets:", bootstyle=SECONDARY).pack(side="left", padx=(0, 6))
+        for name in self._FANCURVE_PRESETS:
+            tb.Button(pr, text=name, bootstyle=(INFO, "outline"),
+                      command=lambda n=name: self._fc_apply_preset(n)).pack(side="left", padx=3)
+        tb.Button(pr, text="Linear fill", bootstyle=(SECONDARY, "outline"),
+                  command=self._fc_linfill).pack(side="left", padx=(12, 0))
+
+        hr = tb.Frame(lf); hr.pack(anchor="w", pady=(8, 0))
         tb.Label(hr, text="Cool-down hysteresis").pack(side="left")
         self._fc_hys = tk.IntVar(value=int(fc.get("hysteresis_c", 3)))
         tb.Spinbox(hr, from_=0, to=10, textvariable=self._fc_hys, width=6).pack(side="left", padx=6)
         tb.Label(hr, text="°C").pack(side="left")
-        tb.Button(hr, text="Linear fill", bootstyle=(INFO, "outline"),
-                  command=self._fc_linfill).pack(side="left", padx=(16, 0))
         tb.Button(hr, text="Save curve", bootstyle=SUCCESS,
-                  command=self._fc_save).pack(side="left", padx=(8, 0))
+                  command=self._fc_save).pack(side="left", padx=(16, 0))
         self._fc_live = tb.Label(hr, text="", bootstyle=SECONDARY)
         self._fc_live.pack(side="left", padx=12)
+        self._fc_redraw()
+
+    _FANCURVE_PRESETS = {
+        "Silent": [[45, 0], [55, 0], [62, 10], [68, 20], [74, 32],
+                   [80, 45], [85, 60], [89, 75], [93, 90], [96, 100]],
+        "Balanced": None,   # == _FANCURVE_DEFAULT, filled in _fc_apply_preset
+        "Aggressive": [[38, 15], [45, 30], [52, 45], [58, 58], [64, 70],
+                       [70, 80], [76, 88], [82, 94], [88, 98], [93, 100]],
+    }
+
+    def _fc_apply_preset(self, name: str):
+        pts = self._FANCURVE_PRESETS.get(name) or self._FANCURVE_DEFAULT
+        pts = self._fc_resample(pts)
+        for (tv, bv), (t, b) in zip(self._fc_rows, pts):
+            tv.set(int(t)); bv.set(int(b))
         self._fc_redraw()
 
     def _fc_linfill(self):
@@ -1838,7 +2126,7 @@ class ToolkitApp:
         self.notebook.add(outer, text="Battery")
         frame = self._scroll_body(outer, pad=16)
 
-        info = sensors.battery_health_info()
+        info = self._probe("bat_health")
         if not info:
             tb.Label(frame, bootstyle=SECONDARY, wraplength=1000, justify="left",
                      text="No battery detected (/sys/class/power_supply/BAT* is "
@@ -1888,7 +2176,8 @@ class ToolkitApp:
         lf.pack(fill="x", pady=6)
         self._bath_live = {}
         for key, cap in (("charge", "Charge"), ("state", "State"),
-                         ("rate", "Power flow"), ("voltage", "Voltage")):
+                         ("rate", "Power flow"), ("eta", "Time remaining"),
+                         ("voltage", "Voltage")):
             r = tb.Frame(lf); r.pack(fill="x", pady=2)
             tb.Label(r, text=cap, width=18, anchor="w").pack(side="left")
             v = tb.Label(r, text="—", bootstyle=SECONDARY)
@@ -1901,7 +2190,7 @@ class ToolkitApp:
 
         # --- charging speed (Dell libsmbios) ---
         if sensors._smbios_battery_ctl():
-            mode = sensors.battery_charge_mode()
+            mode = self._probe("bat_mode")
             cf = tb.Labelframe(frame, text="Charging speed", padding=12)
             cf.pack(fill="x", pady=6)
             note = ("Express charges the pack faster (more heat, a little more "
@@ -1919,7 +2208,7 @@ class ToolkitApp:
                                command=self._apply_charge_mode).pack(side="left", padx=3)
 
         # --- VRR / adaptive-sync (informational) ---
-        vrr = sensors.vrr_status()
+        vrr = self._probe("vrr")
         vf = tb.Frame(frame); vf.pack(fill="x", pady=(10, 0))
         tb.Label(vf, text="Adaptive Sync", width=18, anchor="w").pack(side="left")
         tb.Label(vf, bootstyle=SECONDARY,
@@ -1952,6 +2241,15 @@ class ToolkitApp:
             arrow = "→ in" if st == "charging" else "← out" if st == "discharging" else ""
             self._bath_live["rate"].config(
                 text=f"{pw:.1f} W {arrow}".strip() if pw is not None else "—")
+            em, ek = i.get("eta_min"), i.get("eta_kind")
+            if em and ek:
+                h, m = divmod(int(em), 60)
+                pretty = (f"{h} h {m:02d} m" if h else f"{m} m")
+                self._bath_live["eta"].config(text=f"~{pretty} {ek} at this rate")
+            else:
+                self._bath_live["eta"].config(
+                    text="—" if (i.get("status") or "").lower() in ("charging", "discharging")
+                    else "full / plugged in")
             vv = i.get("voltage_v")
             self._bath_live["voltage"].config(
                 text=f"{vv:.2f} V" if vv is not None else "—")
@@ -1992,7 +2290,7 @@ class ToolkitApp:
         lf = tb.Labelframe(parent, text="CPU power limits — Ryzen 7 5800H (ryzenadj)",
                            padding=12)
         lf.pack(fill="x", pady=6)
-        if not sensors.ryzenadj_available():
+        if not self._probe("ryzenadj_avail"):
             tb.Label(lf, bootstyle=WARNING, wraplength=1000, justify="left",
                      text="ryzenadj isn't installed. Add the “CPU TDP control "
                           "(ryzenadj)” tweak on the Power tab, then reopen this tab.").pack(anchor="w")
@@ -2057,7 +2355,7 @@ class ToolkitApp:
     # --- Ryzen Curve Optimizer (undervolt) ---
 
     def _build_co_section(self, parent):
-        if not sensors.ryzenadj_co_supported():
+        if not self._probe("ryzenadj_co"):
             return
         lf = tb.Labelframe(parent, text="Curve Optimizer — all-core undervolt  (advanced)",
                            padding=12)
@@ -2140,7 +2438,7 @@ class ToolkitApp:
         lf = tb.Labelframe(parent, text="NVIDIA board power limit — RTX 3050 Ti",
                            padding=12)
         lf.pack(fill="x", pady=6)
-        info = sensors.nvidia_power_limit_info()
+        info = self._probe("nvpl")
         if info is not None and not info.get("supported", True):
             tb.Label(lf, bootstyle=WARNING, wraplength=1000, justify="left",
                      text="This laptop's GPU firmware locks the board power limit "
@@ -2189,7 +2487,7 @@ class ToolkitApp:
     def _build_gpuclock_section(self, parent):
         if not self.has_nvidia:
             return
-        info = sensors.nvidia_clock_info()
+        info = self._probe("nvclk")
         lf = tb.Labelframe(parent, text="NVIDIA GPU clock lock — RTX 3050 Ti",
                            padding=12)
         lf.pack(fill="x", pady=6)
@@ -2266,7 +2564,7 @@ class ToolkitApp:
     # --- Panel refresh rate (KDE / KScreen) ---
 
     def _build_refresh_section(self, parent):
-        info = sensors.panel_modes()
+        info = self._probe("panel_modes")
         lf = tb.Labelframe(parent, text="Panel refresh rate", padding=12)
         lf.pack(fill="x", pady=6)
         if not info or len(info.get("rates", [])) < 2:
@@ -2312,7 +2610,7 @@ class ToolkitApp:
         # `prefix` namespaces the IntVar / "now:" label so this section can be
         # placed on two pages (Power & Limits and Battery) without the second
         # build clobbering the first's widget references.
-        info = sensors.battery_charge_limit_info()
+        info = self._probe("bat_limit")
         lf = tb.Labelframe(parent, text="Battery charge limit", padding=12)
         lf.pack(fill="x", pady=6)
         if not info["supported"]:
@@ -2373,7 +2671,7 @@ class ToolkitApp:
                      text="EnvyControl isn't installed. Install the “EnvyControl” "
                           "app (Presets / Software tab), then reopen this tab.").pack(anchor="w")
             return
-        cur = sensors.gpu_mode_get()
+        cur = self._probe("gpu_mode")
         tb.Label(lf, wraplength=1000, justify="left", bootstyle=SECONDARY, text=(
             "hybrid = both GPUs, dGPU on demand (default, best battery/perf balance). "
             "integrated = dGPU fully off (max battery, no NVIDIA rendering). "
@@ -2437,7 +2735,7 @@ class ToolkitApp:
                     state="readonly", width=14).pack(side="left")
 
         self._aw_refresh_rates = []
-        pm = sensors.panel_modes()
+        pm = self._probe("panel_modes")
         if pm and len(pm.get("rates", [])) > 1:
             self._aw_refresh_rates = pm["rates"]
             opts = ["leave alone"] + [f"{h} Hz" for h in pm["rates"]]
@@ -2836,35 +3134,374 @@ class ToolkitApp:
         self.notebook.add(outer, text="Presets")
         frame = self._scroll_body(outer, pad=14)
         tb.Label(frame, text="One click applies a curated bundle of tweaks + installs apps.", bootstyle=SECONDARY).pack(anchor="w", pady=(0, 12))
+
+        recs = self._recommended_all()
+        rb = tb.Labelframe(frame, text="Developer recommendations", padding=14)
+        rb.pack(fill="x", pady=(0, 10))
+        tb.Label(rb, wraplength=900, bootstyle=SECONDARY, text=(
+            "Applies every item the developer marked ★ recommended — across all "
+            "categories — in one pass, and offers to turn on the background "
+            "daemon that powers the fan curve, AC/battery auto-switch and the "
+            "time schedule. A snapshot is taken first so you can roll back from "
+            "the Profiles tab.")).pack(anchor="w", pady=(0, 8))
+        self._tip(tb.Button(rb, text="★  Apply all recommendations", bootstyle=SUCCESS,
+                  command=self._on_apply_all_recommended),
+                  "One-click sensible setup: applies every ★ recommended tweak "
+                  "across all categories and offers to enable the background "
+                  "daemon. Snapshot taken first; roll back from the Profiles tab."
+                  ).pack(anchor="w")
+        self._rec_all_lbl = tb.Label(
+            rb, bootstyle=SECONDARY,
+            text=(f"{len(recs)} not yet applied" if recs else "all applied ✓"))
+        self._rec_all_lbl.pack(anchor="w", pady=(4, 0))
+
         for preset_id, data in self.presets.items():
             box = tb.Frame(frame, padding=14, bootstyle="secondary")
             box.pack(fill="x", pady=6)
             tb.Label(box, text=data["Content"], font=("Sans", 12, "bold")).pack(anchor="w")
             tb.Label(box, text=data["Description"], wraplength=900, bootstyle=SECONDARY).pack(anchor="w", pady=(2, 8))
-            tb.Button(
+            self._tip(tb.Button(
                 box, text="Apply This Preset", bootstyle=SUCCESS,
-                command=lambda pid=preset_id: self._on_apply_preset(pid)
-            ).pack(anchor="e")
+                command=lambda pid=preset_id: self._on_apply_preset(pid)),
+                "Apply this whole bundle of tweaks + app installs at once "
+                "(snapshot taken first).").pack(anchor="e")
 
     # ---------- Setup Games ----------
+
+    _SHADERCACHE_SUBDIRS = ("mesa-shader-cache", "dxvk-state-cache",
+                            "nv-shader-cache", "steam-shadercache")
+    _SHADERCACHE_DEFAULT = "~/.cache/tuxthrottle-shaders"
+    _SHADERCACHE_DEFAULT_GB = 80
+
+    def _shadercache_cfg_file(self) -> "Path":
+        try:
+            home = Path(pwd.getpwnam(self.user).pw_dir)
+        except (KeyError, Exception):  # noqa: BLE001
+            home = Path.home()
+        return home / ".config" / "tuxthrottle" / "shadercache.json"
+
+    def _shadercache_load(self) -> dict:
+        try:
+            d = json.loads(self._shadercache_cfg_file().read_text())
+            return d if isinstance(d, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _shadercache_dir(self) -> str:
+        return self._shadercache_load().get("dir") or self._SHADERCACHE_DEFAULT
+
+    def _shadercache_gb(self) -> int:
+        try:
+            return int(self._shadercache_load().get("max_size_gb")
+                       or self._SHADERCACHE_DEFAULT_GB)
+        except (TypeError, ValueError):
+            return self._SHADERCACHE_DEFAULT_GB
+
+    def _shadercache_abs_dir(self) -> str:
+        raw = self._shadercache_dir()
+        try:
+            home = pwd.getpwnam(self.user).pw_dir
+        except (KeyError, Exception):  # noqa: BLE001
+            home = os.path.expanduser("~")
+        if raw.startswith("~"):
+            raw = home + raw[1:]
+        return os.path.abspath(raw)
+
+    def _shadercache_ensure_dirs(self) -> str:
+        base = self._shadercache_abs_dir()
+        try:
+            pw = pwd.getpwnam(self.user)
+        except KeyError:
+            pw = None
+        for sub in self._SHADERCACHE_SUBDIRS:
+            d = Path(base) / sub
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+                if os.geteuid() == 0 and pw:
+                    for p in (d, d.parent):
+                        try:
+                            os.chown(p, pw.pw_uid, pw.pw_gid)
+                        except OSError:
+                            pass
+            except OSError:
+                pass
+        return base
+
+    def _build_shadercache_box(self, parent):
+        lf = tb.Labelframe(parent, text="Shader / pipeline cache storage", padding=10)
+        lf.pack(fill="x", pady=6)
+        tb.Label(lf, bootstyle=SECONDARY, wraplength=1100, justify="left", text=(
+            "One folder for every generated shader cache — Mesa (AMD), DXVK "
+            "(D3D→Vulkan), the NVIDIA driver, and optionally Steam's own — so "
+            "they can sit on the drive you choose and survive a Proton prefix "
+            "wipe. The launch-options builder below and the “NVIDIA shader-cache” "
+            "tweak both read this location. Changing it does NOT rewrite launch "
+            "options you've already pasted into a game — regenerate + re-paste "
+            "those if you move it.")).pack(anchor="w")
+        drow = tb.Frame(lf); drow.pack(anchor="w", fill="x", pady=(6, 2))
+        tb.Label(drow, text="Cache folder:").pack(side="left")
+        self._sc_dir_var = tk.StringVar(value=self._shadercache_dir())
+        tb.Entry(drow, textvariable=self._sc_dir_var, width=44).pack(side="left", padx=(4, 4))
+        self._tip(tb.Button(drow, text="Browse…", bootstyle=(SECONDARY, "outline"),
+                  command=self._sc_browse),
+                  "Pick the folder (on any drive) where all the shader caches go."
+                  ).pack(side="left")
+        self._tip(tb.Button(drow, text="Save location", bootstyle=SUCCESS,
+                  command=lambda: self._sc_persist("location")),
+                  "Save the folder above to shadercache.json, create the "
+                  "mesa/dxvk/nv/steam sub-folders, and point the launch-options "
+                  "builder + NVIDIA tweak at it.").pack(side="left", padx=(8, 0))
+
+        srow = tb.Frame(lf); srow.pack(anchor="w", fill="x", pady=(2, 2))
+        tb.Label(srow, text="Max size (GB):").pack(side="left")
+        self._sc_gb_var = tk.IntVar(value=self._shadercache_gb())
+        tb.Spinbox(srow, from_=5, to=1000, increment=10, width=6,
+                   textvariable=self._sc_gb_var).pack(side="left", padx=(4, 4))
+        self._tip(tb.Button(srow, text="Apply shader cache size", bootstyle=SUCCESS,
+                  command=lambda: self._sc_persist("size")),
+                  "Save the size cap. It limits the Mesa and NVIDIA caches "
+                  "(they self-prune to it); DXVK's and Steam's own cache have "
+                  "no size setting.").pack(side="left")
+        tb.Label(srow, bootstyle=SECONDARY, text=(
+            "  — caps the Mesa & NVIDIA caches (self-prune); DXVK / Steam have no cap"
+        )).pack(side="left")
+
+        brow = tb.Frame(lf); brow.pack(anchor="w", fill="x", pady=(4, 0))
+        self._tip(tb.Button(brow, text="Link Steam's shader cache here",
+                  bootstyle=(INFO, "outline"),
+                  command=lambda: self._sc_link_steam(False)),
+                  "Move each Steam library's steamapps/shadercache into this "
+                  "folder and leave a symlink, so Steam's own cache lives "
+                  "alongside the rest. Close Steam first.").pack(side="left")
+        self._tip(tb.Button(brow, text="Undo Steam link", bootstyle=(SECONDARY, "outline"),
+                  command=lambda: self._sc_link_steam(True)),
+                  "Reverse the above — copy Steam's cache back out to a normal "
+                  "folder in each Steam library. Close Steam first."
+                  ).pack(side="left", padx=6)
+        self._tip(tb.Button(brow, text="Check links", bootstyle=(SECONDARY, "outline"),
+                  command=self._sc_link_check),
+                  "Verify each Steam library's steamapps/shadercache symlink "
+                  "still points at this folder. A link left dangling — e.g. "
+                  "after moving the cache folder — makes Steam fail every shader "
+                  "write with “disk write error”. If it reports broken, press "
+                  "“Link Steam's shader cache here” to repair it."
+                  ).pack(side="left")
+        lkrow = tb.Frame(lf); lkrow.pack(anchor="w", fill="x", pady=(3, 0))
+        self._sc_link_lbl = tb.Label(lkrow, bootstyle=SECONDARY, text="link status: —")
+        self._sc_link_lbl.pack(side="left")
+
+        szrow = tb.Frame(lf); szrow.pack(anchor="w", fill="x", pady=(8, 0))
+        self._sc_size_lbl = tb.Label(szrow, bootstyle=SECONDARY,
+                                     text="sizes: not calculated yet")
+        self._sc_size_lbl.pack(side="left")
+        self._tip(tb.Button(szrow, text="↻ Refresh", bootstyle=(SECONDARY, "outline"),
+                  command=self._sc_refresh_sizes),
+                  "Recalculate the folder sizes with `du` (runs in the "
+                  "background).").pack(side="left", padx=(10, 0))
+        self._tip(tb.Button(szrow, text="Clean cache", bootstyle=(WARNING, "outline"),
+                  command=self._sc_clean),
+                  "Empty every shader cache under this folder. Optional — the "
+                  "caches rebuild on next launch (first run of each game will "
+                  "stutter). Close Steam first.").pack(side="left", padx=6)
+        self.root.after(400, self._sc_refresh_sizes)
+        self.root.after(900, self._sc_link_check)     # surface broken links on open
+
+    def _sc_link_check(self):
+        self._sc_link_lbl.configure(text="link status: checking…", bootstyle=SECONDARY)
+        self._sc_link_result = None
+        self._sc_link_tries = 0
+        threading.Thread(target=self._sc_link_check_worker, daemon=True).start()
+        self.root.after(300, self._sc_link_check_poll)
+
+    def _sc_link_check_worker(self):
+        try:
+            _ok, _rc, out = run_cmd3(self._sc_helper("link-check --json"), timeout=25)
+            self._sc_link_result = json.loads(out[out.index("{"):out.rindex("}") + 1])
+        except (ValueError, OSError):
+            self._sc_link_result = {"ok": True, "summary": "could not check", "linked": 0}
+
+    def _sc_link_check_poll(self):
+        r = getattr(self, "_sc_link_result", None)
+        if r is None:
+            self._sc_link_tries += 1
+            if self._sc_link_tries < 40:
+                self.root.after(300, self._sc_link_check_poll)
+                return
+            r = {"ok": True, "summary": "check timed out", "linked": 0}
+        healthy = r.get("ok", True)
+        style = SUCCESS if (healthy and r.get("linked")) else DANGER if not healthy else SECONDARY
+        try:
+            self._sc_link_lbl.configure(text="link status: " + r.get("summary", "?"),
+                                        bootstyle=style)
+        except tk.TclError:
+            return
+        if not healthy:
+            self._log(f"[Cache] ⚠ {r.get('summary')} — press "
+                      f"“Link Steam's shader cache here” to repair")
+
+    def _sc_helper(self, args: str) -> str:
+        return self._user_py("tuxthrottle_shadercache.py", args)
+
+    def _sc_browse(self):
+        from tkinter import filedialog
+        try:
+            start = pwd.getpwnam(self.user).pw_dir
+        except KeyError:
+            start = os.path.expanduser("~")
+        d = filedialog.askdirectory(
+            parent=self.root, initialdir=start,
+            title="Pick a folder for the shader caches (can be on any drive)")
+        if d:
+            self._sc_dir_var.set(d)
+
+    def _sc_persist(self, what: str):
+        """Write dir + max_size_gb to shadercache.json (both fields, whichever
+        button was pressed). Only the tiny JSON write happens on the Tk thread;
+        creating the subdirs (possibly on a slow/cold drive), the size `du` and
+        the NVIDIA re-stamp all run off-thread so the UI never blocks."""
+        d = (self._sc_dir_var.get() or "").strip() or self._SHADERCACHE_DEFAULT
+        try:
+            gb = int(self._sc_gb_var.get())
+        except (tk.TclError, ValueError):
+            gb = self._SHADERCACHE_DEFAULT_GB
+        gb = max(5, min(1000, gb))
+        f = self._shadercache_cfg_file()
+        try:
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(json.dumps({"dir": d, "max_size_gb": gb},
+                                    indent=2, sort_keys=True))
+            if os.geteuid() == 0:
+                pw = pwd.getpwnam(self.user)
+                for p in (f, f.parent):
+                    try:
+                        os.chown(p, pw.pw_uid, pw.pw_gid)
+                    except OSError:
+                        pass
+        except (OSError, KeyError) as exc:
+            self._log(f"[Cache] save failed: {exc}")
+            return
+        self._log(f"[Cache] shader cache {what} saved → {d}  (max {gb} GB)")
+        self._lo_refresh()                     # cheap now — string build only
+        self._sc_refresh_sizes()              # creates the subdirs + du, off-thread
+        # keep the system-wide NVIDIA environment.d file in step, if that tweak
+        # is already installed (else it picks this up on its next apply)
+        nv = self.items.get("NvidiaShaderCache")
+        if nv is not None and nv.done:
+            self._run_stream("update NVIDIA shader-cache config",
+                             f"python3 {shlex.quote(str(BASE_DIR))}/apply_tweak.py "
+                             f"NvidiaShaderCache", tag="Cache")
+
+    def _sc_refresh_sizes(self):
+        lbl = getattr(self, "_sc_size_lbl", None)
+        if lbl is None:
+            return
+        if getattr(self, "_sc_size_busy", False):
+            return
+        try:
+            lbl.configure(text="sizes: calculating…")
+        except tk.TclError:
+            return
+        self._sc_size_busy = True
+        self._sc_size_result = None
+        self._sc_size_tries = 0
+        threading.Thread(target=self._sc_size_worker, daemon=True).start()
+        self.root.after(400, self._sc_size_poll)
+
+    def _sc_size_poll(self):
+        res = getattr(self, "_sc_size_result", None)
+        if res is None:
+            self._sc_size_tries += 1
+            if self._sc_size_tries > 350:        # ~140 s — worker never returned
+                self._sc_size_busy = False
+                try:
+                    self._sc_size_lbl.configure(text="sizes: (timed out — ↻ Refresh)")
+                except tk.TclError:
+                    pass
+                return
+            self.root.after(400, self._sc_size_poll)
+            return
+        self._sc_size_busy = False
+        try:
+            self._sc_size_lbl.configure(text=res)
+        except tk.TclError:
+            pass
+
+    def _sc_size_worker(self):
+        # off the Tk thread — safe to touch a slow filesystem here
+        base = self._shadercache_ensure_dirs()
+
+        def du_b(sub):
+            p = os.path.join(base, sub)
+            if not os.path.isdir(p):
+                return 0
+            try:
+                r = subprocess.run(["du", "-sb", "--", p], capture_output=True,
+                                   text=True, timeout=120)
+                return int(r.stdout.split()[0]) if r.stdout.strip() else 0
+            except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+                return 0
+
+        steam = du_b("steam-shadercache")
+        other = sum(du_b(s) for s in ("mesa-shader-cache", "dxvk-state-cache",
+                                      "nv-shader-cache"))
+        # hand the string back to the Tk thread via a plain attribute (GIL-safe);
+        # _sc_size_poll picks it up — no cross-thread Tk calls.
+        self._sc_size_result = (
+            f"sizes:  total {_human_bytes(steam + other)}   ·   "
+            f"Steam cache {_human_bytes(steam)}   ·   "
+            f"other (Mesa+DXVK+NVIDIA) {_human_bytes(other)}")
+
+    def _sc_link_steam(self, undo: bool):
+        verb = "Undo the Steam shader-cache symlink" if undo else \
+               "Move Steam's shadercache folder into your cache directory and symlink it back"
+        if not messagebox.askyesno("Steam shader cache",
+                                   f"{verb}?\n\nClose Steam first."):
+            return
+        self._run_stream("Steam shader-cache " + ("unlink" if undo else "link"),
+                         self._sc_helper("link-steam --undo" if undo else "link-steam"),
+                         tag="Cache")
+        self.root.after(3000, self._sc_refresh_sizes)
+
+    def _sc_clean(self):
+        if not messagebox.askyesno(
+                "Clean shader caches",
+                "Empty every shader/pipeline cache under your cache folder?\n\n"
+                "This is optional — the caches rebuild themselves on next launch "
+                "(first run of each game will stutter while they refill). Close "
+                "Steam first."):
+            return
+        self._run_stream("clean shader caches", self._sc_helper("clean all"),
+                         tag="Cache")
+        self.root.after(2500, self._sc_refresh_sizes)
 
     def _build_launch_opts_box(self, parent):
         lf = tb.Labelframe(parent, text="Steam / Lutris launch-options builder",
                            padding=10)
-        lf.pack(fill="x", padx=16, pady=(6, 8))
+        lf.pack(fill="x", pady=6)
         tb.Label(lf, bootstyle=SECONDARY, wraplength=1100, justify="left",
                  text="Tick what you want and copy the string into a game's "
                       "Properties → Launch Options (Steam) or the wrapper field "
                       "(Lutris/Heroic). The `%command%` placeholder is where "
-                      "Steam substitutes the game.").pack(anchor="w")
+                      "Steam substitutes the game. The persistent-cache toggles "
+                      "write into the folder set in “Shader / pipeline cache "
+                      "storage” above.").pack(anchor="w")
         self._lo = {
             "mangohud": tk.BooleanVar(value=True),
             "gamemode": tk.BooleanVar(value=True),
             "gamescope": tk.BooleanVar(value=False),
             "prime": tk.BooleanVar(value=self.has_nvidia),
             "nvcache": tk.BooleanVar(value=self.has_nvidia),
+            # OFF by default — __GL_THREADED_OPTIMIZATIONS breaks a fair number of
+            # Wine/Proton and legacy-OpenGL games at startup (e.g. Mount & Blade)
+            "nv_threaded": tk.BooleanVar(value=False),
             "radv_gpl": tk.BooleanVar(value=self.has_amd and not self.has_nvidia),
+            # only useful for games that actually render on the AMD iGPU
+            "mesa_cache": tk.BooleanVar(value=self.has_amd and not self.has_nvidia),
+            "no_vsync": tk.BooleanVar(value=False),
+            "dxvk_cache": tk.BooleanVar(value=True),
+            "dxvk_async": tk.BooleanVar(value=False),
             "proton_nolog": tk.BooleanVar(value=True),
+            "anticheat": tk.BooleanVar(value=False),
         }
         self._lo_w = tk.StringVar(value="1920")
         self._lo_h = tk.StringVar(value="1080")
@@ -2874,8 +3511,19 @@ class ToolkitApp:
                            ("gamemode", "Feral GameMode"),
                            ("prime", "Render on the NVIDIA dGPU (PRIME offload)"),
                            ("nvcache", "Keep NVIDIA shader cache"),
+                           ("nv_threaded", "NVIDIA threaded optimizations "
+                                           "(⚠ crashes some Wine/Proton & older "
+                                           "OpenGL games — leave off unless it helps)"),
                            ("radv_gpl", "RADV_PERFTEST=gpl (AMD)"),
-                           ("proton_nolog", "Proton log off")):
+                           ("mesa_cache", "Persistent Mesa shader cache (AMD iGPU)"),
+                           ("no_vsync", "Disable Mesa vsync + threaded GL (AMD)"),
+                           ("dxvk_cache", "Persistent DXVK state cache (D3D→Vulkan)"),
+                           ("dxvk_async", "DXVK async shader compile (less stutter, "
+                                          "can cause brief visual glitches)"),
+                           ("proton_nolog", "Proton log off"),
+                           ("anticheat", "Anti-cheat safe — no injected Vulkan "
+                                         "layers (MangoHud / vkBasalt / all "
+                                         "implicit layers off)")):
             tb.Checkbutton(row, text=label, variable=self._lo[key],
                            bootstyle="round-toggle",
                            command=self._lo_refresh).pack(anchor="w")
@@ -2889,26 +3537,61 @@ class ToolkitApp:
             e = tb.Entry(grow, textvariable=var, width=w)
             e.pack(side="left")
             e.bind("<KeyRelease>", lambda _e: self._lo_refresh())
+        tb.Label(lf, bootstyle=SECONDARY, wraplength=1100, justify="left", text=(
+            "If a game won't launch or crashes on start, clear these options and "
+            "add them back a few at a time — the usual offenders are NVIDIA "
+            "threaded optimizations, then DXVK async, then gamescope."
+        )).pack(anchor="w", pady=(4, 2))
         orow = tb.Frame(lf); orow.pack(fill="x", pady=(8, 2))
         self._lo_out = tk.StringVar()
         tb.Entry(orow, textvariable=self._lo_out, state="readonly").pack(
             side="left", fill="x", expand=True)
-        tb.Button(orow, text="⧉ Copy", bootstyle=INFO,
-                  command=lambda: self._copy_text(self._lo_out.get(),
-                                                  "launch options")).pack(side="left", padx=(6, 0))
+        self._tip(tb.Button(orow, text="⧉ Copy", bootstyle=INFO,
+                  command=lambda: self._copy_text(self._lo_out.get(), "launch options")),
+                  "Copy this string. Paste it into Steam → the game → Properties "
+                  "→ Launch Options (or Lutris/Heroic's wrapper field)."
+                  ).pack(side="left", padx=(6, 0))
         self._lo_refresh()
 
     def _lo_refresh(self):
         env, wrap = [], []
+        # the shader caches all live under the user-chosen folder (Shader /
+        # pipeline cache storage box above); `$HOME` keeps the string portable.
+        # NOTE: this runs on every keystroke/toggle and at startup — it must not
+        # touch the filesystem. Directory creation is done off-thread by
+        # `_sc_refresh_sizes` / `_sc_persist`.
+        base = self._shadercache_dir()
+        base = base.replace("~", "$HOME", 1) if base.startswith("~") else base
+        gb = self._shadercache_gb()
         if self._lo["prime"].get():
             env += ["__NV_PRIME_RENDER_OFFLOAD=1", "__VK_LAYER_NV_optimus=NVIDIA_only",
                     "__GLX_VENDOR_LIBRARY_NAME=nvidia"]
         if self._lo["nvcache"].get():
-            env.append("__GL_SHADER_DISK_CACHE_SKIP_CLEANUP=1")
+            env += ["__GL_SHADER_DISK_CACHE=1",
+                    f"__GL_SHADER_DISK_CACHE_PATH={base}/nv-shader-cache",
+                    f"__GL_SHADER_DISK_CACHE_SIZE={gb * 1_000_000_000}",
+                    "__GL_SHADER_DISK_CACHE_SKIP_CLEANUP=1"]
+        if self._lo["nv_threaded"].get():
+            env.append("__GL_THREADED_OPTIMIZATIONS=1")
         if self._lo["radv_gpl"].get():
             env.append("RADV_PERFTEST=gpl")
+        if self._lo["mesa_cache"].get():
+            env += ["MESA_GLSL_CACHE_ENABLE=1",
+                    f"MESA_SHADER_CACHE_DIR={base}/mesa-shader-cache",
+                    f"MESA_SHADER_CACHE_MAX_SIZE={gb}G"]
+        if self._lo["no_vsync"].get():
+            env += ["vblank_mode=0", "mesa_glthread=true"]
+        if self._lo["dxvk_cache"].get():
+            env += ["DXVK_STATE_CACHE=1",
+                    f"DXVK_STATE_CACHE_PATH={base}/dxvk-state-cache"]
+        if self._lo["dxvk_async"].get():
+            env.append("DXVK_ASYNC=1")
         if self._lo["proton_nolog"].get():
             env.append("PROTON_LOG=0")
+        anticheat = self._lo["anticheat"].get()
+        if anticheat:
+            env += ["MANGOHUD=0", "DISABLE_VKBASALT=1",
+                    "VK_LOADER_LAYERS_DISABLE=~implicit~"]
         if self._lo["gamemode"].get():
             wrap.append("gamemoderun")
         if self._lo["gamescope"].get():
@@ -2921,13 +3604,643 @@ class ToolkitApp:
                 gs += ["-r", self._lo_fps.get().strip()]
             gs += ["-f", "--"]
             wrap += gs
-        if self._lo["mangohud"].get():
+        if self._lo["mangohud"].get() and not anticheat:
             wrap.append("mangohud")
         self._lo_out.set(" ".join(env + wrap + ["%command%"]))
 
+    def _mh_conf_path(self) -> "Path":
+        try:
+            home = Path(pwd.getpwnam(self.user).pw_dir)
+        except (KeyError, Exception):  # noqa: BLE001
+            home = Path.home()
+        base = home / ".config" / "MangoHud"
+        g = getattr(self, "_mh_game_var", None)
+        g = (g.get().strip() if g is not None else "")
+        # MangoHud reads ~/.config/MangoHud/<exe-basename>.conf per game
+        g = re.sub(r"\.exe$", "", g, flags=re.I).strip()
+        return base / (f"{g}.conf" if g else "MangoHud.conf")
+
+    def _build_mangohud_box(self, parent):
+        lf = tb.Labelframe(parent, text="MangoHud overlay", padding=10)
+        lf.pack(fill="x", pady=6)
+        tb.Label(lf, bootstyle=SECONDARY, wraplength=1100, justify="left", text=(
+            "The overlay's CPU / GPU names, position and detail level. Names load "
+            "from the config if set, else auto-detect from the hardware. “Show in "
+            "full” toggles each group between load-% only and load + temp + power "
+            "(+ VRAM for memory); the extra switches add the frametime graph and "
+            "GPU clocks. FPS, the graphics-API line and each GPU's real name "
+            "(gpu_name) always stay; on Write, everything else in the stat "
+            "section is stripped. `width` is pinned to fit your longest name; "
+            "other config lines (styling, keybinds) are left alone.")
+            ).pack(anchor="w")
+
+        self._mh_game_var = tk.StringVar()
+        conf = self._mh_load_conf()
+        cpu0 = conf["cpu"]
+        self._mh_pos = conf["position"] or "top-left"
+        self._mh_ox, self._mh_oy = conf["offset_x"], conf["offset_y"]
+        self._mh_pos_set = bool(conf["position"])
+
+        crow = tb.Frame(lf); crow.pack(anchor="w", fill="x", pady=(6, 2))
+        tb.Label(crow, text="CPU name:", width=11, anchor="w").pack(side="left")
+        self._mh_cpu_var = tk.StringVar(value=cpu0)
+        tb.Entry(crow, textvariable=self._mh_cpu_var, width=42).pack(side="left", padx=(2, 0))
+        # one GPU-name field per GPU actually in the machine (count from the
+        # startup prewarm, so no blocking probe here); rebuilt by ↻ Detect if
+        # the count turns out different. conf names win over detected ones; the
+        # PCI address is shown beside each so two identical cards are distinct.
+        detected = self._probe("gpu_devs") or []
+        self._mh_gpu_pci = [d.get("pci", "") for d in detected]
+        det_names = [d.get("name", "") for d in detected]
+        self._mh_gpu_count = max(len(detected), len(conf["gpus"]), 1)
+        self._mh_gpu_vars: list = []
+        self._mh_gpu_box = tb.Frame(lf)
+        self._mh_gpu_box.pack(anchor="w", fill="x", pady=(2, 2))
+        self._mh_build_gpu_fields(prefill=conf["gpus"] or det_names)
+        prow = tb.Frame(lf); prow.pack(anchor="w", fill="x", pady=(2, 2))
+        tb.Label(prow, text="Position:", width=11, anchor="w").pack(side="left")
+        self._mh_pos_lbl = tb.Label(prow, bootstyle=SECONDARY, text=self._mh_pos_summary())
+        self._mh_pos_lbl.pack(side="left", padx=(2, 8))
+        self._tip(tb.Button(prow, text="Place on screen…", bootstyle=(INFO, "outline"),
+                  command=self._mh_position_dialog),
+                  "Open a full-screen picker: drag the overlay box to where you "
+                  "want it (snaps to a 16×16 grid). Saved as a MangoHud anchor "
+                  "+ pixel offset.").pack(side="left")
+        gm = tb.Frame(lf); gm.pack(anchor="w", fill="x", pady=(2, 2))
+        tb.Label(gm, text="Per-game:", width=11, anchor="w").pack(side="left")
+        ge = tb.Entry(gm, textvariable=self._mh_game_var, width=24)
+        ge.pack(side="left", padx=(2, 0))
+        ge.bind("<KeyRelease>", lambda _e: self._mh_reload_from_conf())
+        tb.Label(gm, text="  optional — the game's .exe / binary name; blank = "
+                          "the global MangoHud.conf", bootstyle=SECONDARY).pack(side="left")
+
+        # per-group detail toggle: off = minimal (load % only), on = full
+        levels = self._mh_levels_from_conf(conf["elements"])
+        self._mh_lvl = {}
+        dl = tb.Frame(lf); dl.pack(anchor="w", fill="x", pady=(4, 2))
+        tb.Label(dl, text="Show in full:", width=11, anchor="w").pack(side="left")
+        for grp, label, extra in (("cpu", "CPU", "temp + power"),
+                                  ("gpu", "GPU", "temp + power"),
+                                  ("mem", "Memory", "+ VRAM")):
+            v = tk.BooleanVar(value=(levels[grp] == "full"))
+            self._mh_lvl[grp] = v
+            self._tip(tb.Checkbutton(dl, text=f"{label} ({extra})", variable=v,
+                                     bootstyle="round-toggle"),
+                      f"Off = {label} shows only its load %. On = {label} adds "
+                      f"{extra}. FPS, the graphics-API line and each GPU's real "
+                      f"name always stay; everything else is stripped on Write."
+                      ).pack(side="left", padx=(0, 12))
+
+        # explicit extras — a hard on/off for the frametime graph (not tied to
+        # the group toggles) plus GPU-clock lines that help identify the card
+        dl2 = tb.Frame(lf); dl2.pack(anchor="w", fill="x", pady=(2, 2))
+        tb.Label(dl2, text="Also show:", width=11, anchor="w").pack(side="left")
+        self._mh_graph = tk.BooleanVar(
+            value=bool({"frame_timing", "frametime"} & conf["elements"]))
+        self._tip(tb.Checkbutton(dl2, text="Frametime graph", variable=self._mh_graph,
+                                 bootstyle="round-toggle"),
+                  "The frametime number and its graph. Independent of the group "
+                  "toggles — off means it never shows, on means it always does."
+                  ).pack(side="left", padx=(0, 12))
+        self._mh_gpu_extra = {}
+        for key, lbl in (("gpu_core_clock", "GPU core clock"),
+                         ("gpu_mem_clock", "GPU mem clock")):
+            gv = tk.BooleanVar(value=(key in conf["elements"]))
+            self._mh_gpu_extra[key] = gv
+            self._tip(tb.Checkbutton(dl2, text=lbl, variable=gv,
+                                     bootstyle="round-toggle"),
+                      f"Add the {lbl.lower()} to the GPU block — a quick way to "
+                      f"confirm which card is doing the work.").pack(side="left", padx=(0, 12))
+
+        brow = tb.Frame(lf); brow.pack(anchor="w", fill="x", pady=(4, 0))
+        self._tip(tb.Button(brow, text="↻ Detect", bootstyle=(SECONDARY, "outline"),
+                  command=self._mh_detect),
+                  "Fill the CPU / GPU 0 / GPU 1 name fields from the hardware "
+                  "(/proc/cpuinfo, nvidia-smi, lspci). Overwrites what's there."
+                  ).pack(side="left")
+        self._tip(tb.Button(brow, text="Write to MangoHud config", bootstyle=SUCCESS,
+                  command=self._mh_apply),
+                  "Save the names, position and toggles into the MangoHud config "
+                  "(per-game file if the field above is filled). Rewrites the "
+                  "stat section to exactly FPS + graphics API + GPU name(s) + "
+                  "your chosen groups / extras, recomputes `width` for the "
+                  "longest name, and leaves styling / keybind lines untouched. "
+                  "Press again after any change.").pack(side="left", padx=6)
+        self._tip(tb.Button(brow, text="Reset config (clean)", bootstyle=(WARNING, "outline"),
+                  command=self._mh_reset_conf),
+                  "Replace the config with a fresh minimal one (FPS, GPU name, "
+                  "the groups / extras at the toggle levels above, toggle on "
+                  "Shift_R+F12) plus the current names/position. Old file kept "
+                  "as .bak.").pack(side="left")
+        tb.Label(lf, bootstyle=SECONDARY, wraplength=1100, justify="left", text=(
+            "Every write rewrites the file so each key appears once (latest value "
+            "wins), leading comments are kept and blank lines / junk are dropped. "
+            "“Reset config” goes further — a clean minimal baseline, old file "
+            "kept as .bak.\n"
+            "The overlay `width` is recalculated from the longest name (× the "
+            "config's font_size) on each “Write”, not live as you type — change "
+            "a name and press Write again. Names of 8 characters or fewer get no "
+            "width line (MangoHud sizes those itself). “Place on screen…” only "
+            "writes the position, not the width."
+        )).pack(anchor="w", pady=(4, 0))
+        # already set → keep what's there; only auto-detect (off-thread, so
+        # startup never blocks) when nothing has been set yet
+        self._mh_detect_result = None
+        if not (cpu0 or conf["gpus"]):
+            self.root.after(600, self._mh_detect)
+
+    def _mh_build_gpu_fields(self, prefill=None, force: bool = False):
+        """(Re)draw `self._mh_gpu_count` GPU-name rows in `self._mh_gpu_box`.
+        Keeps whatever's already typed unless `force` (↻ Detect) is set."""
+        box = self._mh_gpu_box
+        for w in box.winfo_children():
+            w.destroy()
+        keep = [] if force else [v.get() for v in self._mh_gpu_vars]
+        prefill = list(prefill or [])
+        pci = getattr(self, "_mh_gpu_pci", [])
+        self._mh_gpu_vars = []
+        multi = self._mh_gpu_count > 1
+        for i in range(self._mh_gpu_count):
+            val = (keep[i] if i < len(keep) and keep[i]
+                   else prefill[i] if i < len(prefill) else "")
+            var = tk.StringVar(value=val)
+            self._mh_gpu_vars.append(var)
+            row = tb.Frame(box); row.pack(anchor="w", fill="x", pady=1)
+            tb.Label(row, text=(f"GPU {i} name:" if multi else "GPU name:"),
+                     width=11, anchor="w").pack(side="left")
+            tb.Entry(row, textvariable=var, width=42).pack(side="left", padx=(2, 0))
+            addr = f"[{pci[i]}] " if i < len(pci) and pci[i] else ""
+            hint = (f"  {addr}render GPU — MangoHud's gpu_text label" if i == 0
+                    else f"  {addr}kept in the config for reference (gpu_list on)")
+            tb.Label(row, text=hint, bootstyle=SECONDARY).pack(side="left")
+
+    def _mh_reload_from_conf(self):
+        """Re-read whichever MangoHud config the Per-game field now points at."""
+        conf = self._mh_load_conf()
+        self._mh_cpu_var.set(conf["cpu"])
+        if conf["gpus"]:
+            self._mh_gpu_count = max(len(conf["gpus"]), self._mh_gpu_count)
+        self._mh_build_gpu_fields(prefill=conf["gpus"], force=True)
+        self._mh_pos = conf["position"] or "top-left"
+        self._mh_ox, self._mh_oy = conf["offset_x"], conf["offset_y"]
+        self._mh_pos_set = bool(conf["position"])
+        self._mh_pos_lbl.configure(text=self._mh_pos_summary())
+        for grp, lvl in self._mh_levels_from_conf(conf["elements"]).items():
+            if grp in getattr(self, "_mh_lvl", {}):
+                self._mh_lvl[grp].set(lvl == "full")
+        if hasattr(self, "_mh_graph"):
+            self._mh_graph.set(bool({"frame_timing", "frametime"} & conf["elements"]))
+        for k, gv in getattr(self, "_mh_gpu_extra", {}).items():
+            gv.set(k in conf["elements"])
+
+    def _mh_pos_summary(self) -> str:
+        s = self._mh_pos
+        if self._mh_ox or self._mh_oy:
+            s += f"   (nudge {self._mh_ox}, {self._mh_oy} px)"
+        return s
+
+    def _mh_load_conf(self) -> dict:
+        """cpu_text / gpu_text / position / offset_x / offset_y / font_size +
+        the set of bare element toggles present, straight from MangoHud.conf."""
+        out = {"cpu": "", "gpu": "", "gpus": [], "position": "", "offset_x": 0,
+               "offset_y": 0, "font_size": 0, "elements": set()}
+        try:
+            lines = self._mh_conf_path().read_text().splitlines()
+        except OSError:
+            return out
+        for ln in lines:
+            s = ln.strip()
+            if not s or s.startswith("#"):
+                continue
+            m = re.match(r"(cpu_text|gpu_text|position|offset_x|offset_y|font_size)\s*=\s*(.*)", s)
+            if m:
+                key, val = m.group(1), m.group(2).strip()
+                if key == "cpu_text":
+                    out["cpu"] = val
+                elif key == "gpu_text":
+                    parts = [x.strip() for x in val.split(",") if x.strip()]
+                    out["gpus"] = parts
+                    out["gpu"] = ", ".join(parts)
+                elif key == "position":
+                    out["position"] = val
+                else:
+                    try:
+                        out[key] = int(float(val))
+                    except ValueError:
+                        pass
+            elif re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", s):
+                out["elements"].add(s)             # a bare toggle like `cpu_temp`
+        return out
+
+    # per-group detail level: (minimal elements, full elements)
+    _MH_GROUPS = {
+        "cpu": (["cpu_stats"], ["cpu_stats", "cpu_temp", "cpu_power"]),
+        "gpu": (["gpu_stats"], ["gpu_stats", "gpu_temp", "gpu_power"]),
+        "mem": (["ram"], ["ram", "vram"]),
+    }
+    # always kept: framerate, the graphics-API / engine line, and gpu_name —
+    # MangoHud's gpu_name is the GPU actually doing the rendering, so on a
+    # PRIME-offload / hybrid setup this top line confirms which card the game
+    # or tool ended up on
+    _MH_ALWAYS = ["fps", "engine_version", "gpu_name"]
+    # the frametime number + its graph — only when at least one group is "full"
+    _MH_FRAMEGRAPH = ["frametime", "frame_timing"]
+    # every element toggle the box takes ownership of on Write (so "minimal"
+    # actually strips the rest). Does NOT include gpu_list (multi-GPU, managed).
+    _MH_STAT_KEYS = {
+        "fps", "fps_only", "frametime", "frame_timing", "frame_count",
+        "cpu_stats", "cpu_temp", "cpu_power", "cpu_mhz", "cpu_load_change",
+        "core_load", "core_load_change", "gpu_stats", "gpu_temp", "gpu_power",
+        "gpu_core_clock", "gpu_mem_clock", "gpu_load_change", "gpu_name",
+        "gpu_voltage", "gpu_fan", "gpu_throttling", "vram", "ram", "swap",
+        "procmem", "procmem_shared", "procmem_virt", "io_read", "io_write",
+        "io_stats", "arch", "engine_version", "vulkan_driver", "wine",
+        "exec_name", "gamemode", "vkbasalt", "battery", "media_player",
+        "resolution", "show_fps_limit", "throttling_status",
+        "throttling_status_graph", "fan", "present_mode", "refresh_rate",
+        "winesync", "version",
+    }
+
+    def _mh_levels_from_conf(self, els: set) -> dict:
+        out = {}
+        for g, (_mini, full) in self._MH_GROUPS.items():
+            # "full" if any of the full-only extras is present
+            extra = set(full) - set(self._MH_GROUPS[g][0])
+            out[g] = "full" if (els & extra) else "minimal"
+        return out
+
+    # representative on-screen size of the MangoHud overlay for the picker
+    _MH_BOX_W, _MH_BOX_H = 300, 240
+
+    def _mh_anchor_offset(self, bx, by, sw, sh):
+        """Free box top-left (bx,by) on a sw×sh screen → nearest MangoHud
+        `position` + the (offset_x, offset_y) that reproduces it."""
+        cx, cy = bx + self._MH_BOX_W / 2, by + self._MH_BOX_H / 2
+        h = "left" if cx < sw / 3 else "right" if cx >= 2 * sw / 3 else "center"
+        v = "top" if cy < sh / 3 else "bottom" if cy >= 2 * sh / 3 else "middle"
+        if h == "center" and v == "middle":          # no middle-centre anchor
+            v = "top" if cy < sh / 2 else "bottom"
+        if v == "middle":                            # only middle-left / -right
+            h = "left" if cx < sw / 2 else "right"
+            pos = f"middle-{h}"
+        elif h == "center":                          # only top/bottom-center
+            pos = f"{v}-center"
+        else:
+            pos = f"{v}-{h}"
+        ax = (0 if "left" in pos else sw - self._MH_BOX_W if "right" in pos
+              else (sw - self._MH_BOX_W) / 2)
+        ay = (0 if "top" in pos else sh - self._MH_BOX_H if "bottom" in pos
+              else (sh - self._MH_BOX_H) / 2)
+        return pos, int(round(bx - ax)), int(round(by - ay))
+
+    def _mh_box_xy(self, pos, ox, oy, sw, sh):
+        """Inverse of _mh_anchor_offset: anchor + offset → box top-left."""
+        ax = (0 if "left" in pos else sw - self._MH_BOX_W if "right" in pos
+              else (sw - self._MH_BOX_W) / 2)
+        ay = (0 if "top" in pos else sh - self._MH_BOX_H if "bottom" in pos
+              else (sh - self._MH_BOX_H) / 2)
+        bx = max(0, min(sw - self._MH_BOX_W, ax + ox))
+        by = max(0, min(sh - self._MH_BOX_H, ay + oy))
+        return bx, by
+
+    def _mh_position_dialog(self):
+        saved = self._mh_load_conf()
+        saved_pos = saved["position"] or "top-left"
+        saved_ox, saved_oy = saved["offset_x"], saved["offset_y"]
+
+        win = tk.Toplevel(self.root)
+        win.title("Place the MangoHud overlay")
+        win.transient(self.root)
+        try:
+            win.attributes("-fullscreen", True)
+        except tk.TclError:
+            win.geometry(f"{win.winfo_screenwidth()}x{win.winfo_screenheight()}+0+0")
+        try:
+            win.attributes("-alpha", 0.85)
+        except tk.TclError:
+            pass
+        sw = win.winfo_screenwidth()
+        sh = win.winfo_screenheight()
+        cv = tk.Canvas(win, bg="#3b3b3b", highlightthickness=0, cursor="fleur")
+        cv.pack(fill="both", expand=True)
+
+        st = {"bx": 0.0, "by": 0.0, "dx": 0.0, "dy": 0.0, "drag": False, "snap": True}
+        bx0, by0 = self._mh_box_xy(self._mh_pos, self._mh_ox, self._mh_oy, sw, sh)
+        st["bx"], st["by"] = bx0, by0
+        BW, BH = self._MH_BOX_W, self._MH_BOX_H
+        acc = getattr(self, "accent", "#58a6ff")
+        GRID = 16                                # 16 snap points per axis
+        gx = (sw - BW) / (GRID - 1)
+        gy = (sh - BH) / (GRID - 1)
+
+        def snap(bx, by):
+            if not st["snap"]:
+                return bx, by
+            return (round(bx / gx) * gx if gx else bx,
+                    round(by / gy) * gy if gy else by)
+
+        def redraw():
+            cv.delete("all")
+            for i in range(1, GRID - 1):         # 16×16 snap grid
+                lx = i * (sw / (GRID - 1))
+                ly = i * (sh / (GRID - 1))
+                cv.create_line(lx, 0, lx, sh, fill="#484848")
+                cv.create_line(0, ly, sw, ly, fill="#484848")
+            for i in (1, 2):                     # thirds guides (anchor bands)
+                cv.create_line(sw * i / 3, 0, sw * i / 3, sh, fill="#606060", dash=(4, 4))
+                cv.create_line(0, sh * i / 3, sw, sh * i / 3, fill="#606060", dash=(4, 4))
+            bx, by = st["bx"], st["by"]
+            cv.create_rectangle(bx, by, bx + BW, by + BH, fill=acc, outline="#ffffff",
+                                width=2)
+            cv.create_text(bx + BW / 2, by + 22, text="MangoHud", fill="#ffffff",
+                           font=("Sans", 13, "bold"))
+            cv.create_text(bx + BW / 2, by + BH / 2,
+                           text="drag me where you\nwant the overlay",
+                           fill="#eaeaea", font=("Sans", 10), justify="center")
+            pos, ox, oy = self._mh_anchor_offset(bx, by, sw, sh)
+            info.configure(text=f"{pos}    offset  {ox:+d}, {oy:+d} px")
+
+        def press(e):
+            if st["bx"] <= e.x <= st["bx"] + BW and st["by"] <= e.y <= st["by"] + BH:
+                st["drag"] = True
+                st["dx"], st["dy"] = e.x - st["bx"], e.y - st["by"]
+
+        def motion(e):
+            if not st["drag"]:
+                return
+            bx, by = snap(e.x - st["dx"], e.y - st["dy"])
+            st["bx"] = max(0, min(sw - BW, bx))
+            st["by"] = max(0, min(sh - BH, by))
+            redraw()
+
+        def release(_e):
+            st["drag"] = False
+            redraw()
+
+        cv.bind("<ButtonPress-1>", press)
+        cv.bind("<B1-Motion>", motion)
+        cv.bind("<ButtonRelease-1>", release)
+        win.bind("<Escape>", lambda _e: win.destroy())
+
+        # floating control bar
+        bar = tk.Frame(win, bg=BIOS_PANEL, bd=1, relief="solid")
+        bar.place(relx=0.5, y=24, anchor="n")
+        info = tk.Label(bar, bg=BIOS_PANEL, fg="#eaeaea", font=("Sans", 11, "bold"),
+                        padx=14, pady=6)
+        info.pack(side="top")
+        snap_var = tk.BooleanVar(value=True)
+
+        def _toggle_snap():
+            st["snap"] = bool(snap_var.get())
+            if st["snap"]:
+                st["bx"], st["by"] = snap(st["bx"], st["by"])
+            redraw()
+
+        tk.Checkbutton(bar, text=f"snap to {GRID}×{GRID} grid", variable=snap_var,
+                       command=_toggle_snap, bg=BIOS_PANEL, fg="#eaeaea",
+                       selectcolor=BIOS_SUNKEN, activebackground=BIOS_PANEL,
+                       activeforeground="#eaeaea").pack(side="top", pady=(0, 2))
+        btns = tk.Frame(bar, bg=BIOS_PANEL); btns.pack(side="top", padx=10, pady=(0, 8))
+
+        def set_to(pos, ox, oy):
+            st["bx"], st["by"] = self._mh_box_xy(pos, ox, oy, sw, sh)
+            redraw()
+
+        def save():
+            pos, ox, oy = self._mh_anchor_offset(st["bx"], st["by"], sw, sh)
+            self._mh_pos, self._mh_ox, self._mh_oy = pos, ox, oy
+            self._mh_pos_set = True
+            self._mh_pos_lbl.configure(text=self._mh_pos_summary())
+            self._mh_write_position(pos, ox, oy)
+            win.destroy()
+
+        self._tip(tb.Button(btns, text="Save position", bootstyle=SUCCESS,
+                  command=save),
+                  "Write this position into the MangoHud config now "
+                  "(only the position / offset lines) and close.").pack(side="left", padx=3)
+        self._tip(tb.Button(btns, text="Restore last saved", bootstyle=(INFO, "outline"),
+                  command=lambda: set_to(saved_pos, saved_ox, saved_oy)),
+                  "Move the box back to whatever position is currently in the "
+                  "config file.").pack(side="left", padx=3)
+        self._tip(tb.Button(btns, text="Restore default (top-left)",
+                  bootstyle=(SECONDARY, "outline"),
+                  command=lambda: set_to("top-left", 0, 0)),
+                  "Move the box to MangoHud's default — top-left, no offset."
+                  ).pack(side="left", padx=3)
+        self._tip(tb.Button(btns, text="Cancel", bootstyle=(DANGER, "outline"),
+                  command=win.destroy),
+                  "Close without changing anything (Esc).").pack(side="left", padx=3)
+
+        redraw()
+        win.grab_set()
+        win.wait_window()
+
+    def _mh_write_position(self, pos, ox, oy):
+        """Clean-merge just position / offset_x / offset_y into the config,
+        leaving cpu_text/gpu_text/etc. alone."""
+        ok = self._mh_write_conf({
+            "position": pos,
+            "offset_x": str(ox) if ox else None,
+            "offset_y": str(oy) if oy else None,
+        })
+        if ok:
+            self._log(f"[MangoHud] position → {self._mh_conf_path()}  "
+                      f"({pos}, offset {ox:+d},{oy:+d}; deduped)")
+
+    def _mh_detect(self):
+        self._mh_cpu_var.set("detecting…")
+        for v in self._mh_gpu_vars:
+            v.set("detecting…")
+        self._mh_detect_result = None
+        self._mh_detect_tries = 0
+        threading.Thread(target=self._mh_detect_worker, daemon=True).start()
+        self.root.after(300, self._mh_detect_poll)
+
+    def _mh_detect_worker(self):
+        try:
+            self._mh_detect_result = (sensors.cpu_model_name(),
+                                      list(sensors.gpu_devices()))
+        except Exception:  # noqa: BLE001
+            self._mh_detect_result = ("", [])
+
+    def _mh_detect_poll(self):
+        res = getattr(self, "_mh_detect_result", None)
+        if res is None:
+            self._mh_detect_tries += 1
+            if self._mh_detect_tries > 60:       # ~18 s — give up
+                res = ("", [])
+            else:
+                self.root.after(300, self._mh_detect_poll)
+                return
+        try:
+            self._mh_cpu_var.set(res[0])
+            devs = res[1] or []
+            names = [d.get("name", "") for d in devs]
+            self._mh_gpu_pci = [d.get("pci", "") for d in devs]
+            if names:
+                self._mh_gpu_count = max(len(names), 1)
+            self._mh_build_gpu_fields(prefill=names, force=True)
+        except tk.TclError:
+            pass
+
+    _MH_KEY_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)")
+
+    def _mh_write_conf(self, managed: dict) -> bool:
+        """Rewrite the MangoHud config CLEANLY: every key appears once (last
+        value wins), leading comments kept, blank lines / inline comments / junk
+        dropped. `managed` values: None or '' remove the key, True writes a bare
+        toggle (`key`), anything else writes `key=value`. Returns True on success."""
+        p = self._mh_conf_path()
+        try:
+            raw = p.read_text().splitlines() if p.is_file() else []
+        except OSError:
+            raw = []
+        header, order, vals = [], [], {}
+        for ln in raw:
+            s = ln.strip()
+            if not s:
+                continue
+            if s.startswith("#"):
+                if not order:                       # keep only leading comments
+                    header.append(s)
+                continue
+            m = self._MH_KEY_RE.fullmatch(s)
+            if m:
+                key, val = m.group(1), m.group(2).strip()
+            elif re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", s):
+                key, val = s, None              # bare toggle, e.g. `fps`
+            else:
+                continue                        # unparseable junk — drop it
+            if key not in vals:
+                order.append(key)
+            vals[key] = val
+        for k, v in managed.items():
+            if v is None or v == "":
+                vals.pop(k, None)
+                if k in order:
+                    order.remove(k)
+            elif v is True:
+                if k not in vals:
+                    order.append(k)
+                vals[k] = None                  # bare toggle
+            else:
+                if k not in vals:
+                    order.append(k)
+                vals[k] = str(v)
+        out = list(header) or ["# MangoHud config (managed by TuxThrottle)"]
+        out += [k if vals[k] is None else f"{k}={vals[k]}" for k in order]
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("\n".join(out).rstrip() + "\n")
+            if os.geteuid() == 0:
+                pw = pwd.getpwnam(self.user)
+                for path in (p, p.parent):
+                    try:
+                        os.chown(path, pw.pw_uid, pw.pw_gid)
+                    except OSError:
+                        pass
+        except (OSError, KeyError) as exc:
+            self._log(f"[MangoHud] write failed: {exc}")
+            return False
+        return True
+
+    def _mh_hud_width(self, labels: list, full: bool) -> "str | None":
+        """MangoHud's auto-width doesn't grow for a long custom cpu_text /
+        gpu_text — the label collides with its value column — so pin `width`
+        wide enough. None when there's no long custom label (let MangoHud size
+        itself). Calibrated against vkcube: an 18-char label at font_size 20
+        needs ~560 px with a full value column ("65.5 W", "0.8 GiB"), less when
+        every group is minimal (values are just "42 %"), so the fixed term
+        shrinks accordingly."""
+        longest = max((len(x) for x in labels if x), default=0)
+        if longest <= 8:                        # short enough not to clip
+            return None
+        fs = self._mh_load_conf().get("font_size") or 24
+        # label glyphs ~0.85*fs wide in MangoHud's font; the +term is the value
+        # column + gaps — wider with full stats ("65.5 W" / "0.8 GiB") than a
+        # minimal HUD where every value is just "42 %"
+        pad = 12 if full else 8
+        w = int(longest * fs * 0.85) + int(fs * pad)
+        return str(max(320, min(1700, w)))
+
+    def _mh_apply(self):
+        cpu = (self._mh_cpu_var.get() or "").strip()
+        allgpu = [(v.get() or "").strip() for v in self._mh_gpu_vars]
+        gpus = [g for g in allgpu if g and g != "detecting…"]
+        n_gpu = len(self._mh_gpu_vars)
+        full = any(v.get() for v in self._mh_lvl.values())
+        width = self._mh_hud_width([cpu, *gpus], full)
+        managed = {
+            "cpu_text": cpu or None,
+            "gpu_text": (",".join(gpus) if gpus else None),
+            # list every GPU index the machine has, so MangoHud prints each
+            # card's own name/stats (that's how you tell two same GPUs apart)
+            "gpu_list": (",".join(str(i) for i in range(n_gpu)) if n_gpu > 1 else None),
+            "width": width,                     # fit the longest label (or None)
+        }
+        # stat section: strip every element toggle we own, then add back
+        # FPS + API + GPU name, the frametime graph (its own switch), the
+        # chosen per-group set and the GPU-clock extras
+        for k in self._MH_STAT_KEYS:
+            managed[k] = ""
+        elements = list(self._MH_ALWAYS)
+        if getattr(self, "_mh_graph", None) is not None and self._mh_graph.get():
+            elements += self._MH_FRAMEGRAPH
+        for grp, (mini, grpfull) in self._MH_GROUPS.items():
+            elements += grpfull if self._mh_lvl[grp].get() else mini
+        elements += [k for k, v in getattr(self, "_mh_gpu_extra", {}).items() if v.get()]
+        for e in elements:
+            managed[e] = True                   # bare toggle
+        if getattr(self, "_mh_pos_set", False):
+            managed["position"] = self._mh_pos
+            managed["offset_x"] = str(self._mh_ox) if self._mh_ox else None
+            managed["offset_y"] = str(self._mh_oy) if self._mh_oy else None
+        if not self._mh_write_conf(managed):
+            return
+        lvls = ",".join(f"{g}:{'full' if v.get() else 'min'}"
+                        for g, v in self._mh_lvl.items())
+        posn = (f", pos={self._mh_pos}" if getattr(self, "_mh_pos_set", False) else "")
+        graph = "on" if getattr(self, "_mh_graph", None) and self._mh_graph.get() else "off"
+        self._log(f"[MangoHud] {self._mh_conf_path()}  (cpu={cpu or '—'}, "
+                  f"gpu={', '.join(gpus) or '—'}, {lvls}, graph={graph}{posn}; "
+                  f"deduped, width={width or 'auto'})")
+
+    def _mh_reset_conf(self):
+        p = self._mh_conf_path()
+        if not messagebox.askyesno(
+                "Reset MangoHud config",
+                f"Replace {p} with a clean config — FPS, the graphics-API line, "
+                f"each GPU's name, the CPU/GPU/Memory groups + extras at the "
+                f"levels set by the toggles above, your names + position, "
+                f"toggle on Shift_R+F12 — and nothing else?\n\nThe current file "
+                f"is backed up to {p.name}.bak first."):
+            return
+        try:
+            if p.is_file():
+                p.with_suffix(p.suffix + ".bak").write_text(p.read_text())
+                p.unlink()
+        except OSError as exc:
+            self._log(f"[MangoHud] reset failed: {exc}")
+            return
+        # styling baseline only — _mh_apply layers on the stat toggles + labels
+        base = ["# MangoHud config (managed by TuxThrottle)", "position=top-left",
+                "font_size=20", "background_alpha=0.4", "round_corners=6",
+                "toggle_hud=Shift_R+F12"]
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("\n".join(base) + "\n")
+            if os.geteuid() == 0:
+                pw = pwd.getpwnam(self.user)
+                os.chown(p, pw.pw_uid, pw.pw_gid)
+        except (OSError, KeyError) as exc:
+            self._log(f"[MangoHud] reset failed: {exc}")
+            return
+        self._mh_apply()
+        self._log(f"[MangoHud] reset to a clean config → {p} (.bak kept)")
+
     def _build_last_session_card(self, parent):
         lf = tb.Labelframe(parent, text="Last game session", padding=10)
-        lf.pack(fill="x", padx=16, pady=(0, 8))
+        lf.pack(fill="x", pady=6)
         self._last_sess_lbl = tb.Label(lf, bootstyle=SECONDARY, justify="left",
                                        wraplength=1100)
         self._last_sess_lbl.pack(anchor="w")
@@ -2973,12 +4286,26 @@ class ToolkitApp:
                       "with a Run button do the work (output streams to the log console "
                       "at the bottom of the window); manual steps are quick clicks inside "
                       "the game launcher that can't be scripted — tick “Mark done” once "
-                      "you've done them.").pack(anchor="w", pady=(2, 0))
+                      "you've done them.  Proton-prefix, save-file, shader-cache and "
+                      "launch-option tools are on the “Game Tools” tab.").pack(anchor="w", pady=(2, 0))
 
-        # general Proton-prefix + save-file relocation — useful for ANY Steam
-        # game, not just the ones with a walkthrough below
-        pf = tb.Labelframe(outer, text="Proton prefix & save-file tools", padding=10)
-        pf.pack(fill="x", padx=16, pady=(6, 8))
+        gnb = tb.Notebook(outer)
+        gnb.pack(fill="both", expand=True, padx=8, pady=8)
+        self._games_notebook_body(gnb)
+
+    def _build_gametools_tab(self):
+        outer = tb.Frame(self.notebook)
+        self.notebook.add(outer, text="Game Tools")
+        frame = self._scroll_body(outer, pad=16)
+        tb.Label(frame, wraplength=1100, justify="left", bootstyle=SECONDARY, text=(
+            "Steam / Proton helpers that work for any game — not just the ones "
+            "with a walkthrough on “Setup Games”: relocate a Proton prefix off "
+            "a drive that can't host it, pull stray save files back, keep a "
+            "save-game vault, choose one home for every shader cache, and build "
+            "a launch-options string.")).pack(anchor="w", pady=(0, 12))
+
+        pf = tb.Labelframe(frame, text="Proton prefix & save-file tools", padding=10)
+        pf.pack(fill="x", pady=6)
         tb.Label(pf, bootstyle=SECONDARY, wraplength=1100, justify="left",
                  text="A game installed on an NTFS or exFAT drive can't build its Proton "
                       "prefix there (those filesystems reject ':' in a filename, so the "
@@ -2989,24 +4316,39 @@ class ToolkitApp:
                       "symlink onto another drive and pulls it back in. Close Steam "
                       "first.").pack(anchor="w")
         row = tb.Frame(pf); row.pack(anchor="w", fill="x", pady=(8, 2))
-        tb.Button(row, text="Scan Steam prefixes", bootstyle=(INFO, "outline"),
-                  command=self._prefix_scan).pack(side="left")
-        tb.Button(row, text="Migrate all at-risk prefixes", bootstyle=(WARNING, "outline"),
-                  command=self._prefix_migrate_all).pack(side="left", padx=6)
+        self._tip(tb.Button(row, text="Scan Steam prefixes", bootstyle=(INFO, "outline"),
+                  command=self._prefix_scan),
+                  "List every game's Proton prefix and flag any sitting on an "
+                  "NTFS/exFAT drive (those can't host a prefix — the game won't "
+                  "start). Read-only.").pack(side="left")
+        self._tip(tb.Button(row, text="Migrate all at-risk prefixes",
+                  bootstyle=(WARNING, "outline"),
+                  command=self._prefix_migrate_all),
+                  "Move every prefix that's on an NTFS/exFAT drive onto your "
+                  "Linux drive and symlink it back. Game files aren't touched. "
+                  "Close Steam first.").pack(side="left", padx=6)
         tb.Label(row, text="   or one — AppID:").pack(side="left")
         self._prefix_appid_var = tk.StringVar()
         tb.Entry(row, textvariable=self._prefix_appid_var, width=12).pack(side="left", padx=(2, 6))
-        tb.Button(row, text="Relocate this prefix", bootstyle=(WARNING, "outline"),
-                  command=self._prefix_relocate_entry).pack(side="left")
+        self._tip(tb.Button(row, text="Relocate this prefix", bootstyle=(WARNING, "outline"),
+                  command=self._prefix_relocate_entry),
+                  "Do the move above for just the AppID typed in the box. "
+                  "Close Steam and the game first.").pack(side="left")
         row2 = tb.Frame(pf); row2.pack(anchor="w", fill="x", pady=(2, 0))
-        tb.Button(row2, text="Scan for saves on another drive", bootstyle=(INFO, "outline"),
-                  command=self._saves_scan).pack(side="left")
-        tb.Button(row2, text="Move all stray saves into their prefixes",
-                  bootstyle=(WARNING, "outline"),
-                  command=self._saves_move_all).pack(side="left", padx=6)
-        tb.Button(row2, text="Import loose saves for AppID above",
-                  bootstyle=(WARNING, "outline"),
-                  command=self._saves_import_entry).pack(side="left")
+        self._tip(tb.Button(row2, text="Scan for saves on another drive",
+                  bootstyle=(INFO, "outline"), command=self._saves_scan),
+                  "Find game saves whose prefix folder is a symlink onto another "
+                  "drive, plus loose Documents/My Games folders at a drive root. "
+                  "Read-only.").pack(side="left")
+        self._tip(tb.Button(row2, text="Move all stray saves into their prefixes",
+                  bootstyle=(WARNING, "outline"), command=self._saves_move_all),
+                  "Pull those symlinked save folders back into each game's "
+                  "prefix. The off-drive copy is left in place (nothing deleted)."
+                  ).pack(side="left", padx=6)
+        self._tip(tb.Button(row2, text="Import loose saves for AppID above",
+                  bootstyle=(WARNING, "outline"), command=self._saves_import_entry),
+                  "Copy a drive-root Documents / My Games folder into the prefix "
+                  "of the AppID typed in the box above.").pack(side="left")
 
         tb.Separator(pf).pack(fill="x", pady=(10, 6))
         tb.Label(pf, bootstyle=SECONDARY, wraplength=1100, justify="left",
@@ -3019,24 +4361,29 @@ class ToolkitApp:
         tb.Label(vrow, text="Vault folder:").pack(side="left")
         self._vault_var = tk.StringVar(value=self._load_saves_vault())
         tb.Entry(vrow, textvariable=self._vault_var, width=52).pack(side="left", padx=(4, 4))
-        tb.Button(vrow, text="Browse…", bootstyle=(SECONDARY, "outline"),
-                  command=self._vault_browse).pack(side="left")
+        self._tip(tb.Button(vrow, text="Browse…", bootstyle=(SECONDARY, "outline"),
+                  command=self._vault_browse),
+                  "Pick the vault folder. Must be on a drive other than the "
+                  "OS/Steam drive (enforced).").pack(side="left")
         vrow2 = tb.Frame(pf); vrow2.pack(anchor="w", fill="x", pady=(2, 0))
-        tb.Button(vrow2, text="List vault", bootstyle=(INFO, "outline"),
-                  command=lambda: self._vault_cmd("list")).pack(side="left")
-        tb.Button(vrow2, text="Export saves → vault", bootstyle=(WARNING, "outline"),
-                  command=lambda: self._vault_cmd("export")).pack(side="left", padx=6)
-        tb.Button(vrow2, text="Import saves ← vault", bootstyle=(WARNING, "outline"),
-                  command=lambda: self._vault_cmd("import")).pack(side="left")
+        self._tip(tb.Button(vrow2, text="List vault", bootstyle=(INFO, "outline"),
+                  command=lambda: self._vault_cmd("list")),
+                  "Show which games have saves stored in the vault.").pack(side="left")
+        self._tip(tb.Button(vrow2, text="Export saves → vault", bootstyle=(WARNING, "outline"),
+                  command=lambda: self._vault_cmd("export")),
+                  "Copy Documents / Saved Games / AppData out of the prefix(es) "
+                  "into the vault. Blank AppID = every game.").pack(side="left", padx=6)
+        self._tip(tb.Button(vrow2, text="Import saves ← vault", bootstyle=(WARNING, "outline"),
+                  command=lambda: self._vault_cmd("import")),
+                  "Copy the vault's saves back into the prefix(es). Close Steam "
+                  "first. Blank AppID = every game.").pack(side="left")
 
-        self._build_launch_opts_box(outer)
-        self._build_last_session_card(outer)
+        self._build_shadercache_box(frame)
+        self._build_launch_opts_box(frame)
+        self._build_mangohud_box(frame)
+        self._build_last_session_card(frame)
 
-        tb.Separator(outer).pack(fill="x")
-
-        gnb = tb.Notebook(outer)
-        gnb.pack(fill="both", expand=True, padx=8, pady=8)
-
+    def _games_notebook_body(self, gnb):
         self._game_steps = []
         for gid, game in sorted(self.games.items(),
                                 key=lambda kv: (kv[1].get("order", 99), kv[0])):
@@ -4118,6 +5465,12 @@ class ToolkitApp:
 
     def _dashboard_loop(self):
         while self.dash_running:
+            if not getattr(self, "_dash_active", False):
+                for _ in range(10):                 # idle ~1s, stay responsive
+                    if not self.dash_running:
+                        return
+                    threading.Event().wait(0.1)
+                continue
             cpu_temp = sensors.read_cpu_temp_c_value()
             cpu_freq = sensors.read_cpu_freq_ghz_value()
             cpu_power = sensors.read_cpu_power_watts()  # blocks ~0.1s, fine on this bg thread
@@ -4133,10 +5486,20 @@ class ToolkitApp:
                 threading.Event().wait(0.1)
 
     def _poll_dash_queue(self):
+        if not getattr(self, "_dash_built", False):
+            try:                                    # tab not built — just drain
+                while True:
+                    self.dash_queue.get_nowait()
+            except queue.Empty:
+                pass
+            self.root.after(300, self._poll_dash_queue)
+            return
         try:
             while True:
                 (cpu_temp, cpu_freq, cpu_power, igpu_clock, igpu_temp,
                  dgpu_clock, dgpu_temp, dgpu_util, dgpu_power, rapl_ok, gamemode) = self.dash_queue.get_nowait()
+                if not self._dash_first_data:
+                    self._dash_reveal()
                 self.meter_cpu_temp.set(cpu_temp)
                 self.meter_cpu_freq.set(cpu_freq)
                 self.meter_cpu_power.set(cpu_power)
@@ -4222,7 +5585,10 @@ class ToolkitApp:
                 pass
         self._csv_file = self._csv_writer = None
         if hasattr(self, "_csv_path_lbl"):
-            self._csv_path_lbl.configure(text="(stopped)")
+            try:
+                self._csv_path_lbl.configure(text="(stopped)")
+            except tk.TclError:                  # dashboard body torn down
+                pass
 
     def _on_gamemode_toggle(self):
         if self._suppress_gamemode_signal:
@@ -4285,57 +5651,74 @@ class ToolkitApp:
 
     def _refresh_all_status(self):
         ledger = ledger_load()
-        # Each check spawns a shell; running them serially made startup crawl.
-        # They're independent and I/O-bound, so fan them out over a pool.
+        # Each check forks a privileged helper (sudo -u <user> kreadconfig6,
+        # flatpak, rpm, systemctl). A wide pool of those at once starved
+        # power-profiles-daemon badly enough to trip scx_lavd's stall watchdog,
+        # so: warm the sudo/PAM path once, then run the batch NARROW. Results
+        # still stream per-item so the pills fill progressively.
+        run_cmd3(f"sudo -u {self.user} -H true", timeout=20)   # prime PAM/nss
         items = list(self.items.values())
         if items:
-            with ThreadPoolExecutor(max_workers=min(12, len(items))) as ex:
-                list(ex.map(lambda it: evaluate_item(it, ledger), items))
-        # Hand back to the main thread via a queue — Tk is not thread-safe and
-        # calling root.after() from here races the interpreter (crashes as
-        # "main thread is not in main loop"). Mirrors the log/dash queues.
+            with ThreadPoolExecutor(max_workers=min(6, len(items))) as ex:
+                futs = {ex.submit(evaluate_item, it, ledger): it for it in items}
+                for fut in as_completed(futs):
+                    self.status_queue.put(futs[fut])
+        # Tk is not thread-safe — hand back via the queue, never root.after()
+        # from here (races the interpreter). `True` = the batch is done.
         self.status_queue.put(True)
 
     def _poll_status_queue(self):
-        drained = False
+        done = []
         try:
             while True:
-                self.status_queue.get_nowait()
-                drained = True
+                done.append(self.status_queue.get_nowait())
         except queue.Empty:
             pass
-        if drained:
-            self._apply_status_to_widgets()
-            # states changed → the section-recommendations button may need to
-            # hide (all applied) or update its count
-            if hasattr(self, "notebook"):
+        if done:
+            for x in done:
+                if x is not True:
+                    self._apply_one_status(x)
+            self._recompute_status_summary()
+            if any(x is True for x in done) and hasattr(self, "notebook"):
+                # batch finished → the section-recommendations button may need
+                # to hide (all applied) or update its count
                 self._on_nav_page(self.notebook._header.cget("text"))  # noqa: SLF001
         self.root.after(200, self._poll_status_queue)
 
-    def _apply_status_to_widgets(self):
+    def _apply_one_status(self, item):
+        if item.status_label is None:
+            return
+        if not item.hw_supported:
+            item.status_label.configure(text="unsupported", bootstyle=SECONDARY)
+            return
+        label, style = _STATE_UI.get(item.state, _STATE_UI["unknown"])
+        if item.kind == "app":
+            label = {"Applied": "Installed",
+                     "Not applied": "Not installed"}.get(label, label)
+        item.status_label.configure(text=label, bootstyle=style)
+        if item.var is not None:
+            item.var.set(item.done)
+
+    def _recompute_status_summary(self):
         n_done = n_total = n_attention = 0
         for item in self.items.values():
-            if item.status_label is None:
-                continue
-            if not item.hw_supported:
-                item.status_label.configure(text="unsupported", bootstyle=SECONDARY)
+            if item.status_label is None or not item.hw_supported:
                 continue
             n_total += 1
-            label, style = _STATE_UI.get(item.state, _STATE_UI["unknown"])
-            if item.kind == "app":
-                label = {"Applied": "Installed", "Not applied": "Not installed"}.get(label, label)
             if item.done:
                 n_done += 1
             if item.state in ("error", "drifted", "failed"):
                 n_attention += 1
-            item.status_label.configure(text=label, bootstyle=style)
-            if item.var is not None:
-                item.var.set(item.done)
         msg = (f"{n_done} of {n_total} applied/installed — "
                f"{n_total - n_done} available.")
         if n_attention:
             msg += f"  ⚠ {n_attention} need attention (see Status report)."
         self.status_var.set(msg)
+
+    def _apply_status_to_widgets(self):
+        for item in self.items.values():
+            self._apply_one_status(item)
+        self._recompute_status_summary()
 
     def _on_refresh_click(self):
         self.status_var.set("Refreshing status…")
@@ -4492,9 +5875,57 @@ class ToolkitApp:
                 out.append(it)
         return out
 
+    def _recommended_all(self, pending_only: bool = True) -> list["Item"]:
+        out = []
+        for it in self.items.values():
+            if it.recommended and it.hw_supported and not it.hidden:
+                if pending_only and it.done:
+                    continue
+                out.append(it)
+        return out
+
+    def _on_apply_all_recommended(self):
+        if self._busy:
+            messagebox.showinfo("Busy", "An operation is already running — check the log.")
+            return
+        pending = self._recommended_all()
+        daemon = self.items.get("FanCurveDaemon")
+        want_daemon = bool(daemon and daemon.hw_supported and not daemon.hidden
+                           and not daemon.done)
+        if not pending and not want_daemon:
+            messagebox.showinfo("Nothing to do",
+                                "All recommended items are already applied.")
+            return
+        lines = "\n".join(f"  •  {i.content}" for i in pending)
+        if want_daemon:
+            lines += "\n  •  Fan-curve + AC-switch daemon (enables the schedule)"
+        reboot = any("cmdline" in i.id.lower()
+                     or "grubby" in " ".join(i.apply_cmds).lower() for i in pending)
+        total = len(pending) + (1 if want_daemon else 0)
+        msg = (f"Apply the developer's recommended set — {total} item(s) across "
+               f"every category?\n\n{lines}\n\nA snapshot is taken first so you "
+               f"can roll back from the Profiles tab.")
+        if reboot:
+            msg += "\n\n⚠ Some of these change kernel boot params — reboot to finish."
+        if not messagebox.askyesno("Apply all recommendations", msg):
+            return
+        ids = [i.id for i in pending] + (["FanCurveDaemon"] if want_daemon else [])
+        self._begin_busy("Applying all recommendations", steps=max(1, len(ids)))
+        threading.Thread(target=self._apply_ids_worker,
+                         args=(ids, "recommended-all"), daemon=True).start()
+
     def _on_nav_page(self, page_text: str):
-        """Show the 'Apply section recommendations' button only on a category
-        page that still has unapplied dev picks."""
+        """Lazy-load / unload the Dashboard on entry / exit, and show the
+        'Apply section recommendations' button only on a category page that
+        still has unapplied dev picks."""
+        want_dash = (page_text == "Dashboard")
+        if want_dash and not self._dash_shown:
+            self._dash_shown = True
+            self._dash_enter()
+        elif not want_dash and self._dash_shown:
+            self._dash_shown = False
+            self._dash_leave()
+
         btn = getattr(self, "_rec_btn", None)
         if btn is None:
             return
@@ -4976,8 +6407,8 @@ _HW_BUNDLE_FILES = [
      "echo '# lm_sensors'; sensors 2>/dev/null; echo; sensors -j 2>/dev/null"),
     ("battery.txt", "echo '# power_supply sysfs'; "
      "grep -rH . /sys/class/power_supply/*/ 2>/dev/null | grep -viE 'uevent|modalias'; echo; "
-     "echo '# upower'; upower -d 2>/dev/null; echo; "
-     "echo '# smbios-battery-ctl'; smbios-battery-ctl --get-charging-cfg 2>/dev/null "
+     "echo '# upower'; timeout 4 upower -d 2>/dev/null; echo; "
+     "echo '# smbios-battery-ctl'; timeout 4 smbios-battery-ctl --get-charging-cfg 2>/dev/null "
      "|| echo '(libsmbios not installed / not a Dell)'"),
     ("vendor-platform.txt", "echo '# /sys/devices/platform vendor interfaces'; "
      "for d in /sys/devices/platform/*wmi* /sys/devices/platform/*-laptop /sys/devices/platform/*_laptop "
@@ -4989,8 +6420,9 @@ _HW_BUNDLE_FILES = [
      "echo '# module parameters'; for m in dell_laptop dell_smm_hwmon alienware_wmi asus_nb_wmi "
      "hp_wmi ideapad_laptop thinkpad_acpi; do [ -d /sys/module/$m/parameters ] || continue; "
      "echo \"=== $m ===\"; grep -rH . /sys/module/$m/parameters/ 2>/dev/null; done"),
-    ("firmware.txt", "echo '# fwupd devices'; fwupdmgr get-devices --no-authenticate-modules 2>/dev/null "
-     "|| fwupdmgr get-devices 2>/dev/null || echo '(fwupd not installed)'"),
+    ("firmware.txt", "echo '# fwupd devices'; timeout 6 fwupdmgr get-devices "
+     "--no-authenticate-modules 2>/dev/null || timeout 6 fwupdmgr get-devices 2>/dev/null "
+     "|| echo '(fwupd not installed / timed out reaching the daemon)'"),
     ("acpi.txt", "ls -l /sys/firmware/acpi/tables/ 2>/dev/null; echo; "
      "command -v acpidump >/dev/null && echo 'acpidump present — run: sudo acpidump -b (attach the DSDT.dat)'; "
      "command -v acpi_listen >/dev/null && echo 'acpi_listen present — run it and press Fn/media keys to capture ACPI events'"),
@@ -4998,20 +6430,23 @@ _HW_BUNDLE_FILES = [
      "iasl -d acpi.bin'; for t in /sys/firmware/acpi/tables/DSDT /sys/firmware/acpi/tables/SSDT*; do "
      "[ -r \"$t\" ] || continue; echo \"=== $(basename $t) ===\"; base64 \"$t\" 2>/dev/null; echo; done "
      "|| echo '(ACPI tables need root to read)'"),
-    ("display.txt", "echo '# kscreen-doctor'; kscreen-doctor -o 2>/dev/null; echo; "
-     "kscreen-doctor -j 2>/dev/null; echo; echo '# xrandr'; xrandr --verbose 2>/dev/null | head -120; echo; "
+    ("display.txt", "echo '# kscreen-doctor'; timeout 4 kscreen-doctor -o 2>/dev/null; echo; "
+     "timeout 4 kscreen-doctor -j 2>/dev/null; echo; echo '# xrandr'; "
+     "timeout 4 xrandr --verbose 2>/dev/null | head -120; echo; "
      "echo '# drm modes'; for m in /sys/class/drm/*/modes; do echo \"$m:\"; cat \"$m\" 2>/dev/null; done; echo; "
      "echo '# vrr_capable'; grep -rH . /sys/class/drm/*/vrr_capable 2>/dev/null"),
     ("drm-gpu.txt", "for c in /sys/class/drm/card[0-9]*; do echo \"### $c\"; "
      "cat $c/device/uevent 2>/dev/null; echo \" runtime_status=$(cat $c/device/power/runtime_status 2>/dev/null)\"; "
-     "echo; done; echo '=== nvidia-smi -q ==='; nvidia-smi -q 2>/dev/null; echo; "
-     "echo '=== nvidia-smi -q -d SUPPORTED_CLOCKS ==='; nvidia-smi -q -d SUPPORTED_CLOCKS 2>/dev/null | head -50; echo; "
-     "echo '=== glxinfo / vulkaninfo ==='; glxinfo -B 2>/dev/null | grep -E 'renderer|OpenGL version|Device'; "
-     "vulkaninfo --summary 2>/dev/null | head -40"),
+     "echo; done; echo '=== nvidia-smi -q ==='; timeout 8 nvidia-smi -q 2>/dev/null; echo; "
+     "echo '=== nvidia-smi -q -d SUPPORTED_CLOCKS ==='; "
+     "timeout 8 nvidia-smi -q -d SUPPORTED_CLOCKS 2>/dev/null | head -50; echo; "
+     "echo '=== glxinfo / vulkaninfo ==='; "
+     "timeout 4 glxinfo -B 2>/dev/null | grep -E 'renderer|OpenGL version|Device'; "
+     "timeout 4 vulkaninfo --summary 2>/dev/null | head -40"),
     ("openrgb.txt", "openrgb --version 2>/dev/null; echo; "
      "openrgb --noautoconnect -l --verbose 2>/dev/null | grep -vE 'i2c|SMBus|help.openrgb' "
      "|| openrgb --noautoconnect -l 2>/dev/null"),
-    ("smbios-tokens.txt", "smbios-token-ctl 2>/dev/null | head -400 "
+    ("smbios-tokens.txt", "timeout 6 smbios-token-ctl 2>/dev/null | head -400 "
      "|| echo '(libsmbios / smbios-token-ctl not installed — needed for Dell battery / USB / thermal tokens)'"),
     ("dmesg-full.txt", "dmesg 2>/dev/null || echo '(dmesg needs root / kernel.dmesg_restrict=1)'"),
     ("journal-boot-tail.txt", "journalctl -b --no-pager 2>/dev/null | tail -3000 || echo '(journalctl unavailable)'"),

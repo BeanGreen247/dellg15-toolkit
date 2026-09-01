@@ -185,8 +185,9 @@ DAMX's fan-control equivalent for this board:
   automatic" button.
 - **Custom fan curve** (closed-loop) — a 10-point temperature → boost table
   with a live curve preview, driven from CPU / GPU / hotter-of-both, with a
-  cool-down hysteresis and a **Linear fill** button (place the two endpoints,
-  it interpolates the rest). A background daemon (`tuxthrottle_powerd.py`,
+  cool-down hysteresis, **Silent / Balanced / Aggressive** presets and a
+  **Linear fill** button (place the two endpoints, it interpolates the rest).
+  A background daemon (`tuxthrottle_powerd.py`,
   enabled by the **Fan-curve + AC-switch daemon** tweak) applies it and
   restores automatic control when stopped. It only ever *adds* boost. Old
   5-point configs load and are resampled to 10 on open.
@@ -245,10 +246,11 @@ that owns the hardware (they fall back to writing directly when it's not).
 ## The Battery tab
 
 Battery **wear** (how much of the pack's original design capacity is gone),
-charge **cycle count**, chemistry, and a live charge / power-flow / voltage
-readout — all straight from the kernel `power_supply` sysfs, so it works on any
-laptop. The charge-limit control from Power & Limits is repeated here so the
-longevity knobs sit on one page.
+charge **cycle count**, chemistry, and a live card with charge, power flow,
+**time-to-empty / time-to-full at the current rate**, and voltage — all
+straight from the kernel `power_supply` sysfs, so it works on any laptop. The
+charge-limit control from Power & Limits is repeated here so the longevity
+knobs sit on one page.
 
 ## The Profiles tab
 
@@ -340,8 +342,24 @@ first); each page is an ordered list of step cards:
 - **▶▶ Run all N automatic steps** at the top of a game's page chains every
   Run-step in order, skipping ones already done.
 
-Above the game tabs, a **Proton prefix tools** box works for *any* Steam
-game: **Scan Steam prefixes** lists every `compatdata/<appid>` prefix and
+The GTA V flow mirrors "GTA V Online → Route A" further down this README.
+Data lives in `config/games.json` — add a game by adding a key with an
+ordered `steps` list (`check` / `run` / `manual` / `copy`; `{USER}`,
+`{TOOLKIT_DIR}`, `{APPID}` are substituted).
+
+> **GTA V Online note:** the walkthrough gets you a working prefix and
+> **Story Mode**. GTA *Online* (Enhanced, Steam AppID 3240220) is **not**
+> playable on Linux — Rockstar does not allow-list Proton for its BattlEye,
+> so you connect to a session and get kicked. No Proton/prefix change fixes
+> a server-side block.
+
+## The Game Tools tab
+
+Steam / Proton helpers that apply to *any* game, split out of Setup Games so
+that tab is just the walkthroughs.
+
+A **Proton prefix tools** box: **Scan Steam prefixes** lists every
+`compatdata/<appid>` prefix and
 flags ones on an NTFS/exFAT drive (Proton can't build a prefix there —
 `dosdevices/c:` needs a `:` in the name, which those filesystems reject, so
 the game won't launch); type an **AppID** + **Relocate this prefix** moves
@@ -366,16 +384,75 @@ saves ← vault** copies them back. Blank AppID field = every prefix at once;
 (`list` / `export` / `import`); the vault path is remembered in
 `~/.config/tuxthrottle/saves_vault`.
 
-> **GTA V Online note:** the walkthrough gets you a working prefix and
-> **Story Mode**. GTA *Online* (Enhanced, Steam AppID 3240220) is **not**
-> playable on Linux — Rockstar does not allow-list Proton for its BattlEye,
-> so you connect to a session and get kicked. No Proton/prefix change fixes
-> a server-side block.
+A **Shader / pipeline cache storage** box picks one folder (any drive) for
+every generated shader cache — Mesa (AMD), DXVK, the NVIDIA driver, and
+optionally **Steam's own** `steamapps/shadercache` (moved in + symlinked back,
+close Steam first). The choice is saved to
+`~/.config/tuxthrottle/shadercache.json` (`dir` + `max_size_gb`, default 80 GB
+— the cap applies to the Mesa and NVIDIA caches, which self-prune; DXVK and
+Steam's own cache have no size knob). The box shows **three live sizes** —
+total, Steam's cache, and the rest (Mesa + DXVK + NVIDIA) — with a **↻
+Refresh** button; **Save location** and **Apply shader cache size** are
+separate buttons, and **Clean cache** is there but optional (the caches
+rebuild on next launch). A **Check links** button (auto-runs when you open the
+tab) verifies every Steam library's `steamapps/shadercache` symlink still
+points at this folder — a link left **dangling** (e.g. after moving the cache
+folder) makes Steam fail every download / verify with **"disk write error"**;
+if it reports broken, **Link Steam's shader cache here** now *repairs* it in
+place. Moving the folder also re-points the existing links automatically. The
+launch-options builder and the `NvidiaShaderCache` tweak both read this
+location; changing it doesn't rewrite launch options already pasted into a game
+— regenerate and re-paste those. All the `du` / directory work runs off the UI
+thread so a big or cold cache drive never freezes the window.
 
-The GTA V flow mirrors "GTA V Online → Route A" further down this README.
-Data lives in `config/games.json` — add a game by adding a key with an
-ordered `steps` list (`check` / `run` / `manual` / `copy`; `{USER}`,
-`{TOOLKIT_DIR}`, `{APPID}` are substituted).
+A **launch-options builder** ticks together a Steam/Lutris launch-options
+string: MangoHud, Feral GameMode, gamescope (+ resolution/fps cap), NVIDIA
+PRIME offload, **persistent NVIDIA / Mesa / DXVK shader caches** (into the
+folder above, so they survive a prefix wipe/relocate), NVIDIA threaded
+optimizations (`__GL_THREADED_OPTIMIZATIONS` — **off by default; it crashes a
+fair number of Wine/Proton and legacy-OpenGL games at startup**),
+`RADV_PERFTEST=gpl` (AMD), an AMD vsync-off + threaded-GL toggle, `DXVK_ASYNC`
+(off by default — trades a little visual stutter risk for smoother shader
+compiles), Proton log off, and an **Anti-cheat safe** toggle (`MANGOHUD=0
+DISABLE_VKBASALT=1 VK_LOADER_LAYERS_DISABLE=~implicit~` — a clean Vulkan layer
+stack for BattlEye / EAC titles; also drops the `mangohud` wrapper). Produces a
+`[env] [wrappers] %command%` string with a **⧉ Copy** button, and a note: if a
+game won't launch, clear the options and add them back a few at a time.
+
+A **MangoHud overlay** box sets the overlay's names, detail and position. It
+shows **one CPU-name field and one GPU-name field per GPU in the machine**
+(detected via `nvidia-smi` / `lspci`), each labelled with that GPU's **PCI
+address** so two identical cards are still distinguishable; **↻ Detect**
+refills them from the hardware. The first GPU name becomes MangoHud's
+`gpu_text`; a second field turns on `gpu_list 0,1` so MangoHud prints each
+card's own stats. **Place on screen…** opens a translucent **full-screen picker
+at your real resolution** — drag the "MangoHud" box to where you want it,
+release to drop. It snaps to a **16×16 grid** by default (uncheck *snap to
+grid* for pixel-precise), and the result is stored as the nearest of MangoHud's
+8 anchors plus an `offset_x` / `offset_y` to hit the exact spot; buttons for
+**Save position** (writes just `position` / `offset_*`), **Restore last
+saved**, **Restore default**, **Cancel** (Esc). Three **"Show in full"**
+toggles set the detail per group: off = that group shows only its load %
+(`cpu_stats` / `gpu_stats` / `ram`), on = it adds temp + power (+ VRAM for
+memory). Separate **"Also show"** switches add the **frametime graph** (its
+own hard on/off, not tied to the group toggles) and **GPU core / mem clock**.
+FPS, the graphics-API line and each GPU's real name (`gpu_name` — confirms
+which card PRIME offload landed on) always stay. On Write the whole stat
+section is rewritten to exactly that set — everything else (per-process memory,
+wine/arch/io lines, …) is stripped. A **Per-game** field (the game's
+exe/binary name) targets `~/.config/MangoHud/<name>.conf` instead of the global
+one. Every write **rewrites the file cleanly** — each key appears once (latest
+value wins), leading comments kept, blank lines / malformed lines / junk
+dropped — and pins `width` to a value sized to your longest CPU/GPU name and
+the detail level (a bit narrower when every group is minimal, since the value
+column is just "42 %" instead of "65.5 W"). MangoHud's own auto-width doesn't
+grow for a long custom label, so it would otherwise clip; re-hit Write after
+changing a name or a toggle. **Reset config** rebuilds
+the file from scratch — styling + keybind + the current toggles/names/position,
+old file kept as `.bak`.
+
+A **Last game session** card shows the daemon's post-game summary (max temps,
+avg clocks, throttle %).
 
 ## The Bug Report tab
 
@@ -420,6 +497,7 @@ A stdlib CLI over `sensors.py` for scripts, keybinds and `ssh` sessions
 
 ```bash
 tuxthrottlectl status --json                   # everything, machine-readable
+tuxthrottlectl watch 2                          # live one-line summary, refresh every 2 s
 tuxthrottlectl get clocks                       # cpu/igpu/dgpu MHz
 tuxthrottlectl get tdp                          # current ryzenadj limits
 sudo tuxthrottlectl set power-profile performance
@@ -622,7 +700,9 @@ Tweaks)**. `RyzenCurveOptimizer` is *not* recommended-by-default — it's opt-in
 and stress-tested on demand.
 
 - **Presets tab** — Safe Baseline, Competitive Gaming, Streaming Rig: one
-  button applies a curated bundle.
+  button applies a curated bundle. Plus **★ Apply all recommendations** —
+  applies every item the developer marked `recommended` across all categories
+  in one pass and offers to enable the background daemon (snapshot first).
 - **Stability** — the C-state freeze fix (and the alternative `idle=nomwait`),
   `clocksource=tsc`.
 - **GPU** — NVIDIA driver check/install, EnvyControl (AMD+NVIDIA hybrid
@@ -743,10 +823,15 @@ toolkit's Software tab installs the tooling for both (`ProtonUp-Qt`,
    isn't there).
 5. Launch options:
    ```
-   DXVK_ASYNC=1 gamemoderun mangohud %command%
+   __NV_PRIME_RENDER_OFFLOAD=1 __VK_LAYER_NV_optimus=NVIDIA_only __GLX_VENDOR_LIBRARY_NAME=nvidia MANGOHUD=0 DISABLE_VKBASALT=1 VK_LOADER_LAYERS_DISABLE=~implicit~ DXVK_ASYNC=1 gamemoderun %command%
    ```
-   BattlEye installs itself into the prefix on first launch — let it finish,
-   then start again.
+   `MANGOHUD=0` + `DISABLE_VKBASALT=1` + `VK_LOADER_LAYERS_DISABLE=~implicit~`
+   turn off every injected Vulkan implicit layer (overlay / post-fx) — a clean
+   layer stack is what keeps BattlEye happy; `gamemoderun` is a plain wrapper
+   so it stays. The three `__…OFFLOAD` / `optimus` / `GLX` vars render on the
+   NVIDIA dGPU (drop them if you're in nvidia-only graphics mode). `DXVK_ASYNC=1`
+   cuts shader stutter. BattlEye installs itself into the prefix on first launch
+   — let it finish, then start again.
 6. If the Rockstar/Social Club window is black: switch GE-Proton version, or
    add `PROTON_USE_WINED3D=0`; if sign-in loops, set the prefix to Windows 10
    (`protontricks <appid> --gui` → *win10*).
@@ -768,6 +853,19 @@ Use **Lutris** (simplest) or **Bottles**:
 Common to both: keep the machine on **Game Mode** (G-key / tray) while
 playing, and apply the **WifiPowersaveOff** + **NetLatencySysctl** tweaks —
 GTA Online is sensitive to Wi-Fi latency spikes.
+
+### GTA Trilogy — Definitive Edition (III / Vice City / San Andreas)
+
+**TODO — not yet in `config/games.json`.** The three Definitive Editions all
+boot through the **Rockstar Games Launcher** (like GTA V Enhanced), so they
+need the same handling: force a recent **GE-Proton**, keep the Proton prefix
+**off NTFS/exFAT** (`tuxthrottle_prefix_relocate.py`), drop `vcrun2019` /
+`d3dcompiler_47` / `corefonts` into the prefix, and set it to **Windows 10**
+if the RGL / Social Club sign-in loops or renders black. They are single-player
+(no BattlEye), so the clean-Vulkan-layer launch string isn't required — a
+plain `gamemoderun mangohud %command%` (+ PRIME offload on the hybrid G15) is
+enough. Add each as its own `config/games.json` entry mirroring the GTA V
+steps, minus the BattlEye / `vm.max_map_count` bits.
 
 ## How status/apply works
 

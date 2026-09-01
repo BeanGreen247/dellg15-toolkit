@@ -176,3 +176,50 @@ def test_nvidia_clock_info_none_when_asleep(monkeypatch):
     monkeypatch.setattr(sensors, "which", lambda c: "/usr/bin/nvidia-smi")
     monkeypatch.setattr(sensors, "dgpu_is_awake", lambda: False)
     assert sensors.nvidia_clock_info() is None
+
+
+# --- MangoHud label helpers -------------------------------------------------
+
+def test_cpu_model_name(monkeypatch, tmp_path):
+    ci = tmp_path / "cpuinfo"
+    ci.write_text("processor\t: 0\nvendor_id\t: AuthenticAMD\n"
+                  "model name\t: AMD Ryzen 7 5800H with Radeon Graphics\n")
+    real_open = open
+
+    def fake_open(p, *a, **k):
+        return real_open(ci if p == "/proc/cpuinfo" else p, *a, **k)
+
+    monkeypatch.setattr("builtins.open", fake_open)
+    assert sensors.cpu_model_name() == "AMD Ryzen 7 5800H with Radeon Graphics"
+
+
+LSPCI_MM = (
+    '00:08.1 "Display controller" "AMD" "Cezanne [Radeon Vega Series]" -rc9 "Dell" "x"\n'
+    '01:00.0 "VGA compatible controller" "NVIDIA Corporation" '
+    '"GA107 [GeForce RTX 3050 Ti Mobile]" -ra1 "Dell" "x"\n'
+    '02:00.0 "Ethernet controller" "Realtek" "RTL8111" -r15 "Dell" "x"\n'
+)
+
+
+def test_gpu_names_nvidia_and_lspci(monkeypatch):
+    monkeypatch.setattr(sensors, "which",
+                        lambda c: f"/usr/bin/{c}" if c in ("nvidia-smi", "lspci") else None)
+
+    def run(cmd, *_a, **_k):
+        if cmd[0] == "nvidia-smi":
+            return types.SimpleNamespace(
+                stdout="NVIDIA GeForce RTX 3050 Ti Laptop GPU\n", stderr="", returncode=0)
+        return types.SimpleNamespace(stdout=LSPCI_MM, stderr="", returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    names = sensors.gpu_names()
+    assert names[0] == "NVIDIA GeForce RTX 3050 Ti Laptop GPU"     # nvidia-smi first
+    assert "Radeon Vega Series" in names                           # bracket-name, '/' trimmed
+    # the lspci NVIDIA entry is deduped away (nvidia-smi already named it)
+    assert sum("RTX 3050" in n for n in names) == 1
+    assert not any("Realtek" in n for n in names)                  # non-GPU skipped
+
+
+def test_gpu_names_empty_without_tools(monkeypatch):
+    monkeypatch.setattr(sensors, "which", lambda c: None)
+    assert sensors.gpu_names() == []

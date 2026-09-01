@@ -83,9 +83,9 @@
       {
         "id": "launchopts",
         "title": "11 · Set the launch options  (manual)",
-        "desc": "Properties → General → Launch Options. Paste the string below (Copy button). BattlEye installs itself into the prefix on the first launch — let it finish, then start the game again.",
+        "desc": "Properties → General → Launch Options. Paste the string below (Copy button). It keeps the Vulkan layer stack CLEAN for BattlEye — MANGOHUD=0 + DISABLE_VKBASALT=1 + VK_LOADER_LAYERS_DISABLE=~implicit~ turn off every injected implicit layer (overlay / post-fx), which is what avoids anti-cheat bans and startup crashes; gamemoderun is a plain wrapper (not a layer) so it stays. The three __…OFFLOAD / optimus / GLX vars render on the NVIDIA dGPU — drop them if you've switched to nvidia-only graphics mode (Power & Limits → hybrid graphics). DXVK_ASYNC=1 cuts shader-compile stutter (GE-Proton's DXVK supports it). Want a persistent shader cache too? build the string on the Game Tools tab after setting a cache folder. BattlEye installs itself into the prefix on the first launch — let it finish, then start the game again.",
         "manual": true,
-        "copy": "DXVK_ASYNC=1 gamemoderun mangohud %command%"
+        "copy": "__NV_PRIME_RENDER_OFFLOAD=1 __VK_LAYER_NV_optimus=NVIDIA_only __GLX_VENDOR_LIBRARY_NAME=nvidia MANGOHUD=0 DISABLE_VKBASALT=1 VK_LOADER_LAYERS_DISABLE=~implicit~ DXVK_ASYNC=1 gamemoderun %command%"
       },
       {
         "id": "prefixdeps",

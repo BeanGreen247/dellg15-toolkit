@@ -870,7 +870,7 @@
   },
   "NvidiaShaderCache": {
     "Content": "NVIDIA: stop shader-cache pruning (kills the every-launch recompile)",
-    "Description": "The NVIDIA Linux driver prunes its shader disk cache between sessions, so many games do a FULL shader recompile on every launch — 100% CPU for 10–15 min and stutter until it finishes. Drops env vars into /etc/environment.d/ that give the cache a large fixed budget and disable the cleanup pass (__GL_SHADER_DISK_CACHE=1, ..._PATH=~/.cache/nv, ..._SIZE=~12 GB, ..._SKIP_CLEANUP=1). Takes effect on next login. Reversible.",
+    "Description": "The NVIDIA Linux driver prunes its shader disk cache between sessions, so many games do a FULL shader recompile on every launch — 100% CPU for 10–15 min and stutter until it finishes. Drops env vars into /etc/environment.d/ that give the cache a large fixed budget and disable the cleanup pass (__GL_SHADER_DISK_CACHE=1, ..._PATH, ..._SIZE, ..._SKIP_CLEANUP=1). The path + size come from the Setup Games → “Shader / pipeline cache storage” box (~/.config/tuxthrottle/shadercache.json) if you've set one, else ~/.cache/tuxthrottle-shaders/nv-shader-cache at 80 GB. Re-apply this tweak after changing that location. Takes effect on next login. Reversible.",
     "category": "GPU",
     "risk": "safe",
     "requires_vendor": "nvidia",
@@ -880,8 +880,7 @@
     ],
     "apply": [
       "install -d /etc/environment.d",
-      "printf '%s\\n' '# TuxThrottle: keep the NVIDIA shader disk cache instead of recompiling every launch' '__GL_SHADER_DISK_CACHE=1' '__GL_SHADER_DISK_CACHE_PATH=/home/{USER}/.cache/nv' '__GL_SHADER_DISK_CACHE_SIZE=12000000000' '__GL_SHADER_DISK_CACHE_SKIP_CLEANUP=1' > /etc/environment.d/90-tuxthrottle-nv-shadercache.conf",
-      "install -d -o {USER} -g {USER} /home/{USER}/.cache/nv"
+      "CFG=/home/{USER}/.config/tuxthrottle/shadercache.json; D=$(grep -oE '\"dir\"[ ]*:[ ]*\"[^\"]+\"' \"$CFG\" 2>/dev/null | sed -E 's/.*:[ ]*\"//; s/\"$//'); D=${D:-/home/{USER}/.cache/tuxthrottle-shaders}; case \"$D\" in \"~/\"*) D=/home/{USER}/${D#\\~/} ;; \"~\") D=/home/{USER} ;; esac; G=$(grep -oE '\"max_size_gb\"[ ]*:[ ]*[0-9]+' \"$CFG\" 2>/dev/null | grep -oE '[0-9]+$'); G=${G:-80}; NVDIR=\"$D/nv-shader-cache\"; install -d -o {USER} -g {USER} \"$NVDIR\"; printf '%s\\n' '# TuxThrottle: keep the NVIDIA shader disk cache instead of recompiling every launch' '__GL_SHADER_DISK_CACHE=1' \"__GL_SHADER_DISK_CACHE_PATH=$NVDIR\" \"__GL_SHADER_DISK_CACHE_SIZE=$((G*1000000000))\" '__GL_SHADER_DISK_CACHE_SKIP_CLEANUP=1' > /etc/environment.d/90-tuxthrottle-nv-shadercache.conf"
     ],
     "undo": [
       "rm -f /etc/environment.d/90-tuxthrottle-nv-shadercache.conf"
@@ -945,7 +944,7 @@
   },
   "MangoHudGamingPreset": {
     "Content": "MangoHud: install a sensible gaming overlay preset",
-    "Description": "Writes ~/.config/MangoHud/MangoHud.conf with a clean gaming layout: FPS + frametime graph, CPU/GPU load + temp + power, VRAM/RAM, bottom-left, and toggle_hud bound to Shift_R+F12. Does not set fps_limit (leave that per-game). An existing MangoHud.conf is backed up to .bak first. Reversible.",
+    "Description": "Writes ~/.config/MangoHud/MangoHud.conf with a clean gaming layout: FPS + frametime graph, CPU/GPU load + temp + power, VRAM/RAM, bottom-left, and toggle_hud bound to Shift_R+F12. Does not set fps_limit or a fixed width (the MangoHud overlay box on the Game Tools tab pins a width sized to your custom CPU/GPU names so they don't clip). An existing MangoHud.conf is backed up to .bak first. Reversible.",
     "category": "Gaming",
     "risk": "safe",
     "check": "grep -q tuxthrottle-preset /home/{USER}/.config/MangoHud/MangoHud.conf 2>/dev/null",

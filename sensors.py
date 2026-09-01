@@ -282,6 +282,144 @@ def has_nvidia_gpu() -> bool:
     return False
 
 
+def cpu_model_name() -> str:
+    """Marketing CPU name, e.g. 'AMD Ryzen 7 5800H'. '' if unreadable."""
+    try:
+        with open("/proc/cpuinfo") as f:
+            for line in f:
+                if line.startswith("model name"):
+                    return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return ""
+
+
+_GPU_TRIM = re.compile(
+    r"\s*\((?:rev|prog-if)[^)]*\)|"                       # (rev a1) / (prog-if 00)
+    r"\s*\[[0-9a-fA-F]{4}:[0-9a-fA-F]{4}\]|"              # [10de:25a0]
+    r"\s*\bCorporation\b|\s*\bTechnology\b|\s*\bInc\.?", re.I)
+
+
+def gpu_names() -> list:
+    """Ordered list of GPU marketing names for MangoHud labels — dGPU-ish
+    entries first. Uses nvidia-smi for the NVIDIA name, lspci for the rest;
+    de-duplicated, best-effort. e.g. ['GeForce RTX 3050 Ti', 'Radeon Vega']."""
+    names: list = []
+    nvidia_seen = False
+    if which("nvidia-smi"):
+        try:
+            r = subprocess.run(["nvidia-smi",
+                                "--query-gpu=name", "--format=csv,noheader"],
+                               capture_output=True, text=True, timeout=5)
+            for ln in (r.stdout or "").splitlines():
+                ln = ln.strip()
+                if ln and ln not in names:
+                    names.append(ln)
+                    nvidia_seen = True
+        except (OSError, subprocess.SubprocessError):
+            pass
+    if which("lspci"):
+        try:
+            r = subprocess.run(["lspci", "-mm"], capture_output=True,
+                               text=True, timeout=6)
+            for ln in (r.stdout or "").splitlines():
+                parts = re.findall(r'"([^"]*)"', ln)
+                if len(parts) < 3:
+                    continue
+                cls = parts[0].lower()
+                if not ("vga compatible controller" in cls
+                        or "3d controller" in cls
+                        or "display controller" in cls):
+                    continue
+                if nvidia_seen and parts[1].lower().startswith("nvidia"):
+                    continue                       # already named by nvidia-smi
+                dev = _GPU_TRIM.sub("", parts[2]).strip(" ,-")
+                # prefer the pretty name inside brackets: 'GA107 [GeForce RTX ...]'
+                m = re.search(r"\[([^\]]+)\]", dev)
+                if m:
+                    dev = m.group(1).strip()
+                dev = dev.split(" / ")[0].strip()  # 'Radeon Vega Series / ... Mobile'
+                if dev and dev not in names:
+                    names.append(dev)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return names
+
+
+def _norm_pci(addr: str) -> str:
+    """'00000000:01:00.0' | '01:00.0' -> '0000:01:00.0' (lspci -D style)."""
+    a = (addr or "").strip().lower()
+    if not a:
+        return ""
+    parts = a.split(":")
+    if len(parts) == 2:                       # bus:slot.func, no domain
+        return f"0000:{a}"
+    try:
+        return f"{int(parts[0], 16):04x}:{':'.join(parts[1:])}"
+    except ValueError:
+        return a
+
+
+def gpu_devices() -> list:
+    """[{'name', 'pci'}] for every real GPU, dGPU-ish first — like gpu_names()
+    but each entry also carries its PCI address so two identical cards can be
+    told apart. Best-effort; 'pci' may be '' if only nvidia-smi named it and it
+    gave no bus id."""
+    devs: list = []
+    seen_names: set = set()
+    nvidia_seen = False
+    # Only ask nvidia-smi when the dGPU is already powered — a bare query wakes
+    # a runtime-suspended card, and a burst of those at startup can wedge the
+    # driver. lspci below names and locates every GPU without touching it.
+    if which("nvidia-smi") and dgpu_is_awake():
+        try:
+            r = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name,pci.bus_id",
+                 "--format=csv,noheader"],
+                capture_output=True, text=True, timeout=5)
+            for ln in (r.stdout or "").splitlines():
+                if "," not in ln:
+                    continue
+                name, _, pci = ln.partition(",")
+                name = name.strip()
+                if name and name not in seen_names:
+                    devs.append({"name": name, "pci": _norm_pci(pci)})
+                    seen_names.add(name)
+                    nvidia_seen = True
+        except (OSError, subprocess.SubprocessError):
+            pass
+    if which("lspci"):
+        try:
+            r = subprocess.run(["lspci", "-Dmm"], capture_output=True,
+                               text=True, timeout=6)
+            for ln in (r.stdout or "").splitlines():
+                slot = ln.split(None, 1)[0] if ln.strip() else ""
+                parts = re.findall(r'"([^"]*)"', ln)
+                if len(parts) < 3:
+                    continue
+                cls = parts[0].lower()
+                if not ("vga compatible controller" in cls
+                        or "3d controller" in cls
+                        or "display controller" in cls):
+                    continue
+                if nvidia_seen and parts[1].lower().startswith("nvidia"):
+                    for d in devs:                 # backfill the pci we lacked
+                        if not d["pci"] and "nvidia" in d["name"].lower():
+                            d["pci"] = _norm_pci(slot)
+                    continue
+                dev = _GPU_TRIM.sub("", parts[2]).strip(" ,-")
+                m = re.search(r"\[([^\]]+)\]", dev)
+                if m:
+                    dev = m.group(1).strip()
+                dev = dev.split(" / ")[0].strip()
+                if dev and dev not in seen_names:
+                    devs.append({"name": dev, "pci": _norm_pci(slot)})
+                    seen_names.add(dev)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return devs
+
+
 def read_igpu_clock_temp() -> str:
     clock, temp = read_igpu_clock_temp_values()
     c = f"{clock} MHz" if clock is not None else "?"
@@ -969,12 +1107,28 @@ def battery_health_info() -> dict:
     if power_uw is None and cur_ua is not None and volt_uv:
         power_uw = abs(cur_ua) * volt_uv // 1_000_000
 
+    # time-to-full / -to-empty at the current rate. Keep the reservoir and the
+    # rate in matching units: energy gauges (µWh) with power (µW), charge gauges
+    # (µAh) with current (µA).
+    status = (_s("status") or "").strip()
+    if unit == "Wh":
+        now_raw, rate = _read_int(f"{bat}/energy_now"), power_uw
+    else:
+        now_raw = _read_int(f"{bat}/charge_now")
+        rate = abs(cur_ua) if cur_ua else None
+    eta_min = eta_kind = None
+    if rate and now_raw is not None and full:
+        if status.lower() == "discharging":
+            eta_min, eta_kind = round(now_raw / rate * 60), "to empty"
+        elif status.lower() == "charging" and full > now_raw:
+            eta_min, eta_kind = round((full - now_raw) / rate * 60), "to full"
+
     return {
         "present": True,
         "manufacturer": _s("manufacturer"),
         "model": _s("model_name"),
         "technology": _s("technology"),
-        "status": _s("status"),
+        "status": status or None,
         "capacity_pct": _read_int(f"{bat}/capacity"),
         "cycle_count": _read_int(f"{bat}/cycle_count"),
         "full": round(full / scale, 1) if full else None,
@@ -983,6 +1137,8 @@ def battery_health_info() -> dict:
         "wear_pct": wear,
         "power_w": round(power_uw / 1_000_000, 1) if power_uw else None,
         "voltage_v": round(volt_uv / 1_000_000, 2) if volt_uv else None,
+        "eta_min": eta_min,
+        "eta_kind": eta_kind,
     }
 
 
@@ -1247,7 +1403,7 @@ def panel_modes() -> "dict | None":
         return None
     try:
         r = subprocess.run(_session_cmd(["kscreen-doctor", "-j"]),
-                           capture_output=True, text=True, timeout=12)
+                           capture_output=True, text=True, timeout=6)
         if r.returncode != 0 or not r.stdout.strip():
             return None
         data = json.loads(r.stdout)
