@@ -183,11 +183,13 @@ DAMX's fan-control equivalent for this board:
 - **Manual PWM** (advanced, behind a warning) — takes the EC off its curve via
   `dell_smm` `pwmN`, floored so the fans never fully stop, with a "Restore
   automatic" button.
-- **Custom fan curve** (closed-loop) — a 5-point temperature → boost table
+- **Custom fan curve** (closed-loop) — a 10-point temperature → boost table
   with a live curve preview, driven from CPU / GPU / hotter-of-both, with a
-  cool-down hysteresis. A background daemon (`tuxthrottle_powerd.py`, enabled
-  by the **Fan-curve + AC-switch daemon** tweak) applies it and restores
-  automatic control when stopped. It only ever *adds* boost.
+  cool-down hysteresis and a **Linear fill** button (place the two endpoints,
+  it interpolates the rest). A background daemon (`tuxthrottle_powerd.py`,
+  enabled by the **Fan-curve + AC-switch daemon** tweak) applies it and
+  restores automatic control when stopped. It only ever *adds* boost. Old
+  5-point configs load and are resampled to 10 on open.
 
 The profile + boost sliders don't persist a reboot on their own; the fan
 curve and TDP limits do, via their tweaks' systemd units.
@@ -212,21 +214,29 @@ ThrottleStop / the ASUS Armoury sliders:
 - **NVIDIA board power limit** — a slider where the GPU allows it; on the
   G15 5515's RTX 3050 Ti Mobile the limit is firmware-locked (Dynamic Boost),
   so the section shows that instead of a dead control.
+- **NVIDIA GPU clock lock** — clamp the dGPU graphics clock
+  (`nvidia-smi --lock-gpu-clocks`), which works even when `-pl` is
+  firmware-locked. Lower the ceiling for heat / battery; presets and an
+  "Unlock / reset". State in `nvclk.json`, re-applied at boot/resume by the
+  **NVIDIA GPU clock-lock persistence** tweak. Hidden while the dGPU is asleep.
 - **Hybrid graphics mode** — integrated / hybrid / nvidia via EnvyControl,
   with a log-out-to-apply warning (hidden until EnvyControl is installed).
 - **Battery charge limit** — a stop-charging percentage via the kernel
   `charge_control_end_threshold` where present, or Dell firmware (libsmbios)
   via the **Dell battery threshold** tweak on machines like the 5515 that
   lack the sysfs attribute.
-- **AC / battery auto-switch** — pick a bundle (profile + TDP preset) to
-  apply automatically when the charger is plugged or pulled; handled by the
-  same `tuxthrottle_powerd.py` daemon.
+- **Panel refresh rate** — switch the internal panel between its rates (the
+  5515 is 144 Hz; 60 Hz on battery is a real power saving). Resolution is
+  kept; KScreen remembers the choice. KDE / kscreen-doctor only.
+- **AC / battery auto-switch** — pick a bundle (profile + TDP preset), and
+  optionally a refresh rate, to apply automatically when the charger is
+  plugged or pulled; handled by the same `tuxthrottle_powerd.py` daemon.
 - **Thermal-event alerts** — with the daemon running, sustained Tjmax, a
   stalled fan while hot, or Performance-on-low-battery raise a desktop
   notification plus a `journalctl -u tuxthrottle-powerd` line (config block
   `thermal_notify` in `powerd.json`; off by default).
 
-State is written to `~/.config/tuxthrottle/{tdp,nvpl,battery,co,powerd}.json`
+State is written to `~/.config/tuxthrottle/{tdp,nvpl,nvclk,battery,co,powerd}.json`
 and re-applied at boot by the matching tweaks' units. When the daemon is up it
 also exposes a **root-only control socket** at `/run/tuxthrottle/control.sock`
 so the GUI and `tuxthrottlectl` route hardware writes through the one process
@@ -243,9 +253,10 @@ longevity knobs sit on one page.
 ## The Profiles tab
 
 A **profile** is a named snapshot of the *whole* power surface — thermal
-profile, CPU TDP, battery limit, NVIDIA limit, fan curve, AC/battery
-auto-switch, keyboard colour. Capture the current state as a named profile,
-apply one with a click, or roll back.
+profile, CPU TDP, battery limit, NVIDIA power limit, NVIDIA GPU clock lock,
+panel refresh rate, fan curve, AC/battery auto-switch, keyboard colour.
+Capture the current state as a named profile, apply one with a click, or roll
+back.
 
 - **Automatic snapshots** — applying a profile, rolling back, or hitting
   "Apply Selected" on the tweaks first drops a timestamped snapshot in
@@ -255,6 +266,10 @@ apply one with a click, or roll back.
   Windows `.exe`) to a profile; the `tuxthrottle_powerd.py` daemon snapshots
   and applies it while the game runs, and restores it on exit. `*` matches
   any Feral GameMode session.
+- **Time schedule** — apply a preset (Quiet / Balanced / Performance) or a
+  saved profile by time of day, e.g. Quiet 22:00–07:00. Rules may wrap past
+  midnight and run every day; a running per-game profile wins. Config block
+  `schedule` in `powerd.json`.
 - **CLI** — `tuxthrottlectl profile list|apply|save`, `tuxthrottlectl
   snapshot`, `tuxthrottlectl rollback [last]`.
 - **Suspend/resume** — the **StateResume** tweak re-applies the last applied
@@ -276,12 +291,15 @@ the keys so Plasma returns to its defaults.
 | KWin compositor tuned for games | OpenGL/GLCore, fullscreen unredirect (`WindowsBlockCompositing`), `LatencyPolicy=Low`, bilinear texture filter |
 | Classic Application Menu | the old Win-95-style hierarchical start menu (`kicker`) instead of Kickoff |
 | Show seconds on the panel clock | `showSeconds=2` on every digital-clock widget |
-| Panel flush to the screen edge | turns off the Plasma 6 **Floating panel** (`[Containments][N][General] floating=false`) so the bottom panel stays pinned to the edge instead of lifting a few mm away when no window is maximised |
+| Panel flush to the screen edge | turns off the Plasma 6 **Floating panel** — sets `floating=false` in appletsrc *and* `floating=0` in `plasmashellrc [PlasmaViews][Panel N]` (the one that actually removes the gap) so the bottom panel stays pinned to the edge instead of lifting a few mm away when no window is maximised |
+| Disable the Meta (Super / Win) key launcher | a lone tap of the Meta key no longer opens the launcher (`[ModifierOnlyShortcuts] Meta=""`); Meta+key combos still work — fixes "the Win key drops me out of a fullscreen game" |
 | Disable all screen-edge actions | no hot-corner Overview/Grid triggers mid-game |
 | Stop Activities + recent-docs tracking | kills the `kactivitymanagerd` journal + file-open history |
 | Limit Dolphin thumbnail I/O | cap thumbnail size, no remote-folder thumbnails |
 | No launch feedback | no bouncing cursor / taskbar button on app start |
 | Disable the Plasma splash screen | desktop appears as soon as it's ready |
+| Disable KWallet | stops the login wallet-unlock prompt + KWallet GPG/SSH passphrase caching |
+| Allow screen tearing | `AllowTearing=true` for lowest-latency fullscreen (pair with a VRR panel) |
 
 ## The Updates tab
 
@@ -369,14 +387,22 @@ keys sit on), OpenRGB device list, package versions, and filtered
 up in the first place. Buttons: **Copy report**, **Save to file…**, and
 **Copy GitHub issue template** (pre-filled sections to paste on the tracker).
 **Collect hardware bundle (.tar.gz)** does more: it writes a folder of *raw*
-dumps — full DMI, `lspci -vvv`, `lsusb -v`, `/proc/bus/input/devices` plus a
-**decoded per-device KEY-capability list** (every Fn / media / vendor key each
-evdev device can emit, no live `evtest` needed), the whole `/sys/class/hwmon`
-tree, ACPI/powercap, DRM/GPU, `openrgb -l --verbose`, and dmesg/journal — then
-tars it with a README. That's everything needed to add a new laptop model to
-`config/*.json` (which DMI strings to gate on, the fan/pwm hwmon paths, the
-key codes, the RGB controller layout). Attach the `.tar.gz` to a **New
-hardware support** issue.
+dumps plus **`model-scaffold.json`** — an auto-generated starting point for
+`models/<slug>.json` (probed fields filled, the rest left under `_todo`). The
+raw dumps: full DMI + `dmidecode`, `lscpu` + `ryzenadj -i`, `lspci -vvv`,
+`lsusb -v`, `/proc/bus/input/devices` plus a **decoded per-device
+KEY-capability list** (every Fn / media / vendor key each evdev device can
+emit, no live `evtest` needed), the whole `/sys/class/hwmon` tree,
+`platform_profile` + powercap + `lm_sensors`, the `power_supply` tree +
+`upower` + `smbios-battery-ctl` (battery method), `smbios-token-ctl` (Dell
+firmware tokens), vendor `/sys/devices/platform` WMI interfaces +
+`/sys/class/leds` + module params, `fwupdmgr get-devices`, DRM/GPU +
+`nvidia-smi -q` + `glxinfo`/`vulkaninfo`, display modes (`kscreen-doctor`,
+`xrandr`), `openrgb -l --verbose`, a **base64 of the ACPI DSDT** (decompile
+with `iasl -d` for vendor-WMI reverse engineering), and dmesg/journal — then
+tars it with a README that spells out the next steps. Run it with **sudo** so
+`dmidecode`, the DSDT and the SMBIOS tokens are readable. Attach the `.tar.gz`
+to a **New hardware support** issue.
 
 Terminal equivalents:
 
@@ -398,6 +424,8 @@ tuxthrottlectl get tdp                          # current ryzenadj limits
 sudo tuxthrottlectl set power-profile performance
 sudo tuxthrottlectl set tdp balanced           # or --stapm 42 --fast 54 --slow 42
 sudo tuxthrottlectl set fan-boost both 60
+sudo tuxthrottlectl set refresh 60             # panel Hz (KDE / kscreen-doctor)
+sudo tuxthrottlectl set gpu-clock 1500          # lock the dGPU graphics clock (--min N); "reset" to unlock
 sudo tuxthrottlectl gamemode toggle
 sudo tuxthrottlectl profile apply "quiet night"
 tuxthrottlectl daemon status                    # the tuxthrottled control socket
@@ -439,11 +467,11 @@ no `models` key applies everywhere, which is every entry today. See
 - `hotkey_listener.py` — the G-key → Game Mode binding (needs `python3-evdev`)
 - `sensors.py` — shared sensor reads + Game Mode logic + CPU TDP (ryzenadj), battery, NVIDIA/hybrid-GPU helpers, **no GUI dependency**, used by everything below so they never disagree on state
 - `tuxthrottle_profiles.py` — stdlib: capture / apply / snapshot / rollback of named full-state profiles; used by the Profiles tab, the CLI, the daemon and the `StateResume` tweak
-- `tuxthrottle_powerd.py` — stdlib daemon: closed-loop fan curve + AC/battery auto-switch + per-game auto-profiles + **thermal-event alerts** + the **control socket** (installed by the **Fan-curve + AC-switch daemon** tweak)
+- `tuxthrottle_powerd.py` — stdlib daemon: closed-loop fan curve + AC/battery auto-switch (profile + TDP + panel refresh) + per-game auto-profiles + **time-of-day schedule** + **thermal-event alerts** + the **control socket** (installed by the **Fan-curve + AC-switch daemon** tweak)
 - `tuxthrottle_control.py` — stdlib: the newline-JSON RPC over `/run/tuxthrottle/control.sock` (server in the daemon, client in the GUI / `tuxthrottlectl`)
 - `tuxthrottle_co_stress.py` — stdlib, root: Ryzen Curve Optimizer undervolt with a stress-test-and-auto-revert harness (`apply` / `confirm` / `revert` / `reapply` / `status`)
 - `tuxthrottle_kde_panel.py` — stdlib helper for the panel-applet KDE tweaks (clock seconds, classic menu, panel-flush) — finds applet / panel containment IDs and restarts `plasmashell`
-- `tuxthrottlectl.py` — headless CLI over `sensors.py` + profiles (`status` / `get` / `set` / `profile` / `snapshot` / `rollback` / `gamemode` / `daemon`, `--json`), installed as `/usr/local/bin/tuxthrottlectl`
+- `tuxthrottlectl.py` — headless CLI over `sensors.py` + profiles (`status` / `get` / `set {power-profile,tdp,fan-boost,battery,nvpl,gpumode,refresh,gpu-clock}` / `profile` / `snapshot` / `rollback` / `gamemode` / `daemon`, `--json`), installed as `/usr/local/bin/tuxthrottlectl`
 - `models/` — per-board hardware profiles keyed by DMI (`g15-5515.json` is the reference); `sensors.model_profile()` picks one, and a tweak/app can gate itself with `"models": [ ... ]`
 - `clients/` — optional panel front-ends: a **waybar** module and a **KDE plasmoid**, both over `tuxthrottlectl status --json`
 - `packaging/` — the noarch RPM `.spec` + `.github/workflows/copr.yml` (SRPM on tag → COPR)
@@ -466,7 +494,11 @@ process) showing CPU/iGPU/dGPU clocks and temps, with a checkable "Game Mode"
 menu item (also toggled by left-clicking the tray icon) that runs the
 `gaming-performance`/`amdgpu-perf-high`/`nvidia-max-perf` helper scripts
 installed by the tweaks above — install those first (Presets > Safe Baseline
-or Competitive Gaming) or the toggle has nothing to call.
+or Competitive Gaming) or the toggle has nothing to call. The context menu
+also has **Power profile** (Balanced / Performance) and **Fan boost**
+(0 / 50 / 100 %) submenus, routed through `pkexec tuxthrottlectl` (the
+**PolkitTuxthrottlectl** tweak makes that passwordless for an active local
+user) or the daemon socket.
 
 ```bash
 # needs PySide6: dnf install python3-pyside6   (or: pip install --user PySide6)

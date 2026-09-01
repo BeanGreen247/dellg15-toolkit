@@ -107,14 +107,20 @@ do_install() {
     find "$LIBDIR" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
     chmod -R a+rX "$LIBDIR"
     # stamp the version so the Diagnostics / About page can show it (no .git in
-    # /opt). Always re-derive: `git describe` if $SRC is a repo, else fall back
-    # to a .version the source tree carries (rsync'd from a dev machine).
+    # /opt). Canonical human version = the committed VERSION file; append the
+    # git short sha (+ -dirty) when $SRC is a checkout. Falls back to a .version
+    # the source tree carries (rsync'd from a dev machine), then bare git.
+    _base="$(tr -d '[:space:]' < "$SRC/VERSION" 2>/dev/null || true)"
     _ver=""
     if git -C "$SRC" rev-parse --git-dir >/dev/null 2>&1; then
-        _ver="$(git -C "$SRC" describe --tags --always --dirty 2>/dev/null \
-                || git -C "$SRC" rev-parse --short HEAD 2>/dev/null || true)"
+        _sha="$(git -C "$SRC" rev-parse --short HEAD 2>/dev/null || true)"
+        _dirty=""; git -C "$SRC" diff --quiet 2>/dev/null || _dirty="-dirty"
+        if [[ -n "$_base" && -n "$_sha" ]]; then _ver="${_base}+g${_sha}${_dirty}"
+        elif [[ -n "$_sha" ]]; then _ver="$(git -C "$SRC" describe --tags --always --dirty 2>/dev/null || echo "$_sha")"
+        fi
     fi
     [[ -z "$_ver" && -s "$SRC/.version" ]] && _ver="$(cat "$SRC/.version")"
+    [[ -z "$_ver" && -n "$_base" ]] && _ver="$_base"
     [[ -n "$_ver" ]] && printf '%s\n' "$_ver" > "$LIBDIR/.version"
     [[ -s "$LIBDIR/.version" ]] && c_ok "version $(cat "$LIBDIR/.version")"
     c_ok "copied $(find "$LIBDIR" -type f | wc -l) files"

@@ -82,6 +82,17 @@ DEFAULTS: dict[str, Any] = {
         "match": {},          # {"gta5.exe": "Gaming", "*": "Performance"}
         "default": None,      # profile name, or null = roll back the pre-game snapshot
     },
+    # time-of-day profile schedule. Each rule: {from,to,apply,days}. `apply` is
+    # a bundle (Quiet/Balanced/Performance) or a saved profile name; `days` is
+    # a list of weekday ints (0=Mon), omitted = every day. Outside every rule,
+    # `outside` (bundle/profile) is applied, or nothing when it's null. Yields
+    # to a running per-game profile.
+    "schedule": {
+        "enabled": False,
+        "poll_s": 60,
+        "rules": [],          # [{"from": "22:00", "to": "07:00", "apply": "Quiet"}]
+        "outside": None,      # bundle/profile when no rule matches, or null
+    },
     # desktop notifications (best-effort notify-send) + a structured log line
     # for sustained-Tjmax / stalled-fan / performance-on-low-battery events.
     "thermal_notify": {
@@ -366,6 +377,77 @@ class GameProfileController:
             if not r["ok"]:
                 log(f"  {r['key']}: FAILED {r['msg']}")
 
+    @property
+    def active(self) -> bool:
+        return self._active_key is not None
+
+
+def _hhmm_to_min(s) -> "int | None":
+    try:
+        h, m = str(s).split(":")
+        return (int(h) % 24) * 60 + int(m) % 60
+    except (ValueError, AttributeError):
+        return None
+
+
+def _apply_bundle_or_profile(name: str, user) -> None:
+    if name in TDP_PRESETS:
+        apply_bundle(name)
+        return
+    st = profiles.load_profile(name, user)
+    if not st:
+        log(f"  (no such profile '{name}' — skipped)")
+        return
+    for r in profiles.apply_state(st, user):
+        if not r["ok"]:
+            log(f"  {r['key']}: FAILED {r['msg']}")
+
+
+class ScheduleController:
+    """Time-of-day profile schedule (`schedule` config block). Applies a
+    bundle/profile per matching rule, or `schedule.outside` when no rule is
+    active. Only acts on a *change* of target, and yields while a per-game
+    profile is in effect."""
+
+    def __init__(self, user):
+        self._user = user
+        self._last = None          # last target we applied
+        self._last_check = 0.0
+
+    def tick(self, cfg: dict, game_active: bool) -> None:
+        sc = cfg.get("schedule", {})
+        if not sc.get("enabled"):
+            self._last = None
+            return
+        poll_s = max(15, int(sc.get("poll_s", 60)))
+        now = time.monotonic()
+        if self._last is not None and now - self._last_check < poll_s:
+            return
+        self._last_check = now
+        if game_active:
+            return
+
+        lt = time.localtime()
+        cur = lt.tm_hour * 60 + lt.tm_min
+        target = sc.get("outside")
+        for rule in sc.get("rules", []) or []:
+            days = rule.get("days")
+            if days and lt.tm_wday not in days:
+                continue
+            a, b = _hhmm_to_min(rule.get("from")), _hhmm_to_min(rule.get("to"))
+            if a is None or b is None:
+                continue
+            within = (a <= cur < b) if a <= b else (cur >= a or cur < b)
+            if within:
+                target = rule.get("apply")
+                break
+
+        if not target or target == self._last:
+            return
+        log(f"schedule -> apply '{target}'")
+        _apply_bundle_or_profile(target, self._user)
+        self._last = target
+
 
 class FanController:
     def __init__(self):
@@ -601,6 +683,7 @@ def run(cfg_path: Path, user=None, once: bool = False) -> int:
     fans = FanController()
     games = GameProfileController(user)
     thermal = ThermalWatcher(user)
+    sched = ScheduleController(user)
     last_mtime = -1.0
     cfg = load_config(cfg_path)
     last_ac = None
@@ -634,10 +717,12 @@ def run(cfg_path: Path, user=None, once: bool = False) -> int:
                 last_mtime = m
                 log(f"config loaded: fan_curve={cfg['fan_curve']['enabled']} "
                     f"autoswitch={cfg['autoswitch']['enabled']} "
-                    f"game_profiles={cfg['game_profiles']['enabled']}")
+                    f"game_profiles={cfg['game_profiles']['enabled']} "
+                    f"schedule={cfg['schedule']['enabled']}")
 
             fans.tick(cfg)
             thermal.tick(cfg)
+            sched.tick(cfg, games.active)
 
             if cfg["autoswitch"].get("enabled"):
                 ac = _ac_online()

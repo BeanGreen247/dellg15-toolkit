@@ -2600,7 +2600,66 @@ class ToolkitApp:
         tb.Button(gpf, text="Save game map", bootstyle=SUCCESS,
                   command=self._gameprof_save).pack(anchor="w", pady=(10, 0))
 
+        self._build_schedule_section(frame)
         self._profiles_refresh()
+
+    _SCHED_ROWS = 4
+
+    def _build_schedule_section(self, parent):
+        sc = self._read_power_state("powerd.json").get("schedule", {})
+        lf = tb.Labelframe(parent, text="Time schedule", padding=12)
+        lf.pack(fill="x", pady=6)
+        tb.Label(lf, wraplength=1000, justify="left", bootstyle=SECONDARY, text=(
+            "The daemon applies a profile by time of day — e.g. Quiet 22:00–07:00. "
+            "“Apply” is a preset (Quiet / Balanced / Performance) or a saved "
+            "profile name; times are 24-hour and may wrap past midnight; rules "
+            "run every day. A running per-game profile wins. Needs the "
+            "“Fan-curve + AC-switch daemon” tweak enabled.")).pack(anchor="w", pady=(0, 8))
+        self._sched_enabled = tk.BooleanVar(value=bool(sc.get("enabled")))
+        tb.Checkbutton(lf, text="Time schedule enabled", variable=self._sched_enabled,
+                       bootstyle="round-toggle").pack(anchor="w")
+        grid = tb.Frame(lf); grid.pack(anchor="w", pady=(8, 4))
+        for c, t in enumerate(("From", "To", "Apply")):
+            tb.Label(grid, text=t, width=[8, 8, 20][c], bootstyle=SECONDARY).grid(row=0, column=c)
+        self._sched_rows = []
+        rules = sc.get("rules", []) or []
+        for r in range(self._SCHED_ROWS):
+            rule = rules[r] if r < len(rules) else {}
+            fv = tk.StringVar(value=rule.get("from", ""))
+            tv = tk.StringVar(value=rule.get("to", ""))
+            av = tk.StringVar(value=rule.get("apply", ""))
+            tb.Entry(grid, textvariable=fv, width=8).grid(row=r + 1, column=0, padx=3, pady=2)
+            tb.Entry(grid, textvariable=tv, width=8).grid(row=r + 1, column=1, padx=3, pady=2)
+            cb = tb.Combobox(grid, textvariable=av, width=18, state="readonly")
+            cb.grid(row=r + 1, column=2, padx=3, pady=2)
+            self._sched_rows.append((fv, tv, av, cb))
+        drow = tb.Frame(lf); drow.pack(anchor="w", pady=(4, 0))
+        tb.Label(drow, text="Outside every rule →").pack(side="left")
+        self._sched_outside = tk.StringVar(value=sc.get("outside") or "")
+        self._sched_outside_cb = tb.Combobox(drow, textvariable=self._sched_outside,
+                                             width=18, state="readonly")
+        self._sched_outside_cb.pack(side="left", padx=6)
+        tb.Label(drow, text="(blank = leave the profile alone)",
+                 bootstyle=SECONDARY).pack(side="left")
+        tb.Button(lf, text="Save schedule", bootstyle=SUCCESS,
+                  command=self._schedule_save).pack(anchor="w", pady=(10, 0))
+
+    def _schedule_save(self):
+        rules = []
+        for fv, tv, av, _cb in self._sched_rows:
+            f, t, a = fv.get().strip(), tv.get().strip(), av.get().strip()
+            if f and t and a:
+                rules.append({"from": f, "to": t, "apply": a})
+        merged = self._read_power_state("powerd.json") or {}
+        merged["schedule"] = {
+            "enabled": bool(self._sched_enabled.get()),
+            "poll_s": 60,
+            "rules": rules,
+            "outside": self._sched_outside.get().strip() or None,
+        }
+        self._write_power_state("powerd.json", merged)
+        self._log(f"[Profiles] schedule saved ({'on' if self._sched_enabled.get() else 'off'}): "
+                  f"{len(rules)} rule(s), outside={self._sched_outside.get() or '(none)'}")
 
     def _gameprof_save(self):
         match = {pv.get().strip(): cv.get() for pv, cv, _ in self._gp_rows
@@ -2628,10 +2687,15 @@ class ToolkitApp:
             self._prof_preview.configure(text=f"(capture preview failed: {exc})")
 
         names = tuxthrottle_profiles.list_profiles(self.user)
+        sched_opts = ["", "Quiet", "Balanced", "Performance"] + names
         for _pv, _cv, cb in getattr(self, "_gp_rows", []):
             cb.configure(values=[""] + names)
         if getattr(self, "_gp_default_cb", None) is not None:
             self._gp_default_cb.configure(values=[""] + names)
+        for _fv, _tv, _av, cb in getattr(self, "_sched_rows", []):
+            cb.configure(values=sched_opts)
+        if getattr(self, "_sched_outside_cb", None) is not None:
+            self._sched_outside_cb.configure(values=sched_opts)
         if not names:
             tb.Label(self._prof_list, text="(no profiles yet)", bootstyle=SECONDARY).pack(anchor="w")
         for name in names:
@@ -4549,6 +4613,10 @@ def _dnf_metadata_age() -> str:
 
 
 def toolkit_version() -> str:
+    """Human version string. Priority: the deploy stamp install.sh writes
+    (`.version`, since /opt has no .git) → the committed `VERSION` file plus
+    the live git short sha when running from a checkout → bare `git describe`
+    → "unknown"."""
     for p in (BASE_DIR / ".version",):
         try:
             v = p.read_text().strip()
@@ -4556,8 +4624,20 @@ def toolkit_version() -> str:
                 return v
         except OSError:
             pass
-    ok, _rc, out = run_cmd3(f"git -C {BASE_DIR} describe --tags --always --dirty 2>/dev/null "
-                            f"|| git -C {BASE_DIR} rev-parse --short HEAD 2>/dev/null")
+    base = ""
+    try:
+        base = (BASE_DIR / "VERSION").read_text().strip()
+    except OSError:
+        pass
+    sha = run_cmd3(f"git -C {BASE_DIR} rev-parse --short HEAD 2>/dev/null")[2].strip()
+    if base and sha:
+        dirty = "-dirty" if run_cmd3(
+            f"git -C {BASE_DIR} diff --quiet 2>/dev/null || echo x")[2].strip() else ""
+        return f"{base}+g{sha}{dirty}"
+    if base:
+        return base
+    out = run_cmd3(f"git -C {BASE_DIR} describe --tags --always --dirty 2>/dev/null "
+                   f"|| git -C {BASE_DIR} rev-parse --short HEAD 2>/dev/null")[2]
     return out.strip() or "unknown"
 
 
@@ -4804,6 +4884,18 @@ for _i in range(183, 195):                       # 183-194 -> F13..F24
     _KEY_CODE_NAMES[_i] = f"F{_i - 170}"
 
 
+def _model_scaffold_json() -> str:
+    """Run the model-profile scaffold generator (probes DMI / hwmon / PCI /
+    OpenRGB / battery method — no writes) and return its JSON. This is the
+    starting point for a new `models/<slug>.json`; the maintainer fills the
+    `_todo` fields from the other bundle files."""
+    try:
+        import tuxthrottle_modelgen
+        return json.dumps(tuxthrottle_modelgen.build_scaffold(), indent=2)
+    except Exception as exc:  # noqa: BLE001
+        return f"(model scaffold generation failed: {exc})"
+
+
 def _decode_key_caps() -> str:
     """For each evdev device in /proc/bus/input/devices, decode its `B: KEY=`
     capability bitmap into KEY_ names — the fastest way to see what a new
@@ -4839,10 +4931,16 @@ def _decode_key_caps() -> str:
 
 
 _HW_BUNDLE_FILES = [
+    ("model-scaffold.json", _model_scaffold_json),
     ("dmi.txt", "grep -r . /sys/class/dmi/id/ 2>/dev/null | sed 's#/sys/class/dmi/id/##' "
-     "| grep -viE 'uevid|modalias'"),
+     "| grep -viE 'uevid|modalias'; echo; echo '# dmidecode (root)'; "
+     "dmidecode -t 0 -t 1 -t 2 -t 3 -t 11 2>/dev/null || echo '(dmidecode needs root)'"),
     ("kernel.txt", "uname -a; echo; echo '# cmdline'; cat /proc/cmdline; echo; "
-     "echo '# os-release'; cat /etc/os-release"),
+     "echo '# os-release'; cat /etc/os-release; echo; echo '# virt'; systemd-detect-virt 2>/dev/null"),
+    ("cpu.txt", "lscpu 2>/dev/null; echo; echo '# /proc/cpuinfo (cpu0)'; "
+     "awk '/^$/{exit} {print}' /proc/cpuinfo; echo; echo '# amd_pstate'; "
+     "grep -rH . /sys/devices/system/cpu/amd_pstate/ 2>/dev/null; echo; "
+     "echo '# ryzenadj -i'; ryzenadj -i 2>/dev/null || echo '(ryzenadj not installed / not AMD)'"),
     ("lspci.txt", "lspci -nnvvv 2>/dev/null || lspci -nnk 2>/dev/null || echo '(lspci missing)'"),
     ("lsusb.txt", "lsusb -t 2>/dev/null; echo; lsusb 2>/dev/null; echo '=== verbose ==='; "
      "lsusb -v 2>/dev/null"),
@@ -4859,16 +4957,47 @@ _HW_BUNDLE_FILES = [
     ("thermal-power.txt", "echo '# platform_profile'; for f in /sys/firmware/acpi/platform_profile*; do "
      "echo \"$f = $(cat $f 2>/dev/null)\"; done; echo; echo '# powercap'; "
      "grep -rH . /sys/class/powercap/*/name /sys/class/powercap/*/*_range_uj 2>/dev/null; echo; "
-     "echo '# power-profiles-daemon'; powerprofilesctl 2>/dev/null"),
+     "echo '# power-profiles-daemon'; powerprofilesctl 2>/dev/null; echo; "
+     "echo '# lm_sensors'; sensors 2>/dev/null; echo; sensors -j 2>/dev/null"),
+    ("battery.txt", "echo '# power_supply sysfs'; "
+     "grep -rH . /sys/class/power_supply/*/ 2>/dev/null | grep -viE 'uevent|modalias'; echo; "
+     "echo '# upower'; upower -d 2>/dev/null; echo; "
+     "echo '# smbios-battery-ctl'; smbios-battery-ctl --get-charging-cfg 2>/dev/null "
+     "|| echo '(libsmbios not installed / not a Dell)'"),
+    ("vendor-platform.txt", "echo '# /sys/devices/platform vendor interfaces'; "
+     "for d in /sys/devices/platform/*wmi* /sys/devices/platform/*-laptop /sys/devices/platform/*_laptop "
+     "/sys/devices/platform/alienware-wmi* /sys/devices/platform/dell-laptop; do "
+     "[ -d \"$d\" ] || continue; echo \"### $d\"; grep -rH . \"$d\" 2>/dev/null "
+     "| grep -viE 'uevent|modalias|power/' | head -80; echo; done; "
+     "echo '# /sys/class/leds'; for l in /sys/class/leds/*; do echo \"$(basename $l): "
+     "brightness=$(cat $l/brightness 2>/dev/null) max=$(cat $l/max_brightness 2>/dev/null)\"; done; echo; "
+     "echo '# module parameters'; for m in dell_laptop dell_smm_hwmon alienware_wmi asus_nb_wmi "
+     "hp_wmi ideapad_laptop thinkpad_acpi; do [ -d /sys/module/$m/parameters ] || continue; "
+     "echo \"=== $m ===\"; grep -rH . /sys/module/$m/parameters/ 2>/dev/null; done"),
+    ("firmware.txt", "echo '# fwupd devices'; fwupdmgr get-devices --no-authenticate-modules 2>/dev/null "
+     "|| fwupdmgr get-devices 2>/dev/null || echo '(fwupd not installed)'"),
     ("acpi.txt", "ls -l /sys/firmware/acpi/tables/ 2>/dev/null; echo; "
      "command -v acpidump >/dev/null && echo 'acpidump present — run: sudo acpidump -b (attach the DSDT.dat)'; "
      "command -v acpi_listen >/dev/null && echo 'acpi_listen present — run it and press Fn/media keys to capture ACPI events'"),
+    ("dsdt.b64", "echo '# base64 of the ACPI DSDT + SSDTs — decode with:  base64 -d dsdt.b64 > acpi.bin ; "
+     "iasl -d acpi.bin'; for t in /sys/firmware/acpi/tables/DSDT /sys/firmware/acpi/tables/SSDT*; do "
+     "[ -r \"$t\" ] || continue; echo \"=== $(basename $t) ===\"; base64 \"$t\" 2>/dev/null; echo; done "
+     "|| echo '(ACPI tables need root to read)'"),
+    ("display.txt", "echo '# kscreen-doctor'; kscreen-doctor -o 2>/dev/null; echo; "
+     "kscreen-doctor -j 2>/dev/null; echo; echo '# xrandr'; xrandr --verbose 2>/dev/null | head -120; echo; "
+     "echo '# drm modes'; for m in /sys/class/drm/*/modes; do echo \"$m:\"; cat \"$m\" 2>/dev/null; done; echo; "
+     "echo '# vrr_capable'; grep -rH . /sys/class/drm/*/vrr_capable 2>/dev/null"),
     ("drm-gpu.txt", "for c in /sys/class/drm/card[0-9]*; do echo \"### $c\"; "
      "cat $c/device/uevent 2>/dev/null; echo \" runtime_status=$(cat $c/device/power/runtime_status 2>/dev/null)\"; "
-     "echo; done; echo '=== nvidia-smi -q ==='; nvidia-smi -q 2>/dev/null | head -90"),
+     "echo; done; echo '=== nvidia-smi -q ==='; nvidia-smi -q 2>/dev/null; echo; "
+     "echo '=== nvidia-smi -q -d SUPPORTED_CLOCKS ==='; nvidia-smi -q -d SUPPORTED_CLOCKS 2>/dev/null | head -50; echo; "
+     "echo '=== glxinfo / vulkaninfo ==='; glxinfo -B 2>/dev/null | grep -E 'renderer|OpenGL version|Device'; "
+     "vulkaninfo --summary 2>/dev/null | head -40"),
     ("openrgb.txt", "openrgb --version 2>/dev/null; echo; "
      "openrgb --noautoconnect -l --verbose 2>/dev/null | grep -vE 'i2c|SMBus|help.openrgb' "
      "|| openrgb --noautoconnect -l 2>/dev/null"),
+    ("smbios-tokens.txt", "smbios-token-ctl 2>/dev/null | head -400 "
+     "|| echo '(libsmbios / smbios-token-ctl not installed — needed for Dell battery / USB / thermal tokens)'"),
     ("dmesg-full.txt", "dmesg 2>/dev/null || echo '(dmesg needs root / kernel.dmesg_restrict=1)'"),
     ("journal-boot-tail.txt", "journalctl -b --no-pager 2>/dev/null | tail -3000 || echo '(journalctl unavailable)'"),
 ]
@@ -4908,17 +5037,28 @@ def collect_hw_bundle(dest_dir: str | None = None) -> str:
             "TuxThrottle — hardware dump bundle\n"
             f"machine: {prod}   collected: {stamp}   euid={os.geteuid()}\n\n"
             "WHAT THIS IS\n"
-            "  Raw sysfs / DMI / evdev / hwmon / PCI / OpenRGB dumps + the readable\n"
-            "  debug report. Enough to add support for this laptop model: the DMI\n"
-            "  strings to gate on, the hwmon fan/pwm paths, the evdev key codes for\n"
-            "  the Fn/media/vendor keys, the OpenRGB controller layout, etc.\n\n"
+            "  Raw sysfs / DMI / evdev / hwmon / PCI / OpenRGB / ACPI dumps + the\n"
+            "  readable debug report, plus model-scaffold.json — an auto-generated\n"
+            "  starting point for models/<slug>.json (probed fields filled, the\n"
+            "  rest left under \"_todo\"). Together these are enough to add support\n"
+            "  for this laptop: DMI strings to gate on, hwmon fan/pwm paths, the\n"
+            "  platform_profile path + choices, evdev key codes for the Fn/media/\n"
+            "  vendor keys, OpenRGB controller layout, battery method, GPU PCI ids,\n"
+            "  panel modes, Dell/ASUS/Lenovo firmware tokens, and the decompilable\n"
+            "  DSDT for reverse-engineering vendor WMI.\n\n"
             "HOW TO USE\n"
             "  1. Skim the files for anything private (hostname, serials in dmi.txt /\n"
             "     lsusb.txt / nvidia-smi). Redact if you care.\n"
             "  2. Open a 'new hardware support' issue and ATTACH this whole .tar.gz\n"
             "     (drag it onto the GitHub comment box).\n"
-            "  3. If a Fn/media key doesn't work: run  sudo evtest  , pick the\n"
+            "  3. Run this collector as root (sudo) if you can — dmidecode, the DSDT\n"
+            "     and smbios-token-ctl need it. Re-run and re-attach if the first was\n"
+            "     unprivileged.\n"
+            "  4. If a Fn/media key doesn't work: run  sudo evtest  , pick the\n"
             "     keyboard / hotkey device, press the key, and paste those lines too.\n\n"
+            "NEXT (maintainer): decode dsdt.b64 with  base64 -d dsdt.b64 > acpi.bin ;\n"
+            "  iasl -d acpi.bin   ; finish model-scaffold.json's _todo fields; add\n"
+            "  \"models\": [<slug>] gates to config/*.json entries that differ.\n\n"
             "FILES\n" + "".join(f"  {n}\n" for n, _ in _HW_BUNDLE_FILES) +
             "  report.md\n")
 

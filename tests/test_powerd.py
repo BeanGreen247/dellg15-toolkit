@@ -174,3 +174,82 @@ def test_thermal_fan_stall_recover(monkeypatch):
     tw.tick(cfg)
     assert set_calls == ["performance", "balanced"]
     assert tw._recover_prev is None
+
+
+# --- time-of-day schedule -----------------------------------------------------
+
+def test_hhmm_to_min():
+    assert pd._hhmm_to_min("00:00") == 0
+    assert pd._hhmm_to_min("22:30") == 22 * 60 + 30
+    assert pd._hhmm_to_min("7:05") == 7 * 60 + 5
+    assert pd._hhmm_to_min("nope") is None
+    assert pd._hhmm_to_min(None) is None
+
+
+class _Clock:
+    def __init__(self, hh, mm, wday=2):
+        import time as _t
+        self._st = _t.struct_time((2026, 9, 1, hh, mm, 0, wday, 244, -1))
+
+    def __call__(self):
+        return self._st
+
+
+def _sched(monkeypatch, hh, mm, wday=2):
+    applied = []
+    monkeypatch.setattr(pd, "_apply_bundle_or_profile",
+                        lambda name, user: applied.append(name))
+    monkeypatch.setattr(pd.time, "localtime", _Clock(hh, mm, wday))
+    return pd.ScheduleController(user=None), applied
+
+
+CFG = {"schedule": {"enabled": True, "poll_s": 0,
+                    "rules": [{"from": "22:00", "to": "07:00", "apply": "Quiet"}],
+                    "outside": "Balanced"}}
+
+
+def test_schedule_overnight_rule_active_before_midnight(monkeypatch):
+    sc, applied = _sched(monkeypatch, 23, 30)
+    sc.tick(CFG, game_active=False)
+    assert applied == ["Quiet"]
+
+
+def test_schedule_overnight_rule_active_after_midnight(monkeypatch):
+    sc, applied = _sched(monkeypatch, 3, 0)
+    sc.tick(CFG, game_active=False)
+    assert applied == ["Quiet"]
+
+
+def test_schedule_outside_rule_daytime(monkeypatch):
+    sc, applied = _sched(monkeypatch, 12, 0)
+    sc.tick(CFG, game_active=False)
+    assert applied == ["Balanced"]
+
+
+def test_schedule_only_applies_on_change(monkeypatch):
+    sc, applied = _sched(monkeypatch, 12, 0)
+    sc.tick(CFG, game_active=False)
+    sc.tick(CFG, game_active=False)
+    assert applied == ["Balanced"]
+
+
+def test_schedule_yields_to_game(monkeypatch):
+    sc, applied = _sched(monkeypatch, 12, 0)
+    sc.tick(CFG, game_active=True)
+    assert applied == []
+
+
+def test_schedule_days_filter(monkeypatch):
+    cfg = {"schedule": {"enabled": True, "poll_s": 0,
+                        "rules": [{"from": "09:00", "to": "17:00",
+                                   "apply": "Performance", "days": [0, 1, 2, 3, 4]}],
+                        "outside": "Quiet"}}
+    sc, applied = _sched(monkeypatch, 12, 0, wday=6)   # Sunday
+    sc.tick(cfg, game_active=False)
+    assert applied == ["Quiet"]
+
+
+def test_schedule_disabled_noop(monkeypatch):
+    sc, applied = _sched(monkeypatch, 3, 0)
+    sc.tick({"schedule": {"enabled": False}}, game_active=False)
+    assert applied == []

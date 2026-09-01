@@ -99,3 +99,80 @@ def test_battery_info_shape(monkeypatch):
     assert info["dell_libsmbios_possible"] is True
     assert set(info) >= {"supported", "method", "current", "capacity",
                          "ac_online", "dell_libsmbios_possible"}
+
+
+# --- panel refresh (kscreen-doctor) -----------------------------------------
+
+KSCREEN_J = """
+{"outputs":[
+  {"name":"eDP-1","enabled":true,"currentModeId":"1","modes":[
+     {"id":"1","name":"1920x1080@144","refreshRate":144.0,"size":{"width":1920,"height":1080}},
+     {"id":"2","name":"1920x1080@60","refreshRate":60.019,"size":{"width":1920,"height":1080}},
+     {"id":"7","name":"1280x720@144","refreshRate":144.0,"size":{"width":1280,"height":720}}
+  ]},
+  {"name":"HDMI-1","enabled":false,"currentModeId":"","modes":[]}
+]}
+"""
+
+
+def test_panel_modes_parses_and_prefers_internal(monkeypatch):
+    monkeypatch.setattr(sensors, "which", lambda c: "/usr/bin/kscreen-doctor")
+    monkeypatch.setattr(sensors, "_session_cmd", lambda a: a)
+    monkeypatch.setattr(subprocess, "run", _fake_run(KSCREEN_J))
+    pm = sensors.panel_modes()
+    assert pm["output"] == "eDP-1"
+    assert pm["current_hz"] == 144.0
+    assert pm["rates"] == [60, 144]
+    assert len(pm["modes"]) == 3
+
+
+def test_panel_modes_none_without_kscreen(monkeypatch):
+    monkeypatch.setattr(sensors, "which", lambda c: None)
+    assert sensors.panel_modes() is None
+
+
+def test_set_panel_refresh_keeps_resolution(monkeypatch):
+    monkeypatch.setattr(sensors, "which", lambda c: "/usr/bin/kscreen-doctor")
+    monkeypatch.setattr(sensors, "_session_cmd", lambda a: a)
+    seen = {}
+
+    def run(cmd, *_a, **_k):
+        if "-j" in cmd:
+            return types.SimpleNamespace(stdout=KSCREEN_J, stderr="", returncode=0)
+        seen["spec"] = cmd[-1]
+        return types.SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    ok, tag = sensors.set_panel_refresh(60)
+    assert ok is True
+    # nearest 60 Hz mode at the current resolution (1920x1080), not the 720p one
+    assert seen["spec"].endswith(".mode.2")
+    assert tag == "1920x1080@60"
+
+
+# --- nvidia graphics-clock lock -------------------------------------------------
+
+def test_nvidia_clock_info_parses(monkeypatch):
+    monkeypatch.setattr(sensors, "which", lambda c: "/usr/bin/nvidia-smi")
+    monkeypatch.setattr(sensors, "dgpu_is_awake", lambda: True)
+
+    def run(cmd, *_a, **_k):
+        if "-q" in cmd:
+            return types.SimpleNamespace(
+                stdout="Graphics : 2100 MHz\nGraphics : 405 MHz\nGraphics : 210 MHz\n",
+                stderr="", returncode=0)
+        return types.SimpleNamespace(
+            stdout="2100, 6001, 210, 405\n", stderr="", returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    info = sensors.nvidia_clock_info()
+    assert info["supported"] is True
+    assert info["gr_max"] == 2100
+    assert info["gr_min"] == 210
+    assert info["gr_cur"] == 210
+
+
+def test_nvidia_clock_info_none_when_asleep(monkeypatch):
+    monkeypatch.setattr(sensors, "which", lambda c: "/usr/bin/nvidia-smi")
+    monkeypatch.setattr(sensors, "dgpu_is_awake", lambda: False)
+    assert sensors.nvidia_clock_info() is None

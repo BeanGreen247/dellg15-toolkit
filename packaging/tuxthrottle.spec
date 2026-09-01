@@ -2,9 +2,9 @@
 %global gittag   %{?_gittag}%{!?_gittag:main}
 
 Name:           tuxthrottle
-Version:        %{?_version}%{!?_version:0.1.0}
+Version:        %{?_version}%{!?_version:0.4.0}
 Release:        %{?_release}%{!?_release:1}%{?dist}
-Summary:        Gaming / power / thermal control for the Dell G15 5515 on Nobara Linux
+Summary:        Gaming, power and thermal control panel for the Dell G15 5515 (Ryzen) on Nobara/KDE
 
 License:        MIT
 URL:            https://github.com/BeanGreen247/tuxthrottle
@@ -28,16 +28,37 @@ Recommends:     gamemode
 # opt-in and are applied from the GUI / apply_tweak.py — never from %post.
 
 %description
-TuxThrottle is a checkbox GUI plus a tray monitor and a G-key listener that
-applies hardware-specific tweaks, drivers and gaming setup to the Dell G15 5515
-Ryzen Edition (Ryzen 7 5800H + RTX 3050 Ti Mobile) running Nobara Linux.
+TuxThrottle is a Tk control-panel GUI plus a system-tray monitor, a background
+daemon (tuxthrottled) and a G-key listener that apply hardware-specific tweaks,
+drivers and gaming setup to the Dell G15 5515 Ryzen Edition (Ryzen 7 5800H +
+RTX 3050 Ti Mobile) running Nobara Linux on KDE Plasma 6 / Wayland.
 
-It covers CPU TDP (ryzenadj), battery charge limit, NVIDIA power limit where the
-GPU allows it, a Feral GameMode bridge, a closed-loop fan curve with AC/battery
-auto-switch, per-game auto-profiles, named full-state profiles with
-snapshot/rollback, thermal-event notifications, KDE Plasma 6 desktop tweaks, and
-a headless CLI (tuxthrottlectl). Every check/apply command targets that one
-board; use --report to see what applies on the running machine.
+What it controls:
+ - CPU power limits (ryzenadj STAPM/fast/slow) with presets, and an opt-in
+   Ryzen Curve Optimizer undervolt gated behind a stress-test-and-auto-revert
+   harness.
+ - GPU: NVIDIA board power limit where the firmware allows it, a graphics-clock
+   lock that works when it does not, hybrid-graphics mode via EnvyControl,
+   NVIDIA Dynamic Boost and shader-cache tuning.
+ - Cooling: thermal profile, additive fan boost, a closed-loop custom fan curve
+   (up to 10 points) run by the daemon, manual PWM behind a warning, and
+   automatic recovery from the G15 firmware fan-stall bug.
+ - Battery: charge-limit threshold (sysfs or Dell libsmbios), a health page
+   (wear %, cycles), and standard/express charge speed.
+ - Display: panel refresh-rate switching (e.g. 144<->60 Hz).
+ - Automation: AC/battery auto-switch, per-game auto-profiles, a time-of-day
+   schedule, and named full-state profiles with automatic snapshot/rollback;
+   thermal-event desktop notifications; state re-applied after resume/boot.
+ - KDE Plasma 6 desktop tweaks (animations, compositor, screen edges, panel
+   flush, Meta-key, KWallet, allow-tearing, and more).
+ - Setup Games: click-through per-title setup (GTA V Online) plus Proton prefix
+   relocation and save-game vault tools.
+ - A headless CLI (tuxthrottlectl) and a control socket the GUI, CLI and
+   optional waybar / Plasma / MangoHud clients all write through.
+
+Every check/apply command targets that one board; run "tuxthrottle --report" to
+see what applies on the running machine. The in-app tweaks are strictly opt-in
+and are never applied from %post.
 
 %prep
 %autosetup -n %{name}-%{gittag}
