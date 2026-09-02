@@ -4102,8 +4102,9 @@ class ToolkitApp:
             self._tip(tb.Checkbutton(dl, text=f"{label} ({extra})", variable=v,
                                      bootstyle="round-toggle"),
                       f"Off = {label} shows only its load %. On = {label} adds "
-                      f"{extra}. FPS, the graphics-API line and each GPU's real "
-                      f"name always stay; everything else is stripped on Write."
+                      f"{extra}. FPS and the graphics-API line always stay; the "
+                      f"frametime graph and GPU-in-use name have their own "
+                      f"toggles below; everything else is stripped on Write."
                       ).pack(side="left", padx=(0, 12))
 
         # explicit extras — a hard on/off for the frametime graph (not tied to
@@ -4115,7 +4116,16 @@ class ToolkitApp:
         self._tip(tb.Checkbutton(dl2, text="Frametime graph", variable=self._mh_graph,
                                  bootstyle="round-toggle"),
                   "The frametime number and its graph. Independent of the group "
-                  "toggles — off means it never shows, on means it always does."
+                  "toggles — off writes `frame_timing=0` / `frametime=0` so it "
+                  "never shows (MangoHud defaults it ON, so removing the line "
+                  "isn't enough), on writes them =1."
+                  ).pack(side="left", padx=(0, 12))
+        self._mh_gpuname = tk.BooleanVar(value=("gpu_name" not in conf["off"]))
+        self._tip(tb.Checkbutton(dl2, text="GPU in use (name)", variable=self._mh_gpuname,
+                                 bootstyle="round-toggle"),
+                  "MangoHud's `gpu_name` line — the name of the card actually "
+                  "rendering, so on a PRIME / hybrid setup it confirms which GPU "
+                  "the game landed on. Off writes `gpu_name=0`."
                   ).pack(side="left", padx=(0, 12))
         self._mh_gpu_extra = {}
         for key, lbl in (("gpu_core_clock", "GPU core clock"),
@@ -4192,10 +4202,36 @@ class ToolkitApp:
             tb.Label(row, text=(f"GPU {i} name:" if multi else "GPU name:"),
                      width=11, anchor="w").pack(side="left")
             tb.Entry(row, textvariable=var, width=42).pack(side="left", padx=(2, 0))
+            if multi:
+                self._tip(tb.Button(row, text="⇅", width=3,
+                          bootstyle=(SECONDARY, "outline"),
+                          command=lambda i=i: self._mh_swap_gpu_rows(i)),
+                          "Swap this GPU's name (and its slot in `gpu_list`) with "
+                          "the next row — reorder if MangoHud has them backwards. "
+                          "Press Write after.").pack(side="left", padx=(6, 0))
             addr = f"[{pci[i]}] " if i < len(pci) and pci[i] else ""
-            hint = (f"  {addr}render GPU — MangoHud's gpu_text label" if i == 0
-                    else f"  {addr}kept in the config for reference (gpu_list on)")
-            tb.Label(row, text=hint, bootstyle=SECONDARY).pack(side="left")
+            tb.Label(row, text=f"  {addr}name label + gpu_list slot for this card",
+                     bootstyle=SECONDARY).pack(side="left")
+
+    def _mh_swap_gpu_rows(self, i: int):
+        """Swap GPU row i with the next row — both the typed name and its PCI
+        address (so `gpu_text` and the remapped `gpu_list` slot move together).
+        Wraps last→first. User still has to press Write."""
+        n = len(self._mh_gpu_vars)
+        if n < 2:
+            return
+        j = (i + 1) % n
+        vals = [v.get() for v in self._mh_gpu_vars]
+        vals[i], vals[j] = vals[j], vals[i]
+        pci = list(getattr(self, "_mh_gpu_pci", []))
+        if i < len(pci) and j < len(pci):
+            pci[i], pci[j] = pci[j], pci[i]
+        self._mh_gpu_pci = pci
+        for v, nv in zip(self._mh_gpu_vars, vals):
+            v.set(nv)
+        self._mh_build_gpu_fields()          # redraw so the [pci] hints follow
+        self._log(f"[MangoHud] swapped GPU rows {i} ↔ {j} — press "
+                  f"“Write to MangoHud config” to save")
 
     def _mh_reload_from_conf(self):
         """Re-read whichever MangoHud config the Per-game field now points at."""
@@ -4213,6 +4249,8 @@ class ToolkitApp:
                 self._mh_lvl[grp].set(lvl == "full")
         if hasattr(self, "_mh_graph"):
             self._mh_graph.set(bool({"frame_timing", "frametime"} & conf["elements"]))
+        if hasattr(self, "_mh_gpuname"):
+            self._mh_gpuname.set("gpu_name" not in conf["off"])
         if hasattr(self, "_mh_gamemode"):
             self._mh_gamemode.set("gamemode" in conf["elements"])
         for k, gv in getattr(self, "_mh_gpu_extra", {}).items():
@@ -4228,7 +4266,7 @@ class ToolkitApp:
         """cpu_text / gpu_text / position / offset_x / offset_y / font_size +
         the set of bare element toggles present, straight from MangoHud.conf."""
         out = {"cpu": "", "gpu": "", "gpus": [], "position": "", "offset_x": 0,
-               "offset_y": 0, "font_size": 0, "elements": set()}
+               "offset_y": 0, "font_size": 0, "elements": set(), "off": set()}
         try:
             lines = self._mh_conf_path().read_text().splitlines()
         except OSError:
@@ -4255,6 +4293,14 @@ class ToolkitApp:
                         pass
             elif re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", s):
                 out["elements"].add(s)             # a bare toggle like `cpu_temp`
+            else:
+                mk = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(\S+)", s)
+                if mk:                             # `key=1` / `key=0` element line
+                    v = mk.group(2).strip().lower()
+                    if v in ("1", "true", "on", "yes"):
+                        out["elements"].add(mk.group(1))
+                    elif v in ("0", "false", "off", "no"):
+                        out["off"].add(mk.group(1))
         return out
 
     # per-group detail level: (minimal elements, full elements)
@@ -4263,13 +4309,16 @@ class ToolkitApp:
         "gpu": (["gpu_stats"], ["gpu_stats", "gpu_temp", "gpu_power"]),
         "mem": (["ram"], ["ram", "vram"]),
     }
-    # always kept: framerate, the graphics-API / engine line, and gpu_name —
-    # MangoHud's gpu_name is the GPU actually doing the rendering, so on a
-    # PRIME-offload / hybrid setup this top line confirms which card the game
-    # or tool ended up on
-    _MH_ALWAYS = ["fps", "engine_version", "gpu_name"]
-    # the frametime number + its graph — only when at least one group is "full"
+    # always kept: framerate + the graphics-API / engine line
+    _MH_ALWAYS = ["fps", "engine_version"]
+    # the frametime number + its graph — gated by the "Frametime graph" toggle
     _MH_FRAMEGRAPH = ["frametime", "frame_timing"]
+    # MangoHud's gpu_name — the card actually rendering (PRIME/hybrid tell) —
+    # gated by the "GPU in use (name)" toggle
+    _MH_GPUNAME = "gpu_name"
+    # keys MangoHud defaults to ON, so "disabled" must be written as `key=0`,
+    # never just removed (removal → MangoHud falls back to its own default)
+    _MH_EXPLICIT = ("frametime", "frame_timing", "gpu_name")
     # every element toggle the box takes ownership of on Write (so "minimal"
     # actually strips the rest). Does NOT include gpu_list (multi-GPU, managed).
     _MH_STAT_KEYS = {
@@ -4627,13 +4676,15 @@ class ToolkitApp:
             "width": width,                     # fit the longest label (or None)
         }
         # stat section: strip every element toggle we own, then add back
-        # FPS + API + GPU name, the frametime graph (its own switch), the
-        # chosen per-group set and the GPU-clock extras
+        # FPS + API, the frametime graph + GPU-in-use name (each its own switch),
+        # the chosen per-group set and the GPU-clock extras
         for k in self._MH_STAT_KEYS:
             managed[k] = ""
         elements = list(self._MH_ALWAYS)
         if getattr(self, "_mh_graph", None) is not None and self._mh_graph.get():
             elements += self._MH_FRAMEGRAPH
+        if getattr(self, "_mh_gpuname", None) is not None and self._mh_gpuname.get():
+            elements.append(self._MH_GPUNAME)
         for grp, (mini, grpfull) in self._MH_GROUPS.items():
             elements += grpfull if self._mh_lvl[grp].get() else mini
         elements += [k for k, v in getattr(self, "_mh_gpu_extra", {}).items() if v.get()]
@@ -4641,6 +4692,9 @@ class ToolkitApp:
             elements.append("gamemode")
         for e in elements:
             managed[e] = True                   # bare toggle
+        # MangoHud defaults these ON — a removed line ≠ off, so pin 0/1 explicitly
+        for k in self._MH_EXPLICIT:
+            managed[k] = "1" if k in elements else "0"
         if getattr(self, "_mh_pos_set", False):
             managed["position"] = self._mh_pos
             managed["offset_x"] = str(self._mh_ox) if self._mh_ox else None
