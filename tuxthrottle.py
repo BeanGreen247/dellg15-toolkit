@@ -6588,9 +6588,10 @@ def _dnf_metadata_age() -> str:
 
 
 def toolkit_version() -> str:
-    """Human version string. Priority: the deploy stamp install.sh writes
-    (`.version`, since /opt has no .git) → the committed `VERSION` file plus
-    the live git short sha when running from a checkout → bare `git describe`
+    """Human version string — date-based `YY.MM.DD` (Xylonic-style), keyed to
+    the day of the last commit. Priority: the deploy stamp install.sh writes
+    (`.version`, since /opt has no .git) → the last git commit date when running
+    from a checkout → the committed `VERSION` file (source tarball, no git)
     → "unknown"."""
     for p in (BASE_DIR / ".version",):
         try:
@@ -6599,21 +6600,17 @@ def toolkit_version() -> str:
                 return v
         except OSError:
             pass
-    base = ""
+    dv = run_cmd3(f"git -C {BASE_DIR} log -1 --format=%cd --date=format:%y.%m.%d "
+                  f"2>/dev/null")[2].strip()
+    if dv:
+        return dv
     try:
-        base = (BASE_DIR / "VERSION").read_text().strip()
+        v = (BASE_DIR / "VERSION").read_text().strip()
+        if v:
+            return v
     except OSError:
         pass
-    sha = run_cmd3(f"git -C {BASE_DIR} rev-parse --short HEAD 2>/dev/null")[2].strip()
-    if base and sha:
-        dirty = "-dirty" if run_cmd3(
-            f"git -C {BASE_DIR} diff --quiet 2>/dev/null || echo x")[2].strip() else ""
-        return f"{base}+g{sha}{dirty}"
-    if base:
-        return base
-    out = run_cmd3(f"git -C {BASE_DIR} describe --tags --always --dirty 2>/dev/null "
-                   f"|| git -C {BASE_DIR} rev-parse --short HEAD 2>/dev/null")[2]
-    return out.strip() or "unknown"
+    return "unknown"
 
 
 def _diag_fans() -> str:

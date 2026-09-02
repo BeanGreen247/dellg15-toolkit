@@ -107,17 +107,13 @@ do_install() {
     find "$LIBDIR" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
     chmod -R a+rX "$LIBDIR"
     # stamp the version so the Diagnostics / About page can show it (no .git in
-    # /opt). Canonical human version = the committed VERSION file; append the
-    # git short sha (+ -dirty) when $SRC is a checkout. Falls back to a .version
-    # the source tree carries (rsync'd from a dev machine), then bare git.
+    # /opt). Date-based YY.MM.DD keyed to the last commit day (Xylonic-style):
+    # last git commit date when $SRC is a checkout → a .version the source tree
+    # carries (rsync'd from a dev machine) → the committed VERSION file.
     _base="$(tr -d '[:space:]' < "$SRC/VERSION" 2>/dev/null || true)"
     _ver=""
     if git -C "$SRC" rev-parse --git-dir >/dev/null 2>&1; then
-        _sha="$(git -C "$SRC" rev-parse --short HEAD 2>/dev/null || true)"
-        _dirty=""; git -C "$SRC" diff --quiet 2>/dev/null || _dirty="-dirty"
-        if [[ -n "$_base" && -n "$_sha" ]]; then _ver="${_base}+g${_sha}${_dirty}"
-        elif [[ -n "$_sha" ]]; then _ver="$(git -C "$SRC" describe --tags --always --dirty 2>/dev/null || echo "$_sha")"
-        fi
+        _ver="$(git -C "$SRC" log -1 --format=%cd --date=format:%y.%m.%d 2>/dev/null || true)"
     fi
     [[ -z "$_ver" && -s "$SRC/.version" ]] && _ver="$(cat "$SRC/.version")"
     [[ -z "$_ver" && -n "$_base" ]] && _ver="$_base"
