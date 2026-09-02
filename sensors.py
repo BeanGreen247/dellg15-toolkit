@@ -505,6 +505,194 @@ def read_dgpu_values():
         return None, None, None, None
 
 
+# --------------------------------------------------------------------------- #
+#  VRAM accounting — which GPU the desktop renders on, how full each GPU's
+#  video memory is, and which processes are holding it. The G15 5515's Ryzen
+#  iGPU has a tiny (512 MiB) UMA carveout that the KDE/Wayland stack routinely
+#  fills, spilling to slower GTT; the RTX 3050 Ti has 4 GiB we want to keep
+#  free for DaVinci Resolve / games / 3D. Pure sysfs + one optional nvidia-smi.
+# --------------------------------------------------------------------------- #
+
+def drm_gpus() -> list:
+    """[{card, render, pci, vendor, driver, kind, boot_vga}] for every real
+    render GPU. `kind` is 'integrated' (amdgpu/i915 + boot_vga) or 'discrete'
+    (NVIDIA, or a non-boot_vga card). Discrete first, like gpu_devices()."""
+    out = []
+    for card in sorted(glob.glob("/sys/class/drm/card[0-9]")):
+        dev = os.path.join(card, "device")
+        try:
+            vendor = open(f"{dev}/vendor").read().strip()
+        except OSError:
+            continue
+        driver = os.path.basename(os.path.realpath(f"{dev}/driver")) \
+            if os.path.exists(f"{dev}/driver") else ""
+        pci = os.path.basename(os.path.realpath(dev))
+        try:
+            boot_vga = open(f"{dev}/boot_vga").read().strip() == "1"
+        except OSError:
+            boot_vga = False
+        rnode = ""
+        for rd in glob.glob("/sys/class/drm/renderD*"):
+            try:
+                if os.path.realpath(f"{rd}/device") == os.path.realpath(dev):
+                    rnode = "/dev/dri/" + os.path.basename(rd)
+                    break
+            except OSError:
+                pass
+        nvidia = vendor == "0x10de" or driver in ("nvidia", "nouveau")
+        kind = "discrete" if (nvidia or not boot_vga) else "integrated"
+        out.append({
+            "card": "/dev/dri/" + os.path.basename(card),
+            "render": rnode, "pci": pci, "vendor": vendor,
+            "driver": driver, "kind": kind, "boot_vga": boot_vga,
+        })
+    out.sort(key=lambda g: 0 if g["kind"] == "discrete" else 1)
+    return out
+
+
+def _amdgpu_vram(dev: str) -> dict:
+    def _mb(name):
+        try:
+            return int(open(f"{dev}/{name}").read().strip()) // (1024 * 1024)
+        except (OSError, ValueError):
+            return None
+    used, total = _mb("mem_info_vram_used"), _mb("mem_info_vram_total")
+    gtt = _mb("mem_info_gtt_used")
+    return {"used_mb": used, "total_mb": total, "gtt_used_mb": gtt}
+
+
+def vram_info() -> list:
+    """Per-GPU VRAM usage: [{name, pci, driver, kind, used_mb, total_mb,
+    pct, gtt_used_mb}]. AMD from sysfs (no root, no wakeup); NVIDIA from
+    nvidia-smi only when the dGPU is already awake."""
+    names = {}
+    for d in gpu_devices():
+        if d.get("pci"):
+            names[d["pci"].lower()] = d["name"]
+    rows = []
+    for g in drm_gpus():
+        dev = f"/sys/bus/pci/devices/{g['pci']}"
+        name = names.get(g["pci"].lower()) or g["driver"] or g["pci"]
+        row = {"name": name, "pci": g["pci"], "driver": g["driver"],
+               "kind": g["kind"], "used_mb": None, "total_mb": None,
+               "pct": None, "gtt_used_mb": None, "asleep": False}
+        if g["driver"] == "amdgpu":
+            row.update(_amdgpu_vram(dev))
+        elif g["driver"] in ("nvidia", "nouveau"):
+            if not (which("nvidia-smi") and dgpu_is_awake()):
+                row["asleep"] = True
+            else:
+                try:
+                    r = subprocess.run(
+                        ["nvidia-smi", "--query-gpu=memory.used,memory.total",
+                         "--format=csv,noheader,nounits"],
+                        capture_output=True, text=True, timeout=5)
+                    u, t = (x.strip() for x in r.stdout.strip().split(","))
+                    row["used_mb"], row["total_mb"] = int(u), int(t)
+                except (OSError, subprocess.SubprocessError, ValueError):
+                    pass
+        if row["used_mb"] is not None and row["total_mb"]:
+            row["pct"] = round(100 * row["used_mb"] / row["total_mb"])
+        rows.append(row)
+    return rows
+
+
+_FDINFO_VRAM = re.compile(r"drm-(?:total|resident|memory)-vram:\s*(\d+)\s*KiB")
+_FDINFO_DRV = re.compile(r"drm-driver:\s*(\S+)")
+
+
+def vram_consumers(limit: int = 12) -> list:
+    """Best-effort [{pid, comm, driver, vram_mb}] sorted desc — who is holding
+    video memory right now. AMD/Intel via /proc/<pid>/fdinfo drm-*-vram lines
+    (one entry per pid, deduped); NVIDIA via nvidia-smi compute+graphics apps
+    when the card is awake."""
+    by_pid = {}
+    for fdinfo in glob.glob("/proc/[0-9]*/fdinfo/*"):
+        pid = fdinfo.split("/")[2]
+        if pid in by_pid:
+            continue
+        try:
+            txt = open(fdinfo, errors="ignore").read()
+        except OSError:
+            continue
+        if "drm-driver" not in txt:
+            continue
+        mv = _FDINFO_VRAM.search(txt)
+        if not mv:
+            continue
+        kb = int(mv.group(1))
+        if kb <= 0:
+            continue
+        dm = _FDINFO_DRV.search(txt)
+        try:
+            comm = open(f"/proc/{pid}/comm").read().strip()
+        except OSError:
+            comm = "?"
+        by_pid[pid] = {"pid": int(pid), "comm": comm,
+                       "driver": dm.group(1) if dm else "drm",
+                       "vram_mb": round(kb / 1024, 1)}
+    if which("nvidia-smi") and dgpu_is_awake():
+        try:
+            r = subprocess.run(
+                ["nvidia-smi",
+                 "--query-compute-apps=pid,used_memory,process_name",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5)
+            for ln in (r.stdout or "").splitlines():
+                parts = [x.strip() for x in ln.split(",")]
+                if len(parts) < 3:
+                    continue
+                pid, mem, pname = parts[0], parts[1], parts[2]
+                by_pid[f"nv{pid}"] = {
+                    "pid": int(pid), "comm": os.path.basename(pname),
+                    "driver": "nvidia", "vram_mb": float(mem or 0)}
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
+    rows = sorted(by_pid.values(), key=lambda x: x["vram_mb"], reverse=True)
+    return rows[:limit]
+
+
+def nvidia_runtime_pm() -> "dict | None":
+    """{'control': 'auto'|'on', 'status': 'active'|'suspended'|...} for the
+    dGPU's PCI power/control knob. `auto` lets the driver D3-cold the card
+    when nothing uses it (frees its VRAM + a few watts); `on` pins it awake.
+    None when there is no NVIDIA GPU."""
+    dev = _nvidia_pci_dir()
+    if not dev:
+        return None
+    try:
+        control = open(f"{dev}/power/control").read().strip()
+    except OSError:
+        control = "?"
+    try:
+        status = open(f"{dev}/power/runtime_status").read().strip()
+    except OSError:
+        status = "?"
+    return {"control": control, "status": status}
+
+
+def set_nvidia_runtime_pm(auto: bool) -> "tuple[bool, str]":
+    """Flip the dGPU PCI power/control to 'auto' (allow suspend) or 'on'
+    (pin awake). Live only — not persistent; the NvidiaRuntimePM tweak makes
+    it stick. Needs root for the sysfs write."""
+    dev = _nvidia_pci_dir()
+    if not dev:
+        return False, "no NVIDIA GPU"
+    want = "auto" if auto else "on"
+    try:
+        with open(f"{dev}/power/control", "w") as f:
+            f.write(want)
+        return True, f"dGPU runtime PM -> {want}"
+    except OSError as exc:
+        return False, f"{exc} (need root)"
+
+
+def session_cmd(argv: list) -> list:
+    """Public wrapper of _session_cmd — run argv in the real user's graphical
+    session when we're root, unchanged otherwise. Used by tuxthrottle_vram."""
+    return _session_cmd(argv)
+
+
 def _powercap_energy_paths():
     """Cumulative-energy sysfs files for CPU package power (RAPL, both
     Intel's intel-rapl and the AMD equivalent share this powercap class).

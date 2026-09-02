@@ -942,22 +942,6 @@
       "systemctl daemon-reload"
     ]
   },
-  "MangoHudGamingPreset": {
-    "Content": "MangoHud: install a sensible gaming overlay preset",
-    "Description": "Writes ~/.config/MangoHud/MangoHud.conf with a clean gaming layout: FPS + frametime graph, CPU/GPU load + temp + power, VRAM/RAM, bottom-left, and toggle_hud bound to Shift_R+F12. Does not set fps_limit or a fixed width (the MangoHud overlay box on the Game Tools tab pins a width sized to your custom CPU/GPU names so they don't clip). An existing MangoHud.conf is backed up to .bak first. Reversible.",
-    "category": "Gaming",
-    "risk": "safe",
-    "check": "grep -q tuxthrottle-preset /home/{USER}/.config/MangoHud/MangoHud.conf 2>/dev/null",
-    "apply": [
-      "install -d -o {USER} -g {USER} /home/{USER}/.config/MangoHud",
-      "if [ -f /home/{USER}/.config/MangoHud/MangoHud.conf ] && [ ! -f /home/{USER}/.config/MangoHud/MangoHud.conf.bak ]; then cp /home/{USER}/.config/MangoHud/MangoHud.conf /home/{USER}/.config/MangoHud/MangoHud.conf.bak; fi",
-      "printf '%s\\n' '# tuxthrottle-preset' fps frametime frame_timing cpu_stats cpu_temp cpu_power gpu_stats gpu_temp gpu_power vram ram 'position=bottom-left' 'round_corners=6' 'background_alpha=0.4' 'font_size=20' 'toggle_hud=Shift_R+F12' > /home/{USER}/.config/MangoHud/MangoHud.conf",
-      "chown {USER}:{USER} /home/{USER}/.config/MangoHud/MangoHud.conf"
-    ],
-    "undo": [
-      "if [ -f /home/{USER}/.config/MangoHud/MangoHud.conf.bak ]; then mv /home/{USER}/.config/MangoHud/MangoHud.conf.bak /home/{USER}/.config/MangoHud/MangoHud.conf; else rm -f /home/{USER}/.config/MangoHud/MangoHud.conf; fi"
-    ]
-  },
   "KwinAllowTearing": {
     "Content": "KDE: allow screen tearing for games (lower input latency)",
     "Description": "Sets kwinrc [Compositing] AllowTearing=true so a fullscreen game can present frames immediately instead of waiting for the compositor's vsync — lower input latency, higher effective FPS. KWin only tears for apps that explicitly ask (tearing-control protocol / Vulkan immediate present); everything else is unaffected. Reversible.",
@@ -1013,5 +997,25 @@
       "dnf remove -y libsmbios || true"
     ],
     "recommended": true
+  },
+  "NvidiaRuntimePM": {
+    "Content": "NVIDIA: fine-grained runtime power management (dGPU D3cold when idle)",
+    "Description": "Sets the nvidia module option NVreg_DynamicPowerManagement=0x02 so the RTX 3050 Ti fully powers down (D3cold) whenever nothing is using it — it frees its ~40 MiB of VRAM and ~5 W, and wakes automatically for a PRIME-offloaded game or DaVinci Resolve. Without it the dGPU idles 'active' the whole session. Writes /etc/modprobe.d/tuxthrottle-nvidia-rtd3.conf and rebuilds the initramfs; needs a reboot. Reversible.",
+    "category": "GPU",
+    "risk": "advanced",
+    "requires_vendor": "nvidia",
+    "check": "[ \"$(cat /sys/module/nvidia/parameters/NVreg_DynamicPowerManagement 2>/dev/null)\" = \"2\" ]",
+    "check_pending": "test -f /etc/modprobe.d/tuxthrottle-nvidia-rtd3.conf",
+    "reinstall_if": [
+      "/etc/modprobe.d/tuxthrottle-nvidia-rtd3.conf"
+    ],
+    "apply": [
+      "printf 'options nvidia \"NVreg_DynamicPowerManagement=0x02\"\\n' > /etc/modprobe.d/tuxthrottle-nvidia-rtd3.conf",
+      "command -v dracut >/dev/null 2>&1 && dracut --force || update-initramfs -u || true"
+    ],
+    "undo": [
+      "rm -f /etc/modprobe.d/tuxthrottle-nvidia-rtd3.conf",
+      "command -v dracut >/dev/null 2>&1 && dracut --force || update-initramfs -u || true"
+    ]
   }
 }

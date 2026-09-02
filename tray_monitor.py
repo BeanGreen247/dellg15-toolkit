@@ -19,13 +19,64 @@ nvidia-max-perf helper scripts installed by tuxthrottle.py's tweaks —
 install those first (Presets > Safe Baseline covers the power-profile ones;
 Competitive Gaming covers the GPU perf-state ones).
 """
+import os
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+BASE_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(BASE_DIR))
 import sensors  # noqa: E402
+
+APP_NAME = "TuxThrottle"
+APP_BLURB = "Dell G15 power & gaming tuning"
+APP_AUTHOR = "by BeanGreen247"
+
+
+def _reassert_keyboard_rgb() -> None:
+    """Re-apply the last saved AW-ELC keyboard colour/effect when the tray
+    starts (login). Best-effort and off the Qt thread — the helper waits for
+    the OpenRGB SDK server + USB HID device to come up, which can take a few
+    seconds after a cold boot. No-op if nothing is saved or OpenRGB is
+    absent."""
+    def _run():
+        try:
+            import tuxthrottle_kbd
+            tuxthrottle_kbd.main(["apply-saved"])
+        except Exception as exc:  # noqa: BLE001
+            print(f"tray: keyboard re-assert skipped ({exc})", file=sys.stderr)
+    threading.Thread(target=_run, name="kbd-reassert", daemon=True).start()
+
+
+def _launch_gui() -> tuple[bool, str]:
+    """Open the main TuxThrottle window.
+
+    The GUI self-elevates with `pkexec`, and pkexec can only reach the
+    polkit-kde auth agent if the process it spawns is still attached to the
+    graphical session — so do NOT start a new session here, and prefer
+    `kstart`, which launches the command as a proper session app.
+    """
+    cmd = (shutil.which("tuxthrottle")
+           or ("/opt/tuxthrottle/tuxthrottle"
+               if os.path.exists("/opt/tuxthrottle/tuxthrottle") else None))
+    base = [cmd] if cmd else [sys.executable, str(BASE_DIR / "tuxthrottle.py")]
+
+    attempts = []
+    if shutil.which("kstart"):
+        attempts.append(["kstart"] + base)
+    attempts.append(base)
+
+    last = ""
+    for argv in attempts:
+        try:
+            subprocess.Popen(argv, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+            return True, ""
+        except (OSError, subprocess.SubprocessError) as exc:
+            last = str(exc)
+    return False, last or "no launcher found"
 
 
 def _ctl(*args: str) -> tuple[bool, str]:
@@ -71,9 +122,19 @@ class TrayMonitor:
         if icon.isNull():
             icon = QIcon.fromTheme("computer")
         self.tray = QSystemTrayIcon(icon)
-        self.tray.setToolTip("Dell G15 5515 Monitor")
+        self.tray.setToolTip(
+            f"{APP_NAME} — {APP_BLURB}\n{APP_AUTHOR}\nClick to open")
 
         self.menu = QMenu()
+        # keep a ref on self — a parent-less QAction added to a QMenu is not
+        # owned by it and would be GC'd out of the menu once __init__ returns
+        self.open_action = QAction(f"Open {APP_NAME}", self.menu)
+        _f = self.open_action.font()
+        _f.setBold(True)
+        self.open_action.setFont(_f)
+        self.open_action.triggered.connect(self._open_gui)
+        self.menu.addAction(self.open_action)
+        self.menu.addSeparator()
         self.cpu_action = self._info_action("CPU: …")
         self.igpu_action = self._info_action("iGPU: …")
         self.dgpu_action = self._info_action("dGPU: …")
@@ -137,7 +198,9 @@ class TrayMonitor:
             self.rapl_warning_action.setText("⚠ CPU power locked — install RaplPowerPermissions tweak")
             self.rapl_warning_action.setVisible(True)
         self.tray.setToolTip(
-            f"CPU {sensors.read_cpu_temp_c()} | dGPU {sensors.read_dgpu_clock_temp_util()}"
+            f"{APP_NAME} — {APP_BLURB}\n{APP_AUTHOR}\n"
+            f"Click to open  ·  CPU {sensors.read_cpu_temp_c()}  ·  "
+            f"dGPU {sensors.read_dgpu_clock_temp_util()}"
         )
 
     def _sync_gamemode_state(self):
@@ -167,12 +230,34 @@ class TrayMonitor:
             QMessageBox.warning(None, "Fan boost", f"Failed: {msg}")
         self._refresh()
 
+    def _open_gui(self):
+        ok, err = _launch_gui()
+        if not ok:
+            QMessageBox.warning(None, APP_NAME, f"Couldn't open the window:\n{err}")
+
     def _on_tray_activated(self, reason):
-        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+        Reason = QSystemTrayIcon.ActivationReason
+        if reason == Reason.Trigger:                 # left-click → open the GUI
+            self._open_gui()
+        elif reason == Reason.MiddleClick:           # middle-click → Game Mode
             self.gamemode_action.setChecked(not self.gamemode_action.isChecked())
 
     def run(self):
         sys.exit(self.app.exec())
+
+
+def _single_instance_or_exit() -> None:
+    """One tray icon only — autostart + a manual 'Launch tray now' must not
+    stack. Hold an flock on a runtime lockfile for the life of the process."""
+    import fcntl
+    rundir = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
+    lock = open(os.path.join(rundir, "tuxthrottle-tray.lock"), "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("TuxThrottle tray is already running.", file=sys.stderr)
+        sys.exit(0)
+    _single_instance_or_exit._lock = lock  # keep the fd alive
 
 
 if __name__ == "__main__":
@@ -182,4 +267,6 @@ if __name__ == "__main__":
             print(f"Toggle failed: {err}", file=sys.stderr)
             sys.exit(1)
         sys.exit(0)
+    _single_instance_or_exit()
+    _reassert_keyboard_rgb()
     TrayMonitor().run()

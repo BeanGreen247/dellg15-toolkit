@@ -142,6 +142,16 @@ EOF
     chmod 0755 "$CTL"
     c_ok "CLI: ${CTL}"
 
+    # ---- tray launcher (tuxthrottle-tray) -----------------------------
+    TRAY="$(dirname "$BIN")/tuxthrottle-tray"
+    cat > "$TRAY" <<EOF
+#!/usr/bin/env bash
+# TuxThrottle system-tray monitor + quick launcher (unprivileged)
+exec /usr/bin/python3 "${LIBDIR}/tray_monitor.py" "\$@"
+EOF
+    chmod 0755 "$TRAY"
+    c_ok "tray launcher: ${TRAY}"
+
     # ---- icon -----------------------------------------------------------
     for s in "${ICON_SIZES[@]}"; do
         if [[ -f "$LIBDIR/assets/icon-${s}.png" ]]; then

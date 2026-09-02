@@ -64,6 +64,11 @@ except Exception:  # noqa: BLE001
 import tuxthrottle_profiles  # noqa: E402  (stdlib, imports sensors)
 
 try:
+    import tuxthrottle_vram  # noqa: E402  (stdlib, imports sensors)
+except Exception:  # noqa: BLE001
+    tuxthrottle_vram = None
+
+try:
     from tuxthrottle_powerd import interp as fancurve_interp  # noqa: E402
 except Exception:  # noqa: BLE001
     def fancurve_interp(points, temp):  # minimal fallback
@@ -1239,6 +1244,7 @@ class ToolkitApp:
         self._build_fan_tab()
         self._build_power_tab()
         self._build_battery_health_tab()
+        self._build_vram_tab()
         self._build_profiles_tab()
         self._build_presets_tab()
         self._build_updates_tab()
@@ -1588,7 +1594,11 @@ class ToolkitApp:
             if zc:
                 r, g, b = tuple(sorted(zc.items())[0][1])
                 self.kbd_all_hex.set("#%02x%02x%02x" % (r, g, b))
-        self.kbd_speed.set(tuxthrottle_kbd.load_meta().get("speed", 50))
+        _meta = tuxthrottle_kbd.load_meta()
+        self.kbd_speed.set(_meta.get("speed", 50))
+        self._kbd_mode = _meta.get("mode", "zones")
+        self.kbd_match_accent = tk.BooleanVar(value=self._kbd_mode == "accent")
+        self.kbd_push_accent = tk.BooleanVar(value=bool(_meta.get("push_accent")))
 
         # ---- brightness ----
         br_box = tb.Labelframe(frame, text="Brightness", padding=12)
@@ -1614,6 +1624,29 @@ class ToolkitApp:
             tb.Button(r2, text=name, bootstyle=SECONDARY, width=8,
                       command=lambda h=hexv: (self.kbd_all_hex.set(h), self._kbd_apply_all())
                       ).pack(side="left", padx=2)
+
+        # ---- desktop accent ----  (the two toggles are mutually exclusive)
+        acc = tb.Labelframe(frame, text="Desktop accent colour", padding=12)
+        acc.pack(fill="x", pady=(0, 12))
+        self._tip(tb.Checkbutton(
+            acc, text="Keyboard follows the desktop accent colour",
+            variable=self.kbd_match_accent, bootstyle="round-toggle",
+            command=self._kbd_toggle_accent),
+            "On: the keyboard takes the Plasma accent now and re-reads the "
+            "CURRENT accent on every re-assert (login, resume, tray start) — it "
+            "follows the accent if you change it later. Turning this on turns "
+            "off the option below.").pack(anchor="w")
+        self._kbd_push_toggle = self._tip(tb.Checkbutton(
+            acc, text="Desktop accent follows the keyboard colour",
+            variable=self.kbd_push_accent, bootstyle="round-toggle",
+            command=self._kbd_toggle_push),
+            "On: every keyboard colour you set here is also written into "
+            "Plasma's accent-colour setting (kdeglobals AccentColor), with "
+            "accent-from-wallpaper turned off — the desktop repaints to match. "
+            "Disabled while Spectrum Cycle is running (no single colour to "
+            "copy). Turning this on turns off the option above.")
+        self._kbd_push_toggle.pack(anchor="w", pady=(6, 0))
+        self._kbd_refresh_accent_ui()
 
         # ---- effects ----
         fx = tb.Labelframe(frame, text="Effect", padding=12)
@@ -1686,28 +1719,69 @@ class ToolkitApp:
         rgb = self._hex_to_rgb(self._safe_hex(self.kbd_all_hex.get()))
         return dict.fromkeys(range(tuxthrottle_kbd.ZONE_COUNT), rgb)
 
+    def _kbd_static_mode(self) -> str:
+        """The mode string to persist for a static-colour apply — 'accent'
+        while the keyboard-follows-accent toggle is on, else 'zones'."""
+        return "accent" if getattr(self, "kbd_match_accent", None) is not None \
+            and self.kbd_match_accent.get() else "zones"
+
+    def _kbd_refresh_accent_ui(self):
+        """'Desktop accent follows the keyboard' only makes sense for a static
+        colour — disable it while Spectrum Cycle runs. The other toggle stays
+        enabled always (ticking it just switches the keyboard to a colour)."""
+        tog = getattr(self, "_kbd_push_toggle", None)
+        if tog is None:
+            return
+        static = getattr(self, "_kbd_mode", "zones") not in tuxthrottle_kbd.ALL_EFFECTS
+        tog.configure(state="normal" if static else "disabled")
+
+    def _kbd_set_mode(self, mode: str):
+        """Record the active keyboard mode and keep the two accent toggles
+        consistent: a non-accent mode clears 'keyboard follows accent'; an
+        effect mode also clears 'accent follows keyboard'."""
+        self._kbd_mode = mode
+        if mode != "accent" and getattr(self, "kbd_match_accent", None) is not None:
+            self.kbd_match_accent.set(False)
+        if mode in tuxthrottle_kbd.ALL_EFFECTS \
+                and getattr(self, "kbd_push_accent", None) is not None:
+            self.kbd_push_accent.set(False)
+        self._kbd_refresh_accent_ui()
+
+    def _kbd_maybe_push_accent(self):
+        if getattr(self, "kbd_push_accent", None) is not None \
+                and self.kbd_push_accent.get() \
+                and self._kbd_mode not in tuxthrottle_kbd.ALL_EFFECTS:
+            self._kbd_push_accent_now()
+
     def _kbd_apply_brightness(self):
         b = self.kbd_brightness.get()
         hx = self._safe_hex(self.kbd_all_hex.get())
         colors = self._kbd_all_colors()
+        mode = self._kbd_static_mode()
+        pa = self.kbd_push_accent.get()
         self._kbd_run(lambda kb: (kb.set_all(hx, b),
-                                  tuxthrottle_kbd.save_state(colors, b, mode="zones")),
+                      tuxthrottle_kbd.save_state(colors, b, mode=mode, push_accent=pa)),
                       f"brightness {b}%")
 
     def _kbd_apply_all(self):
         hx = self._safe_hex(self.kbd_all_hex.get())
         b = self.kbd_brightness.get()
         colors = self._kbd_all_colors()
+        self._kbd_set_mode("zones")
+        pa = self.kbd_push_accent.get()
         self._kbd_run(lambda kb: (kb.set_all(hx, b),
-                                  tuxthrottle_kbd.save_state(colors, b, mode="zones")),
+                      tuxthrottle_kbd.save_state(colors, b, mode="zones", push_accent=pa)),
                       f"colour {hx} @ {b}%")
+        self._kbd_maybe_push_accent()
 
     def _kbd_apply_effect(self, key: str):
         b = self.kbd_brightness.get()
         sp = self.kbd_speed.get()
         colors = self._kbd_all_colors()
+        self._kbd_set_mode(key)
         self._kbd_run(lambda kb: (kb.set_effect(key, sp, b),
-                                  tuxthrottle_kbd.save_state(colors, b, mode=key, speed=sp)),
+                      tuxthrottle_kbd.save_state(colors, b, mode=key, speed=sp,
+                                                push_accent=False)),
                       f"effect {key} @ speed {sp}, {b}%")
 
     def _kbd_reset(self):
@@ -1716,6 +1790,94 @@ class ToolkitApp:
     def _kbd_off(self):
         self.kbd_brightness.set(0)
         self._kbd_run(lambda kb: kb.off(), "backlight off")
+
+    def _kbd_toggle_accent(self):
+        """'Keyboard follows the desktop accent' toggle."""
+        b = self.kbd_brightness.get()
+        if self.kbd_match_accent.get():
+            self.kbd_push_accent.set(False)          # mutually exclusive
+            hx = "#" + tuxthrottle_kbd.accent_hex().lower()
+            self.kbd_all_hex.set(hx)
+            colors = self._kbd_all_colors()
+            self._kbd_mode = "accent"
+            self._kbd_refresh_accent_ui()
+            self._kbd_run(lambda kb: (kb.set_all(hx, b),
+                          tuxthrottle_kbd.save_state(colors, b, mode="accent",
+                                                    push_accent=False)),
+                          f"follow desktop accent {hx} @ {b}%")
+        else:
+            self._kbd_apply_all()                    # back to a fixed colour
+
+    def _kbd_toggle_push(self):
+        """'Desktop accent follows the keyboard colour' toggle."""
+        if self.kbd_push_accent.get():
+            self.kbd_match_accent.set(False)         # mutually exclusive
+            if self._kbd_mode == "accent":
+                self._kbd_mode = "zones"
+            self._kbd_refresh_accent_ui()
+            # commit current state with the flag on, then push once now
+            colors = self._kbd_all_colors()
+            b = self.kbd_brightness.get()
+            tuxthrottle_kbd.save_state(colors, b, mode="zones", push_accent=True)
+            self._kbd_push_accent_now()
+        else:
+            colors = self._kbd_all_colors()
+            b = self.kbd_brightness.get()
+            tuxthrottle_kbd.save_state(colors, b, mode=self._kbd_static_mode(),
+                                      push_accent=False)
+
+    def _kbd_push_accent_now(self):
+        """Set Plasma's accent colour to the current whole-keyboard colour and
+        repaint the live session. `plasma-apply-colorscheme -a` is the only
+        thing that reliably re-themes running apps for an accent change; plain
+        kdeglobals writes only take effect at next login. Off-thread."""
+        hx = self._safe_hex(self.kbd_all_hex.get()).lstrip("#")
+        if len(hx) < 6:
+            return
+        try:
+            rgb = f"{int(hx[0:2], 16)},{int(hx[2:4], 16)},{int(hx[4:6], 16)}"
+        except ValueError:
+            return
+        self._log(f"[Keyboard] desktop accent → #{hx} …")
+
+        def work():
+            sc = sensors.session_cmd
+            applied = False
+            # accent-only: NO positional colour-scheme arg — that would force
+            # BreezeLight/Dark and flip the whole session's light/dark mode.
+            if shutil.which("plasma-apply-colorscheme"):
+                try:
+                    r = subprocess.run(
+                        sc(["plasma-apply-colorscheme", "--accent-color", f"#{hx}"]),
+                        capture_output=True, text=True, timeout=25)
+                    applied = r.returncode == 0
+                except (OSError, subprocess.SubprocessError):
+                    pass
+            # hygiene / fallback: pin the keys so it also survives a relogin
+            base = ["kwriteconfig6", "--file", "kdeglobals",
+                    "--group", "General", "--key"]
+            for key, val in (("AccentColor", rgb),
+                             ("AccentColorFromWallpaper", "false"),
+                             ("LastUsedCustomAccentColor", rgb)):
+                try:
+                    subprocess.run(sc(base + [key, val]),
+                                   capture_output=True, timeout=15)
+                except (OSError, subprocess.SubprocessError):
+                    pass
+            if not applied:
+                for c in (["dbus-send", "--session", "--type=signal",
+                           "/KGlobalSettings",
+                           "org.kde.KGlobalSettings.notifyChange",
+                           "int32:0", "int32:0"],
+                          ["qdbus-qt6", "org.kde.KWin", "/KWin", "reconfigure"]):
+                    try:
+                        subprocess.run(sc(c), capture_output=True, timeout=10)
+                    except (OSError, subprocess.SubprocessError):
+                        pass
+            self._log(f"[Keyboard] desktop accent set to #{hx}"
+                      + ("" if applied else " (relogin if it didn't repaint)"))
+
+        threading.Thread(target=work, daemon=True).start()
 
     # ---------- fan control ----------
 
@@ -2260,6 +2422,259 @@ class ToolkitApp:
         except Exception:  # noqa: BLE001
             pass
         self.root.after(4000, self._bath_poll)
+
+    # ------------------------------------------------------------------ #
+    #  VRAM budget — a laptop iGPU shares a small slice of system RAM as
+    #  VRAM and the KDE desktop fills it; keep the dGPU free for editing /
+    #  games / 3D. Tiers are pure KWin/Plasma config (vendor-agnostic);
+    #  the live panel + GPU names are all read from real hardware.
+    # ------------------------------------------------------------------ #
+    _VRAM_TIERS = (
+        ("regular", "Regular",
+         "Full desktop — every effect, image wallpaper, all window "
+         "previews kept in VRAM. The baseline your settings started at."),
+        ("medium", "Medium",
+         "Blur & background-contrast off, quicker animations, cheaper "
+         "texture filtering, fewer hidden-window pixmaps kept. Barely "
+         "visible; frees tens of MiB."),
+        ("extreme", "Extreme",
+         "Everything in Medium plus: solid-colour wallpaper (drops a "
+         "full-screen texture per screen), no Overview / Present-Windows "
+         "/ Desktop-Grid, nearest-neighbour textures, hidden windows drop "
+         "their pixmaps, on-screen (Maliit) keyboard off. Restarts the "
+         "panel; the keyboard and some savings only fully apply next login."),
+    )
+
+    def _vram_gpu_name(self, pci: str) -> str:
+        for d in sensors.gpu_devices():
+            if d.get("pci", "").lower() == (pci or "").lower():
+                return d["name"]
+        return ""
+
+    def _vram_gpu_choices(self):
+        """(value, caption, desc) rows for the desktop-GPU selector, built
+        from the GPUs actually present."""
+        try:
+            gpus = sensors.drm_gpus()
+        except Exception:  # noqa: BLE001
+            gpus = []
+        ig = next((g for g in gpus if g["kind"] == "integrated"), None)
+        dg = next((g for g in gpus if g["kind"] == "discrete"), None)
+        ig_name = (self._vram_gpu_name(ig["pci"]) if ig else "") or "integrated GPU"
+        dg_name = (self._vram_gpu_name(dg["pci"]) if dg else "") or "discrete GPU"
+        rows = [
+            ("auto", "Automatic",
+             f"Let KWin choose — normally the {ig_name}."),
+            ("igpu", f"Integrated — {ig_name} (pin)",
+             "Pin the compositor to the integrated GPU so a driver / device "
+             "re-enumeration can't move it. Usually the same render path as "
+             "Automatic, just nailed down."),
+        ]
+        rows.append((
+            "dgpu", f"Discrete — {dg_name}",
+            "Pin the whole desktop to the discrete GPU. Not possible when the "
+            "panel is wired to the integrated GPU (muxless) — most hybrid "
+            "laptops; offered only where a hardware MUX exists."))
+        return rows
+
+    def _build_vram_tab(self):
+        outer = tb.Frame(self.notebook)
+        self.notebook.add(outer, text="VRAM")
+        frame = self._scroll_body(outer, pad=16)
+
+        if tuxthrottle_vram is None:
+            tb.Label(frame, bootstyle=WARNING,
+                     text="tuxthrottle_vram helper failed to import.").pack(anchor="w")
+            return
+
+        tb.Label(frame, wraplength=1100, justify="left", bootstyle=SECONDARY,
+                 text="A laptop's integrated GPU shares a small slice of system "
+                      "RAM as video memory and the KDE/Wayland desktop routinely "
+                      "fills it (spilling to slower GTT); the discrete GPU is "
+                      "kept free for video editing, games and 3D. Lower tiers "
+                      "strip desktop eye-candy to shrink the compositor's "
+                      "footprint. Everything below is read live from your "
+                      "hardware.").pack(anchor="w", pady=(0, 14))
+
+        self._vram_q = queue.Queue()
+        self._vram_bars = {}
+
+        lf = tb.Labelframe(frame, text="Live VRAM usage", padding=12)
+        lf.pack(fill="x", pady=6)
+        for g in sensors.drm_gpus():
+            name = self._vram_gpu_name(g["pci"]) or g["driver"] or g["pci"]
+            row = tb.Frame(lf)
+            row.pack(fill="x", pady=3)
+            tb.Label(row, text=f"{name}  ({g['kind']})", width=36,
+                     anchor="w").pack(side="left")
+            pb = tb.Progressbar(row, maximum=100, length=240, bootstyle=INFO)
+            pb.pack(side="left", padx=8)
+            vl = tb.Label(row, text="…", width=26, anchor="w")
+            vl.pack(side="left")
+            self._vram_bars[g["pci"].lower()] = (pb, vl)
+        if not self._vram_bars:
+            tb.Label(lf, bootstyle=SECONDARY,
+                     text="no render GPU found under /sys/class/drm").pack(anchor="w")
+        self._vram_consumers_lbl = tb.Label(
+            lf, justify="left", bootstyle=SECONDARY, font=("Monospace", 9))
+        self._vram_consumers_lbl.pack(anchor="w", pady=(8, 0))
+
+        br = tb.Frame(lf)
+        br.pack(fill="x", pady=(10, 0))
+        b1 = tb.Button(br, text="↻  Free VRAM now", bootstyle=(INFO, "outline"),
+                       command=self._vram_free)
+        b1.pack(side="left")
+        self._tip(b1, "Evict the iGPU's cached buffers to system RAM (they page "
+                  "back in as needed). Good before/after a game or a Resolve "
+                  "session to clear accumulated slack.")
+        b2 = tb.Button(br, text="Restart compositor", bootstyle=(WARNING, "outline"),
+                       command=self._vram_restart_compositor)
+        b2.pack(side="left", padx=8)
+        self._tip(b2, "Also restart KWin — releases allocations the evict can't. "
+                  "Windows stay open; the screen blacks for about a second.")
+
+        lf2 = tb.Labelframe(frame, text="VRAM budget tier", padding=12)
+        lf2.pack(fill="x", pady=6)
+        self._vram_tier_var = tk.StringVar(value=tuxthrottle_vram.current_tier())
+        for val, cap, desc in self._VRAM_TIERS:
+            tb.Radiobutton(lf2, text=cap, value=val,
+                           variable=self._vram_tier_var,
+                           command=self._vram_apply_tier).pack(anchor="w", pady=(6, 0))
+            tb.Label(lf2, text=desc, bootstyle=SECONDARY, wraplength=1000,
+                     justify="left").pack(anchor="w", padx=26)
+        tb.Label(lf2, bootstyle=SECONDARY, wraplength=1000, justify="left",
+                 text="“Regular” restores the exact KWin/Plasma values captured "
+                      "the first time you left it — not necessarily stock Plasma "
+                      "defaults.").pack(anchor="w", pady=(8, 0))
+
+        lf3 = tb.Labelframe(frame, text="Which GPU renders the desktop", padding=12)
+        lf3.pack(fill="x", pady=6)
+        tb.Label(lf3, bootstyle=WARNING, wraplength=1000, justify="left",
+                 text="Takes effect after you log out and back in. If the "
+                      "desktop then fails to start and drops you at the login "
+                      "screen: switch to a text console (Ctrl+Alt+F3), log in, "
+                      "and run  rm ~/.config/plasma-workspace/env/"
+                      "09-tuxthrottle-gpu.sh").pack(anchor="w")
+        try:
+            _modes = set(tuxthrottle_vram.compositor_gpu_modes())
+        except Exception:  # noqa: BLE001
+            _modes = {"auto", "igpu", "dgpu"}
+        self._vram_gpu_var = tk.StringVar(
+            value=tuxthrottle_vram.current_compositor_gpu())
+        for val, cap, desc in self._vram_gpu_choices():
+            state = "normal" if val in _modes else "disabled"
+            tb.Radiobutton(lf3, text=cap, value=val, variable=self._vram_gpu_var,
+                           state=state,
+                           command=self._vram_apply_gpu).pack(anchor="w", pady=(6, 0))
+            tb.Label(lf3, text=desc, bootstyle=SECONDARY, wraplength=1000,
+                     justify="left").pack(anchor="w", padx=26)
+
+        lf4 = tb.Labelframe(frame, text="Discrete GPU idle power", padding=12)
+        lf4.pack(fill="x", pady=6)
+        pm = sensors.nvidia_runtime_pm()
+        if pm:
+            self._vram_rtd3_var = tk.BooleanVar(value=pm["control"] == "auto")
+            tb.Checkbutton(
+                lf4, text="Let the dGPU power down when idle (runtime PM)",
+                variable=self._vram_rtd3_var,
+                command=self._vram_apply_rtd3).pack(anchor="w")
+            tb.Label(lf4, bootstyle=SECONDARY, wraplength=1000, justify="left",
+                     text="Frees its VRAM and ~5 W when nothing uses it; it wakes "
+                          "on its own for a PRIME-offloaded app. Live only — add "
+                          "the “NVIDIA runtime power management” tweak on the GPU "
+                          "tab to make it stick across reboots.").pack(
+                anchor="w", pady=(2, 0))
+        else:
+            tb.Label(lf4, text="No NVIDIA GPU detected.",
+                     bootstyle=SECONDARY).pack(anchor="w")
+
+        self._vram_live = False
+        self._poll_vram_queue()
+
+    def _vram_helper(self, args: str) -> str:
+        return f"python3 {BASE_DIR}/tuxthrottle_vram.py {args}"
+
+    def _vram_poll(self):
+        if not getattr(self, "_vram_live", False):
+            return
+        threading.Thread(target=self._vram_poll_worker, daemon=True).start()
+        self.root.after(5000, self._vram_poll)
+
+    def _vram_poll_worker(self):
+        try:
+            info = sensors.vram_info()
+            cons = sensors.vram_consumers(8)
+        except Exception:  # noqa: BLE001
+            info, cons = [], []
+        self._vram_q.put((info, cons))
+
+    def _poll_vram_queue(self):
+        try:
+            while True:
+                info, cons = self._vram_q.get_nowait()
+                self._vram_apply(info, cons)
+        except queue.Empty:
+            pass
+        self.root.after(400, self._poll_vram_queue)
+
+    def _vram_apply(self, info, cons):
+        for g in info:
+            pair = self._vram_bars.get((g.get("pci") or "").lower())
+            if not pair:
+                continue
+            pb, vl = pair
+            if g.get("asleep"):
+                pb.configure(value=0)
+                vl.configure(text="asleep")
+                continue
+            u, t = g.get("used_mb"), g.get("total_mb")
+            if u is None or not t:
+                pb.configure(value=0)
+                vl.configure(text="n/a")
+                continue
+            pb.configure(value=round(100 * u / t))
+            gtt = f"  +{g['gtt_used_mb']} GTT" if g.get("gtt_used_mb") else ""
+            vl.configure(text=f"{u} / {t} MiB  ({g['pct']}%){gtt}")
+        if cons:
+            txt = "\n".join(
+                f"{c['vram_mb']:>7.0f} MiB  {c['comm'][:22]:<22} [{c['driver']}]"
+                for c in cons)
+            self._vram_consumers_lbl.configure(text="holding VRAM now:\n" + txt)
+        else:
+            self._vram_consumers_lbl.configure(text="")
+
+    def _vram_free(self):
+        self._run_stream("free VRAM (evict iGPU caches)",
+                         self._vram_helper("free"), tag="VRAM")
+
+    def _vram_restart_compositor(self):
+        if not messagebox.askyesno(
+            "Restart compositor",
+            "Restart KWin to release its VRAM allocations.\n\nOpen windows stay "
+            "put; the screen blacks for about a second. Continue?"):
+            return
+        self._run_stream("free VRAM + restart compositor",
+                         self._vram_helper("free --restart-compositor"), tag="VRAM")
+
+    def _vram_apply_tier(self):
+        self._run_stream(f"VRAM budget → {self._vram_tier_var.get()}",
+                         self._vram_helper(f"profile {self._vram_tier_var.get()}"),
+                         tag="VRAM")
+
+    def _vram_apply_gpu(self):
+        mode = self._vram_gpu_var.get()
+        self._run_stream(f"desktop GPU → {mode}",
+                         self._vram_helper(f"compositor-gpu {mode}"), tag="VRAM")
+        messagebox.showinfo(
+            "Log out to apply",
+            "The desktop-GPU choice is written. Log out and back in for KWin "
+            "to pick it up.")
+
+    def _vram_apply_rtd3(self):
+        ok, msg = sensors.set_nvidia_runtime_pm(self._vram_rtd3_var.get())
+        self.status_var.set(msg)
+        if not ok:
+            messagebox.showwarning("Runtime PM", msg)
 
     def _build_power_tab(self):
         outer = tb.Frame(self.notebook)
@@ -3711,6 +4126,14 @@ class ToolkitApp:
                                      bootstyle="round-toggle"),
                       f"Add the {lbl.lower()} to the GPU block — a quick way to "
                       f"confirm which card is doing the work.").pack(side="left", padx=(0, 12))
+        self._mh_gamemode = tk.BooleanVar(value=("gamemode" in conf["elements"]))
+        self._tip(tb.Checkbutton(dl2, text="Feral GameMode status",
+                                 variable=self._mh_gamemode,
+                                 bootstyle="round-toggle"),
+                  "Add MangoHud's `gamemode` line — shows GAMEMODE ON/OFF in the "
+                  "overlay so you can see at a glance whether Feral GameMode "
+                  "(gamemoderun) actually engaged for the running game."
+                  ).pack(side="left", padx=(0, 12))
 
         brow = tb.Frame(lf); brow.pack(anchor="w", fill="x", pady=(4, 0))
         self._tip(tb.Button(brow, text="↻ Detect", bootstyle=(SECONDARY, "outline"),
@@ -3790,6 +4213,8 @@ class ToolkitApp:
                 self._mh_lvl[grp].set(lvl == "full")
         if hasattr(self, "_mh_graph"):
             self._mh_graph.set(bool({"frame_timing", "frametime"} & conf["elements"]))
+        if hasattr(self, "_mh_gamemode"):
+            self._mh_gamemode.set("gamemode" in conf["elements"])
         for k, gv in getattr(self, "_mh_gpu_extra", {}).items():
             gv.set(k in conf["elements"])
 
@@ -4189,6 +4614,8 @@ class ToolkitApp:
         for grp, (mini, grpfull) in self._MH_GROUPS.items():
             elements += grpfull if self._mh_lvl[grp].get() else mini
         elements += [k for k, v in getattr(self, "_mh_gpu_extra", {}).items() if v.get()]
+        if getattr(self, "_mh_gamemode", None) is not None and self._mh_gamemode.get():
+            elements.append("gamemode")
         for e in elements:
             managed[e] = True                   # bare toggle
         if getattr(self, "_mh_pos_set", False):
@@ -5251,20 +5678,24 @@ class ToolkitApp:
         self._about_btn.pack(fill="x")
         self._about_body = tb.Frame(feat, style="Card.TFrame", padding=(16, 12, 12, 12))
         for name, desc in (
-            ("Dashboard", "live CPU / iGPU / dGPU clocks, temps, power; rolling history sparklines; session CSV log; Game Mode toggle"),
-            ("Keyboard", "AW-ELC RGB — whole-keyboard solid colour, brightness, firmware Spectrum Cycle"),
-            ("Fans", "thermal profile, additive fan boost + presets, manual PWM (guarded), closed-loop custom fan curve"),
-            ("Power & Limits", "CPU TDP (ryzenadj STAPM/fast/slow); Curve Optimizer all-core undervolt with a stress-test / auto-revert harness; NVIDIA power limit where the GPU allows; hybrid-graphics mode (EnvyControl); battery charge limit (sysfs / libsmbios); AC↔battery auto-switch; thermal-event alerts"),
-            ("Profiles", "named full-state bundles; automatic snapshot before every apply; one-click rollback; per-game auto-profiles"),
-            ("Presets", "one-click curated bundles of tweaks + app installs"),
-            ("Updates", "nobara-sync wrapper + per-manager dnf / Flatpak / fwupd; pending count tagged with the metadata age"),
-            ("Setup Games", "per-game click-through walkthroughs (GTA V Online first) + Proton prefix / save-file tools"),
-            ("Tweaks & Apps", "reversible system tweaks by category — Gaming, GPU, Power, Performance, KDE (Desktop GUI Tweaks: 10 Plasma 6 toggles), Stability — plus one-directional app installs"),
-            ("tuxthrottled", "systemd daemon: closed-loop fan curve, AC↔battery auto-switch, per-game auto-profiles, thermal-event notifications, and a root-only control socket the GUI + CLI write through"),
-            ("tuxthrottlectl", "headless CLI (status / get / set / profile / snapshot / rollback / gamemode / daemon, --json) for scripts, keybinds and ssh; routes through the daemon socket when it's up"),
-            ("Panel clients", "optional waybar module + KDE plasmoid showing CPU/GPU temp and a one-click profile switch (clients/, over tuxthrottlectl --json)"),
+            ("Dashboard", "8 live ring gauges (2×4) — CPU temp/clock/power, iGPU clock, dGPU temp/clock/util/power — with rolling sparkline history, a session CSV log and a Game Mode toggle; built lazily on tab entry"),
+            ("Keyboard", "Alienware AW-ELC RGB via OpenRGB — whole-keyboard solid colour, presets, brightness, firmware Spectrum Cycle; two mutually-exclusive toggles that sync the colour with the KDE accent (keyboard→accent or accent→keyboard); colour re-asserted at login by the tray / KbdBacklightFix service"),
+            ("Fans", "thermal profile (balanced/performance/custom), additive fan boost + Silent/Balanced/Aggressive presets, guarded manual PWM, and a 10-point closed-loop custom fan curve run by the daemon"),
+            ("Power & Limits", "CPU TDP sliders (ryzenadj STAPM/fast/slow) + presets; Curve Optimizer all-core undervolt with a 5-min stress-test + auto-revert harness; NVIDIA power-limit slider or a firmware-locked note; NVIDIA graphics-clock lock; hybrid-graphics mode (EnvyControl); battery charge limit (sysfs / Dell libsmbios) + express/standard charging; panel refresh-rate switch; AC↔battery auto-switch for profile/TDP/refresh; thermal-event alerts"),
+            ("Battery", "design-vs-full wear %, charge cycles, chemistry; a live Now card (charge, power flow, time-to-empty/full); the charge-limit control mirrored from Power & Limits; an Adaptive-Sync (VRR) status line"),
+            ("VRAM", "live per-GPU video-memory bars + top consumers; a Regular/Medium/Extreme KWin budget that strips desktop eye-candy to shrink the compositor footprint (reversible to a captured baseline); a Free-VRAM action (AMD/Intel driver eviction + optional compositor restart); a desktop-GPU selector (KWIN_DRM_DEVICES); a dGPU runtime-power-management toggle"),
+            ("Profiles", "capture / apply / delete named full-state bundles (profile, TDP, battery, NVIDIA limits, fan curve, refresh, hybrid GPU, keyboard); an automatic snapshot before every apply with per-row + latest rollback; a per-game auto-profile map and a time-of-day schedule run by the daemon"),
+            ("Presets", "one-click curated bundles of tweaks + app installs, plus a global “apply all recommended” button"),
+            ("Updates", "nobara-sync wrapper (check / cli / install / fixups / repair) + per-manager dnf, Flatpak and fwupd sections and a Fedora-GPG-key fix; pending count tagged with the metadata age"),
+            ("Setup Games", "per-game click-through walkthroughs (GTA V Online first) — each step has a status pill and either a streamed Run button or a manual Copy-command step"),
+            ("Game Tools", "any-game Steam/Proton helpers — Proton-prefix relocation off NTFS/exFAT, a save-game vault, one shared shader/pipeline-cache folder with Steam-link repair, a launch-options builder (MangoHud / gamemoderun / gamescope / PRIME / shader caches / anti-cheat-safe layer set), and a full MangoHud overlay editor (per-GPU fields, drag-to-place, Feral-GameMode status line, per-game configs)"),
+            ("Tweaks & Apps", "reversible system tweaks by category — Gaming, GPU, Power, Performance, KDE (13 Plasma 6 toggles), Stability — each with check/undo; plus one-directional native/Flatpak app installs with cross-manager “already installed” detection"),
+            ("System tray", "an always-on PySide6 tray icon — left-click opens this window, middle-click toggles Game Mode, right-click shows live CPU/GPU readouts and quick actions; an About-tab toggle adds/removes it from login autostart"),
+            ("tuxthrottled", "systemd daemon: closed-loop fan curve, AC↔battery auto-switch, per-game auto-profiles with a post-game summary, a time-of-day schedule, thermal-event notifications and fan-stall auto-recovery, and a root-only control socket the GUI + CLI write through"),
+            ("tuxthrottlectl", "headless CLI (status / watch / get / set / profile / snapshot / rollback / gamemode / schedule / daemon / vram / collect-model, --json) for scripts, keybinds and ssh; routes through the daemon socket when it's up"),
+            ("Panel clients", "optional waybar module, KDE plasmoid and MangoHud bridge showing CPU/GPU temp + a one-click profile switch (clients/, over tuxthrottlectl --json)"),
             ("Packaging", "noarch RPM spec + a COPR workflow (packaging/) for a dnf install; the git-clone install.sh path still works"),
-            ("Report a Bug", "read-only hardware / OS dump for GitHub issues"),
+            ("Report a Bug", "read-only hardware / OS dump + a hardware-bundle tarball for GitHub issues and new-board onboarding"),
         ):
             row = tb.Frame(self._about_body, style="CardRow.TFrame")
             row.pack(anchor="w", fill="x", pady=2)
@@ -5272,6 +5703,10 @@ class ToolkitApp:
                      width=16, anchor="w", style="CardKey.TLabel").pack(side="left", anchor="n")
             tb.Label(row, text=desc, wraplength=900, justify="left",
                      style="Card.TLabel").pack(side="left", anchor="n")
+        tb.Label(self._about_body, style="Card.TLabel", wraplength=900,
+                 justify="left", text=(
+                     "\nFEATURES.md in the repo has the full, detailed list "
+                     "with examples for every control.")).pack(anchor="w")
 
         link = tb.Labelframe(frame, text="Project", padding=12)
         link.pack(fill="x", pady=6)
@@ -5287,6 +5722,25 @@ class ToolkitApp:
         url_ent.insert(0, PROJECT_URL)
         url_ent.configure(state="readonly")
         url_ent.pack(fill="x", pady=(8, 0))
+
+        tray = tb.Labelframe(frame, text="System tray", padding=12)
+        tray.pack(fill="x", pady=6)
+        tb.Label(tray, wraplength=1000, justify="left", bootstyle=SECONDARY, text=(
+            "A small tray icon (left-click opens this window, middle-click "
+            "toggles Game Mode, right-click for CPU/GPU readouts + quick "
+            "actions). Needs PySide6.")).pack(anchor="w", pady=(0, 8))
+        self._tray_auto_var = tk.BooleanVar(value=self._tray_autostart_enabled())
+        tb.Checkbutton(
+            tray, text="Start the tray icon automatically at login",
+            variable=self._tray_auto_var,
+            command=self._tray_toggle_autostart).pack(anchor="w")
+        btnrow = tb.Frame(tray)
+        btnrow.pack(fill="x", pady=(8, 0))
+        b = tb.Button(btnrow, text="Launch tray now", bootstyle=(INFO, "outline"),
+                      command=self._tray_launch_now)
+        b.pack(side="left")
+        self._tray_status_lbl = tb.Label(btnrow, text="", bootstyle=SECONDARY)
+        self._tray_status_lbl.pack(side="left", padx=10)
 
         meta = tb.Labelframe(frame, text="Details", padding=12)
         meta.pack(fill="x", pady=6)
@@ -5308,6 +5762,74 @@ class ToolkitApp:
             "Built in the spirit of WinUtil-style Windows tweak tools and "
             "Div-Acer-Manager-Max. Not affiliated with Dell or Alienware."
         )).pack(anchor="w", pady=(10, 0))
+
+    # ---------- system-tray autostart ----------
+
+    def _tray_autostart_path(self) -> Path:
+        try:
+            home = Path(pwd.getpwnam(self.user).pw_dir)
+        except KeyError:
+            home = Path.home()
+        return home / ".config" / "autostart" / "tuxthrottle-tray.desktop"
+
+    def _tray_autostart_enabled(self) -> bool:
+        return self._tray_autostart_path().is_file()
+
+    def _tray_exec(self) -> str:
+        """Command the autostart entry / 'launch now' runs."""
+        return (shutil.which("tuxthrottle-tray")
+                or f"/usr/bin/python3 {BASE_DIR}/tray_monitor.py")
+
+    def _tray_toggle_autostart(self):
+        p = self._tray_autostart_path()
+        want = self._tray_auto_var.get()
+        try:
+            if want:
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(
+                    "[Desktop Entry]\n"
+                    "Type=Application\n"
+                    "Name=TuxThrottle Tray\n"
+                    "Comment=Tray icon + quick launcher for TuxThrottle\n"
+                    f"Exec={self._tray_exec()}\n"
+                    "Icon=tuxthrottle\n"
+                    "Terminal=false\n"
+                    "X-GNOME-Autostart-enabled=true\n")
+                self._chown_user(p)
+                self._chown_user(p.parent)
+                msg = "will start at next login"
+            else:
+                p.unlink(missing_ok=True)
+                msg = "autostart removed"
+        except OSError as exc:
+            self._tray_auto_var.set(self._tray_autostart_enabled())
+            messagebox.showwarning("Tray autostart", str(exc))
+            return
+        self._tray_status_lbl.configure(text=msg)
+
+    def _chown_user(self, path: Path):
+        if os.geteuid() != 0:
+            return
+        try:
+            pw = pwd.getpwnam(self.user)
+            os.chown(path, pw.pw_uid, pw.pw_gid)
+        except (KeyError, OSError):
+            pass
+
+    def _tray_launch_now(self):
+        if subprocess.run(["pgrep", "-f", "tray_monitor.py"],
+                          capture_output=True).returncode == 0:
+            self._tray_status_lbl.configure(text="already running")
+            return
+        exec_cmd = self._tray_exec()
+        argv = sensors.session_cmd(["bash", "-lc",
+                                    f"setsid {exec_cmd} >/dev/null 2>&1 &"])
+        try:
+            subprocess.Popen(argv, start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self._tray_status_lbl.configure(text="launched — check your tray")
+        except (OSError, subprocess.SubprocessError) as exc:
+            messagebox.showwarning("Tray", f"Couldn't start it:\n{exc}")
 
     # ---------- diagnostics / debug report ----------
 
@@ -5925,6 +6447,13 @@ class ToolkitApp:
         elif not want_dash and self._dash_shown:
             self._dash_shown = False
             self._dash_leave()
+
+        want_vram = (page_text == "VRAM")
+        if want_vram and not getattr(self, "_vram_live", False):
+            self._vram_live = True
+            self._vram_poll()
+        elif not want_vram:
+            self._vram_live = False
 
         btn = getattr(self, "_rec_btn", None)
         if btn is None:

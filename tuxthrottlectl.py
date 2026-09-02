@@ -390,7 +390,17 @@ def main() -> int:
     cm.add_argument("--slug", help="model id / filename stem (default: from DMI)")
     cm.add_argument("--out", help="write to this path instead of stdout")
 
+    vr = sub.add_parser("vram", help="VRAM budget / free / desktop-GPU selector",
+                        add_help=False)
+    vr.add_argument("rest", nargs=argparse.REMAINDER,
+                    help="status [--json] | profile {regular|medium|extreme} | "
+                         "free [--json] [--restart-compositor] | "
+                         "compositor-gpu {auto|igpu|dgpu}")
+
     args = ap.parse_args()
+    if args.cmd == "vram":
+        import tuxthrottle_vram as vram
+        return vram.main(args.rest or ["status"])
     if args.cmd == "collect-model":
         import tuxthrottle_modelgen as modelgen
         return modelgen.main(

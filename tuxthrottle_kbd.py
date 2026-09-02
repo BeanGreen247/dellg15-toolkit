@@ -33,6 +33,7 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import configparser
 import glob
 import json
 import os
@@ -320,16 +321,55 @@ def _state_path() -> str:
     return os.path.join(home, ".config", "tuxthrottle", "kbd.json")
 
 
+def accent_hex(fallback: str = "FF8800") -> str:
+    """Current Plasma accent colour as 'RRGGBB', from the invoking user's
+    ~/.config/kdeglobals [General] AccentColor ('r,g,b' or '#rrggbb').
+    `fallback` (used when it can't be read) may be passed with or without '#'.
+    """
+    fb = fallback.lstrip("#") or "FF8800"
+    pw = _invoking_pw()
+    home = pw.pw_dir if pw else os.path.expanduser("~")
+    cp = configparser.ConfigParser(strict=False, interpolation=None)
+    try:
+        cp.read(os.path.join(home, ".config", "kdeglobals"))
+    except (configparser.Error, OSError):
+        return fb
+    for sec, key in (("General", "AccentColor"),
+                     ("Colors:Selection", "DecorationFocus")):
+        if not cp.has_option(sec, key):
+            continue
+        v = cp.get(sec, key).strip()
+        if "," in v:
+            try:
+                r, g, b = (int(x) & 255 for x in v.split(",")[:3])
+                return f"{r:02X}{g:02X}{b:02X}"
+            except ValueError:
+                continue
+        h = v.lstrip("#")
+        if len(h) >= 6:
+            return h[:6].upper()
+    return fb
+
+
 def save_state(zone_colors: dict, brightness: int, mode: str = "zones",
-               speed: int = 50) -> None:
+               speed: int = 50, push_accent: bool | None = None) -> None:
     """Persist the lighting so the boot/resume service can re-assert it.
-    `mode` is 'zones' (static whole-keyboard colour) or 'spectrum' (the
-    firmware effect)."""
+    `mode` is 'zones' (static whole-keyboard colour), 'spectrum' (the firmware
+    effect), or 'accent' (follow the live Plasma accent on each re-assert).
+    `push_accent` (GUI-only convenience flag: the desktop accent tracks this
+    colour) is kept as given, or carried over from the existing file when
+    None."""
     path = _state_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    if push_accent is None:
+        try:
+            push_accent = bool(json.load(open(path)).get("push_accent", False))
+        except (OSError, ValueError):
+            push_accent = False
     doc = {"brightness": int(brightness),
            "mode": mode,
            "speed": int(speed),
+           "push_accent": bool(push_accent),
            "zones": {str(z): _hexify(c) for z, c in zone_colors.items()}}
     json.dump(doc, open(path, "w"), indent=2)
     pw = _invoking_pw()
@@ -364,8 +404,9 @@ def load_meta() -> dict:
     try:
         d = json.load(open(_state_path()))
     except (OSError, ValueError):
-        return {"mode": "zones", "speed": 50}
-    return {"mode": d.get("mode", "zones"), "speed": int(d.get("speed", 50))}
+        return {"mode": "zones", "speed": 50, "push_accent": False}
+    return {"mode": d.get("mode", "zones"), "speed": int(d.get("speed", 50)),
+            "push_accent": bool(d.get("push_accent", False))}
 
 
 # ---- CLI ---------------------------------------------------------------- #
@@ -435,6 +476,10 @@ def main(argv: list[str] | None = None) -> int:
             def _assert_saved():
                 if meta["mode"] in ALL_EFFECTS:
                     set_effect(meta["mode"], meta.get("speed", 50), br)
+                elif meta["mode"] == "accent":
+                    # follow the *current* Plasma accent, not a frozen colour
+                    fallback = next(iter(zones.values()), (255, 255, 255))
+                    set_all(accent_hex(_hexify(fallback)), br)
                 else:
                     set_zones(zones, br)
 
