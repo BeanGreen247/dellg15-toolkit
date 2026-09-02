@@ -856,16 +856,19 @@ GTA Online is sensitive to Wi-Fi latency spikes.
 
 ### GTA Trilogy — Definitive Edition (III / Vice City / San Andreas)
 
-**TODO — not yet in `config/games.json`.** The three Definitive Editions all
-boot through the **Rockstar Games Launcher** (like GTA V Enhanced), so they
-need the same handling: force a recent **GE-Proton**, keep the Proton prefix
-**off NTFS/exFAT** (`tuxthrottle_prefix_relocate.py`), drop `vcrun2019` /
-`d3dcompiler_47` / `corefonts` into the prefix, and set it to **Windows 10**
-if the RGL / Social Club sign-in loops or renders black. They are single-player
-(no BattlEye), so the clean-Vulkan-layer launch string isn't required — a
-plain `gamemoderun mangohud %command%` (+ PRIME offload on the hybrid G15) is
-enough. Add each as its own `config/games.json` entry mirroring the GTA V
-steps, minus the BattlEye / `vm.max_map_count` bits.
+Each has its own **Setup Games** tab (`config/games.json` entries `GTA3DE`
+/ `GTAVCDE` / `GTASADE` — Steam AppIDs **1546970 / 1546990 / 1547000**).
+All three boot through the **Rockstar Games Launcher** (like GTA V
+Enhanced), so the walkthrough mirrors GTA V Online's Route A: native Steam
++ tools, latest **GE-Proton** forced on the title, the Proton prefix kept
+**off NTFS/exFAT** (`tuxthrottle_prefix_relocate.py`), and — only if the
+launcher / Social Club sign-in loops or renders black — `vcrun2019` /
+`d3dcompiler_47` / `corefonts` dropped into the prefix via `protontricks`
+plus a flip to **Windows 10** (`protontricks <appid> --gui` → *win10*).
+They are single-player (no BattlEye), so the clean-Vulkan-layer launch
+string isn't required — the launch options are a plain
+`gamemoderun mangohud %command%` with PRIME offload for the hybrid G15,
+and there's no BattlEye-runtime or `vm.max_map_count` step.
 
 ## How status/apply works
 
