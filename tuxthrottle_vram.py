@@ -295,13 +295,12 @@ def _capture_baseline() -> None:
         return
     keys = _all_tier_keys()
     vals = _kread_batch(keys)
-    data = {"keys": [[f, g, k, v] for (f, g, k), v in zip(keys, vals)],
-            "wallpaper": {}}
     conts = _desktop_containments()
     wp = _kread_batch([(_APPLETS, ["Containments", c], "wallpaperplugin")
                        for c in conts])
-    for cid, v in zip(conts, wp):
-        data["wallpaper"][cid] = v or "org.kde.image"
+    wallpaper = {cid: (v or "org.kde.image") for cid, v in zip(conts, wp)}
+    data = {"keys": [[f, g, k, v] for (f, g, k), v in zip(keys, vals)],
+            "wallpaper": wallpaper}
     _save(_baseline_path(), data)
 
 
