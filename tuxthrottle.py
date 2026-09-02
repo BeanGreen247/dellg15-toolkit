@@ -12,6 +12,7 @@ Requires: ttkbootstrap (pip install --user ttkbootstrap — confirmed NOT
 packaged in Fedora/Nobara's repos, pip is the only install path) for the
 themed dark UI + round-toggle switches + gauge widgets on the Dashboard tab.
 """
+import base64
 import configparser
 import csv
 import glob
@@ -3966,7 +3967,44 @@ class ToolkitApp:
                   "Copy this string. Paste it into Steam → the game → Properties "
                   "→ Launch Options (or Lutris/Heroic's wrapper field)."
                   ).pack(side="left", padx=(6, 0))
+
+        arow = tb.Frame(lf); arow.pack(fill="x", pady=(6, 0))
+        self._lo_only_empty = tk.BooleanVar(value=True)
+        self._tip(tb.Button(arow, text="Apply to every game", bootstyle=(WARNING, "outline"),
+                  command=self._lo_apply_all),
+                  "Write this string into the Launch Options of every installed "
+                  "Steam game (localconfig.vdf). Steam must be CLOSED first — it "
+                  "rewrites its config on exit. Each file is backed up "
+                  "(*.tuxthrottle-bak-*). Restart Steam afterwards."
+                  ).pack(side="left")
+        self._tip(tb.Checkbutton(arow, text="only games with no options yet",
+                  variable=self._lo_only_empty, bootstyle="round-toggle"),
+                  "On: skip any game that already has custom Launch Options. "
+                  "Off: overwrite every game's Launch Options with this string."
+                  ).pack(side="left", padx=(10, 0))
         self._lo_refresh()
+
+    def _lo_apply_all(self):
+        opts = self._lo_out.get().strip()
+        if not opts:
+            self._log("[Game Tools] launch-options string is empty — nothing to apply")
+            return
+        only = self._lo_only_empty.get()
+        if not messagebox.askyesno(
+                "Apply to every game",
+                ("Write this launch-options string into EVERY installed Steam "
+                 "game that has none yet:" if only else
+                 "Write this launch-options string into EVERY installed Steam "
+                 "game, REPLACING whatever each one has now:")
+                + f"\n\n{opts}\n\n"
+                "Steam must be closed first — it rewrites its config on exit. "
+                "Every localconfig.vdf is backed up. Restart Steam afterwards."):
+            return
+        blob = base64.b64encode(opts.encode()).decode()
+        flag = " --only-empty" if only else ""
+        cmd = (f"su - {self.user} -c 'python3 {BASE_DIR}/tuxthrottle_launchopts.py "
+               f"set-all --b64 {blob}{flag}'")
+        self._run_stream("launch options → every installed game", cmd, tag="Game Tools")
 
     def _lo_refresh(self):
         env, wrap = [], []
