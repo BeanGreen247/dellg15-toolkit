@@ -6593,9 +6593,11 @@ def toolkit_version() -> str:
     (`.version`, since /opt has no .git) → the last git commit date when running
     from a checkout → the committed `VERSION` file (source tarball, no git)
     → "unknown"."""
-    for p in (BASE_DIR / ".version",):
+    # the deploy stamp wins, but only when this is NOT a git checkout — a stray
+    # .version left in a source tree must never shadow the live commit date.
+    if not (BASE_DIR / ".git").exists():
         try:
-            v = p.read_text().strip()
+            v = (BASE_DIR / ".version").read_text().strip()
             if v:
                 return v
         except OSError:

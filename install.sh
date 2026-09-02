@@ -108,15 +108,14 @@ do_install() {
     chmod -R a+rX "$LIBDIR"
     # stamp the version so the Diagnostics / About page can show it (no .git in
     # /opt). Date-based YY.MM.DD keyed to the last commit day (Xylonic-style):
-    # last git commit date when $SRC is a checkout → a .version the source tree
-    # carries (rsync'd from a dev machine) → the committed VERSION file.
-    _base="$(tr -d '[:space:]' < "$SRC/VERSION" 2>/dev/null || true)"
+    # last git commit date when $SRC is a checkout → the committed VERSION file
+    # (source tarball / rsync without .git). A stray $SRC/.version is ignored —
+    # it is a deploy artefact, not a source of truth.
     _ver=""
     if git -C "$SRC" rev-parse --git-dir >/dev/null 2>&1; then
         _ver="$(git -C "$SRC" log -1 --format=%cd --date=format:%y.%m.%d 2>/dev/null || true)"
     fi
-    [[ -z "$_ver" && -s "$SRC/.version" ]] && _ver="$(cat "$SRC/.version")"
-    [[ -z "$_ver" && -n "$_base" ]] && _ver="$_base"
+    [[ -z "$_ver" ]] && _ver="$(tr -d '[:space:]' < "$SRC/VERSION" 2>/dev/null || true)"
     [[ -n "$_ver" ]] && printf '%s\n' "$_ver" > "$LIBDIR/.version"
     [[ -s "$LIBDIR/.version" ]] && c_ok "version $(cat "$LIBDIR/.version")"
     c_ok "copied $(find "$LIBDIR" -type f | wc -l) files"
