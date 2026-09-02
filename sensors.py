@@ -513,6 +513,32 @@ def read_dgpu_values():
 #  free for DaVinci Resolve / games / 3D. Pure sysfs + one optional nvidia-smi.
 # --------------------------------------------------------------------------- #
 
+def mangohud_gpu_order() -> list:
+    """PCI addresses in MangoHud's `gpu_list` index order. MangoHud (0.7+)
+    enumerates GPUs by ascending DRM **render node** (`/sys/class/drm/renderD*`,
+    128, 129, …) — NOT `cardN`, and on hybrid laptops the two orders differ
+    (e.g. G15 5515: card0=NVIDIA/card1=AMD but renderD128=AMD/renderD129=NVIDIA).
+    Index `i` of the returned list is the GPU that `gpu_list=i` selects. This is
+    usually iGPU-first, the reverse of `gpu_devices()` (discrete-first). Returns
+    [] when it can't be read (callers then keep positional 0,1,…)."""
+    nodes = []
+    for p in glob.glob("/sys/class/drm/renderD[0-9]*"):
+        m = re.search(r"/renderD(\d+)$", p)
+        if not m:
+            continue
+        try:
+            pci = os.path.basename(os.path.realpath(os.path.join(p, "device")))
+        except OSError:
+            continue
+        if re.match(r"^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]$", pci):
+            nodes.append((int(m.group(1)), _norm_pci(pci)))
+    out: list = []
+    for _, pci in sorted(nodes):
+        if pci not in out:
+            out.append(pci)
+    return out
+
+
 def drm_gpus() -> list:
     """[{card, render, pci, vendor, driver, kind, boot_vga}] for every real
     render GPU. `kind` is 'integrated' (amdgpu/i915 + boot_vga) or 'discrete'

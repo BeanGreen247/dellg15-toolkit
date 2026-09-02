@@ -4588,6 +4588,25 @@ class ToolkitApp:
         w = int(longest * fs * 0.85) + int(fs * pad)
         return str(max(320, min(1700, w)))
 
+    def _mh_gpu_list(self, n_gpu: int) -> "str | None":
+        """`gpu_list` value aligned to our discrete-first GPU rows: for each
+        row's PCI address, its index in MangoHud's own cardN ordering. Falls
+        back to positional 0,1,… when the mapping can't be resolved 1:1."""
+        if n_gpu <= 1:
+            return None
+        fallback = ",".join(str(i) for i in range(n_gpu))
+        pcis = [p for p in getattr(self, "_mh_gpu_pci", []) if p][:n_gpu]
+        if len(pcis) != n_gpu:
+            return fallback
+        try:
+            order = sensors.mangohud_gpu_order()
+        except Exception:  # noqa: BLE001
+            return fallback
+        if not order or any(p not in order for p in pcis):
+            return fallback
+        idxs = [order.index(p) for p in pcis]
+        return ",".join(str(i) for i in idxs) if len(set(idxs)) == n_gpu else fallback
+
     def _mh_apply(self):
         cpu = (self._mh_cpu_var.get() or "").strip()
         allgpu = [(v.get() or "").strip() for v in self._mh_gpu_vars]
@@ -4599,8 +4618,12 @@ class ToolkitApp:
             "cpu_text": cpu or None,
             "gpu_text": (",".join(gpus) if gpus else None),
             # list every GPU index the machine has, so MangoHud prints each
-            # card's own name/stats (that's how you tell two same GPUs apart)
-            "gpu_list": (",".join(str(i) for i in range(n_gpu)) if n_gpu > 1 else None),
+            # card's own name/stats (that's how you tell two same GPUs apart).
+            # MangoHud numbers GPUs by /sys/class/drm/cardN (iGPU usually card0),
+            # the reverse of our discrete-first rows — so emit the real MangoHud
+            # indices in *our* row order, else gpu_list=0,1 pins the dGPU label
+            # on the iGPU's stats line (the "GPU ids are swapped" bug).
+            "gpu_list": self._mh_gpu_list(n_gpu),
             "width": width,                     # fit the longest label (or None)
         }
         # stat section: strip every element toggle we own, then add back
