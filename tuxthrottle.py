@@ -1208,29 +1208,25 @@ class ToolkitApp:
         titlebox.pack(side="left")
         tb.Label(titlebox, text="TuxThrottle",
                  font=("Sans", 16, "bold")).pack(anchor="w")
-        tb.Label(titlebox,
-                 text="Nobara Linux · Ryzen 7 5800H + RTX 3050 Ti — this board only",
-                 font=("Sans", 9), bootstyle=SECONDARY).pack(anchor="w")
         tb.Label(header, text=f"elevated · {self.user}",
                  bootstyle=(SECONDARY, "inverse"), font=("Sans", 8, "bold"),
                  padding=(8, 3)).pack(side="right")
 
-        # actual DMI identity of the machine this is running on
+        # DMI identity — only surface it when the board is NOT the one the
+        # tweaks target (a wrong-hardware warning); the happy-path "✓ matches"
+        # bar was just noise restating the CPU/GPU.
         m = sensors.detect_model()
-        if m["is_target"]:
-            txt = f"✓  Detected: {m['vendor']} {m['product']}" + (f" (board {m['board']})" if m['board'] else "") + \
-                  f", BIOS {m['bios']} — matches the target platform."
-            style = SUCCESS
-        elif m["is_close"]:
-            txt = (f"⚠  Detected: {m['vendor']} {m['product']} — a G15 5515 variant, but not the exact "
-                   f"unit this was built against. Most things should work; some sysfs paths may differ.")
-            style = WARNING
-        else:
-            txt = (f"⚠  Detected: {m['vendor']} {m['product']} — this is NOT a Dell G15 5515. "
-                   f"The Toolkit's checks and tweaks are written for that board; expect breakage.")
-            style = DANGER
-        tb.Label(self.root, text=txt, bootstyle=style, padding=(16, 2, 16, 8),
-                 wraplength=1600, justify="left").pack(fill="x")
+        if not m["is_target"]:
+            if m["is_close"]:
+                txt = (f"⚠  Detected {m['vendor']} {m['product']} — a G15 5515 variant, "
+                       f"not the exact unit this was built against; some sysfs paths may differ.")
+                style = WARNING
+            else:
+                txt = (f"⚠  Detected {m['vendor']} {m['product']} — this is NOT a Dell G15 5515. "
+                       f"The checks and tweaks are written for that board; expect breakage.")
+                style = DANGER
+            tb.Label(self.root, text=txt, bootstyle=style, padding=(16, 2, 16, 8),
+                     wraplength=1600, justify="left").pack(fill="x")
 
         tb.Separator(self.root).pack(fill="x")
 
