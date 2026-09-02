@@ -4847,9 +4847,14 @@ class ToolkitApp:
                  .replace("{TOOLKIT_DIR}", str(BASE_DIR))
                  .replace("{APPID}", str(self.games.get(gid, {}).get("appid", ""))))
 
+    _GAME_CARD_PACK = {"fill": "x", "padx": 2, "pady": 5}
+
     def _game_step_card(self, parent, gid: str, step: dict):
         card = tb.Frame(parent, padding=14, bootstyle="dark")
-        card.pack(fill="x", padx=2, pady=5)
+        card.pack(**self._GAME_CARD_PACK)
+        prev = (self._game_steps[-1]["card"]
+                if self._game_steps and self._game_steps[-1]["gid"] == gid
+                and "card" in self._game_steps[-1] else None)
 
         top = tb.Frame(card, bootstyle="dark")
         top.pack(fill="x")
@@ -4865,11 +4870,14 @@ class ToolkitApp:
 
         row = tb.Frame(card, bootstyle="dark")
         row.pack(fill="x")
-        rec = {"gid": gid, "step": step, "status": status}
+        rec = {"gid": gid, "step": step, "status": status,
+               "card": card, "prev_card": prev}
 
         if step.get("run"):
-            tb.Button(row, text="▶  Run step", bootstyle=SUCCESS,
-                      command=lambda: self._run_game_step(gid, step)).pack(side="left")
+            rec["run_btn"] = tb.Button(
+                row, text="▶  Run step", bootstyle=SUCCESS,
+                command=lambda: self._run_game_step(gid, step))
+            rec["run_btn"].pack(side="left")
         copy_txt = self._game_subst(gid, step["copy"]) if step.get("copy") else ""
         if copy_txt:
             tb.Button(row, text="⧉  Copy command", bootstyle=(INFO, "outline"),
@@ -4899,6 +4907,16 @@ class ToolkitApp:
 
         def work():
             for i, (gid, step, manual_done) in enumerate(snap):
+                gate = step.get("show_if")
+                if gate:
+                    try:
+                        if subprocess.run(["bash", "-c", self._game_subst(gid, gate)],
+                                          capture_output=True, text=True,
+                                          timeout=25).returncode != 0:
+                            self._games_q.put((i, "hidden"))
+                            continue
+                    except Exception:  # noqa: BLE001
+                        pass  # can't tell → fall through and show the step
                 chk = step.get("check")
                 if not chk:
                     state = ("manual-done" if manual_done
@@ -4929,8 +4947,26 @@ class ToolkitApp:
             pass
         self.root.after(200, self._poll_games_queue)
 
-    @staticmethod
-    def _apply_game_state(rec: dict, state: str) -> None:
+    @classmethod
+    def _apply_game_state(cls, rec: dict, state: str) -> None:
+        card = rec.get("card")
+        if state == "hidden":
+            rec["_hidden"] = True
+            try:
+                card.pack_forget()
+            except (tk.TclError, AttributeError):
+                pass
+            return
+        if rec.pop("_hidden", False) and card is not None:
+            kw = dict(cls._GAME_CARD_PACK)
+            prev = rec.get("prev_card")
+            if prev is not None and prev.winfo_exists():
+                kw["after"] = prev
+            try:
+                card.pack(**kw)
+            except tk.TclError:
+                pass
+
         txt, style = {
             "done": ("done ✓", SUCCESS),
             "manual-done": ("done ✓", SUCCESS),
@@ -4943,6 +4979,17 @@ class ToolkitApp:
             rec["status"].configure(text=txt, bootstyle=style)
         except tk.TclError:
             pass
+        # grey out a "Run step" button whose check already passes — e.g. the
+        # move-the-Proton-prefix step once this game's compatdata/<appid> prefix
+        # is on a Linux drive (already relocated, or never on NTFS/exFAT).
+        btn = rec.get("run_btn")
+        if btn is not None:
+            done = state in ("done", "manual-done")
+            try:
+                btn.configure(text="✓  Already done" if done else "▶  Run step",
+                              state=tk.DISABLED if done else tk.NORMAL)
+            except tk.TclError:
+                pass
 
     def _run_stream(self, desc: str, cmd: str, *, tag: str = "Setup Games") -> None:
         """Run one shell command under the busy overlay, streaming stdout to the

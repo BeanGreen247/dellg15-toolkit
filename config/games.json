@@ -46,6 +46,7 @@
         "title": "5b · Keep the Proton prefix off NTFS / exFAT",
         "desc": "If GTA V lives on an NTFS or exFAT drive (common for a shared Windows game library), Proton can't build its prefix there — creating the drive-letter links dies with 'OSError: [Errno 22] … dosdevices/s:' because those filesystems reject ':' in a filename (ntfs3 'windows_names'), so the game never starts. Run step keeps the game where it is but moves just AppID {APPID}'s prefix onto your Linux drive and symlinks it back. Close Steam / the game first, then re-launch to rebuild the prefix cleanly. No-op if the game is already on a Linux filesystem.",
         "check": "su - {USER} -c 'python3 {TOOLKIT_DIR}/tuxthrottle_prefix_relocate.py {APPID} --check'",
+        "show_if": "su - {USER} -c 'python3 {TOOLKIT_DIR}/tuxthrottle_prefix_relocate.py {APPID} --relevant'",
         "run": "su - {USER} -c 'python3 {TOOLKIT_DIR}/tuxthrottle_prefix_relocate.py {APPID}'"
       },
       {
@@ -149,6 +150,7 @@
         "title": "5b · Keep the Proton prefix off NTFS / exFAT",
         "desc": "If GTA III Definitive lives on an NTFS or exFAT drive (common for a shared Windows game library), Proton can't build its prefix there — creating the drive-letter links dies with 'OSError: [Errno 22] … dosdevices/s:' because those filesystems reject ':' in a filename (ntfs3 'windows_names'), so the game never starts. Run step keeps the game where it is but moves just AppID {APPID}'s prefix onto your Linux drive and symlinks it back. Close Steam / the game first, then re-launch to rebuild the prefix cleanly. No-op if the game is already on a Linux filesystem.",
         "check": "su - {USER} -c 'python3 {TOOLKIT_DIR}/tuxthrottle_prefix_relocate.py {APPID} --check'",
+        "show_if": "su - {USER} -c 'python3 {TOOLKIT_DIR}/tuxthrottle_prefix_relocate.py {APPID} --relevant'",
         "run": "su - {USER} -c 'python3 {TOOLKIT_DIR}/tuxthrottle_prefix_relocate.py {APPID}'"
       },
       {
@@ -232,6 +234,7 @@
         "title": "5b · Keep the Proton prefix off NTFS / exFAT",
         "desc": "If GTA Vice City Definitive lives on an NTFS or exFAT drive (common for a shared Windows game library), Proton can't build its prefix there — creating the drive-letter links dies with 'OSError: [Errno 22] … dosdevices/s:' because those filesystems reject ':' in a filename (ntfs3 'windows_names'), so the game never starts. Run step keeps the game where it is but moves just AppID {APPID}'s prefix onto your Linux drive and symlinks it back. Close Steam / the game first, then re-launch to rebuild the prefix cleanly. No-op if the game is already on a Linux filesystem.",
         "check": "su - {USER} -c 'python3 {TOOLKIT_DIR}/tuxthrottle_prefix_relocate.py {APPID} --check'",
+        "show_if": "su - {USER} -c 'python3 {TOOLKIT_DIR}/tuxthrottle_prefix_relocate.py {APPID} --relevant'",
         "run": "su - {USER} -c 'python3 {TOOLKIT_DIR}/tuxthrottle_prefix_relocate.py {APPID}'"
       },
       {
@@ -315,6 +318,7 @@
         "title": "5b · Keep the Proton prefix off NTFS / exFAT",
         "desc": "If GTA San Andreas Definitive lives on an NTFS or exFAT drive (common for a shared Windows game library), Proton can't build its prefix there — creating the drive-letter links dies with 'OSError: [Errno 22] … dosdevices/s:' because those filesystems reject ':' in a filename (ntfs3 'windows_names'), so the game never starts. Run step keeps the game where it is but moves just AppID {APPID}'s prefix onto your Linux drive and symlinks it back. Close Steam / the game first, then re-launch to rebuild the prefix cleanly. No-op if the game is already on a Linux filesystem.",
         "check": "su - {USER} -c 'python3 {TOOLKIT_DIR}/tuxthrottle_prefix_relocate.py {APPID} --check'",
+        "show_if": "su - {USER} -c 'python3 {TOOLKIT_DIR}/tuxthrottle_prefix_relocate.py {APPID} --relevant'",
         "run": "su - {USER} -c 'python3 {TOOLKIT_DIR}/tuxthrottle_prefix_relocate.py {APPID}'"
       },
       {
