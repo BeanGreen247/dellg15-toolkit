@@ -23,8 +23,16 @@ Usage:
     tuxthrottle_shadercache.py show [--json]
     tuxthrottle_shadercache.py set <dir> [--size GB]
     tuxthrottle_shadercache.py link-steam [--undo]
+    tuxthrottle_shadercache.py rebuild [all|<AppID>]
+    tuxthrottle_shadercache.py steam-bg-shaders {on|off|status}
     tuxthrottle_shadercache.py clean [mesa-shader-cache|dxvk-state-cache|
                                        nv-shader-cache|steam-shadercache|all]
+
+`rebuild` deletes **Steam's** shader cache only (the fossilize cache in
+`steamapps/shadercache`) so Steam regenerates it from scratch on the next
+launch — the Mesa / DXVK / NVIDIA caches are left untouched; `steam-bg-shaders
+off` unticks Steam's "Allow background processing of Vulkan shaders" (stops the
+`fossilize_replay` background compiles). Both refuse while Steam is running.
 
 Run as the real user (not root); `link-steam` / `clean` refuse while Steam
 is running. Nothing here is required — cleaning in particular is optional,
@@ -36,8 +44,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from tuxthrottle_prefix_relocate import all_libraries, steam_running
@@ -278,6 +288,148 @@ def unlink_steam_shadercache() -> tuple[bool, str]:
     return True, "restored: " + ", ".join(restored)
 
 
+def _all_steam_shadercache_dirs() -> list[Path]:
+    """Every `steamapps/shadercache` across all libraries + our own
+    steam-shadercache folder (the symlink target). De-duplicated by resolved
+    path so a linked library isn't wiped twice."""
+    dirs = [cache_dir() / "steam-shadercache"]
+    root = _find_steam_root()
+    if root is not None:
+        for lib in all_libraries(root):
+            sc = lib / "steamapps" / "shadercache"
+            if sc.exists() or sc.is_symlink():
+                dirs.append(sc)
+    seen, out = set(), []
+    for d in dirs:
+        try:
+            key = d.resolve()
+        except OSError:
+            key = d
+        if key not in seen:
+            seen.add(key)
+            out.append(d)
+    return out
+
+
+def _empty_dir(d: Path) -> bool:
+    if not d.is_dir():
+        return False
+    for child in d.iterdir():
+        try:
+            shutil.rmtree(child) if child.is_dir() and not child.is_symlink() else child.unlink()
+        except OSError:
+            pass
+    return True
+
+
+def rebuild(target: str = "all") -> tuple[bool, str]:
+    """Force a clean rebuild of **Steam's** Vulkan pipeline / shader cache by
+    deleting it — the fossilize cache in `steamapps/shadercache` (and our
+    `steam-shadercache` folder it's linked to) — so Steam regenerates it on
+    the next launch. Leaves the Mesa / DXVK / NVIDIA caches alone.
+
+    `target` is 'all' or a numeric Steam AppID. Refuses while Steam is
+    running (it keeps its shader cache open). Only ever deletes inside a
+    `steamapps/shadercache` / `steam-shadercache` folder — never a game
+    install or a prefix.
+    """
+    if steam_running():
+        return False, "close Steam first (it keeps its shader cache open)"
+
+    ensure_dirs()
+
+    if target and target != "all":
+        if not str(target).isdigit():
+            return False, f"target must be 'all' or a numeric AppID (got {target!r})"
+        hit = 0
+        for scdir in _all_steam_shadercache_dirs():
+            appdir = scdir / str(target)
+            if appdir.exists() or appdir.is_symlink():
+                try:
+                    shutil.rmtree(appdir) if appdir.is_dir() and not appdir.is_symlink() \
+                        else appdir.unlink()
+                    hit += 1
+                except OSError:
+                    pass
+        if hit:
+            return True, (f"cleared Steam's shader cache for AppID {target} "
+                          f"({hit} location{'s' if hit != 1 else ''}); Steam rebuilds "
+                          f"it on the next launch")
+        return True, f"no Steam shader cache found for AppID {target} — nothing to do"
+
+    cleared = []
+    for scdir in _all_steam_shadercache_dirs():
+        if _empty_dir(scdir):
+            cleared.append(str(scdir))
+    if not cleared:
+        return True, "Steam's shader cache was already empty"
+    return True, ("cleared " + ", ".join(cleared)
+                  + " — Steam rebuilds its shader cache on the next launch")
+
+
+# --- Steam "Allow background processing of Vulkan shaders" ---------------- #
+# config.vdf: InstallConfigStore/Software/Valve/Steam/ShaderCacheManager/
+#             EnableShaderBackgroundProcessing  ("1" = on, Steam's default)
+_STEAM_BG_KEY = "EnableShaderBackgroundProcessing"
+
+
+def _steam_config_vdf() -> Path | None:
+    root = _find_steam_root()
+    if root is None:
+        return None
+    p = root / "config" / "config.vdf"
+    return p if p.is_file() else None
+
+
+def steam_bg_shaders_status() -> str | None:
+    """'on' / 'off' / None (no Steam config found)."""
+    p = _steam_config_vdf()
+    if p is None:
+        return None
+    try:
+        m = re.search(rf'"{_STEAM_BG_KEY}"\s+"([01])"', p.read_text())
+    except OSError:
+        return None
+    if not m:
+        return "on"                        # key absent → Steam's default is on
+    return "on" if m.group(1) == "1" else "off"
+
+
+def set_steam_bg_shaders(enabled: bool) -> tuple[bool, str]:
+    """Tick / untick Steam → Settings → Downloads → 'Allow background
+    processing of Vulkan shaders'. Refuses while Steam runs (it rewrites
+    config.vdf on exit and would clobber the change); backs the file up."""
+    if steam_running():
+        return False, "close Steam first (it rewrites config.vdf on exit)"
+    p = _steam_config_vdf()
+    if p is None:
+        return False, "no Steam config.vdf found"
+    try:
+        txt = p.read_text()
+    except OSError as exc:
+        return False, f"cannot read {p}: {exc}"
+    want = "1" if enabled else "0"
+    pat = re.compile(rf'("{_STEAM_BG_KEY}"\s+")[01](")')
+    if pat.search(txt):
+        new = pat.sub(rf"\g<1>{want}\g<2>", txt, count=1)
+    else:
+        block = re.compile(r'("ShaderCacheManager"\s*\n\s*\{)')
+        if not block.search(txt):
+            return False, 'no "ShaderCacheManager" block in config.vdf to add the key to'
+        new = block.sub(rf'\g<1>\n\t\t\t\t\t"{_STEAM_BG_KEY}"\t\t"{want}"', txt, count=1)
+    if new == txt:
+        return True, f"already {'on' if enabled else 'off'}"
+    try:
+        p.with_name(p.name + f".tuxthrottle-bak-{int(time.time())}").write_text(txt)
+        tmp = p.with_name(p.name + ".tuxthrottle-tmp")
+        tmp.write_text(new)
+        os.replace(tmp, p)
+    except OSError as exc:
+        return False, f"write failed: {exc}"
+    return True, (f"background processing of Vulkan shaders → {'ON' if enabled else 'OFF'} "
+                  f"(restart Steam for it to take effect)")
+
+
 def clean(which: str = "all") -> tuple[bool, str]:
     if steam_running() and which in ("steam-shadercache", "all"):
         return False, "close Steam first (it may be writing to its shader cache)"
@@ -317,6 +469,15 @@ def main(argv=None) -> int:
     lc = sub.add_parser("link-check")
     lc.add_argument("--json", action="store_true")
 
+    rb = sub.add_parser("rebuild",
+                        help="delete Steam's shader cache so Steam rebuilds it clean")
+    rb.add_argument("target", nargs="?", default="all",
+                    help="'all' (default) or a numeric Steam AppID")
+
+    bg = sub.add_parser("steam-bg-shaders",
+                        help="Steam 'Allow background processing of Vulkan shaders'")
+    bg.add_argument("state", choices=["on", "off", "status"])
+
     cl = sub.add_parser("clean")
     cl.add_argument("what", nargs="?", default="all",
                     choices=[*SUBDIRS, "all"])
@@ -352,6 +513,18 @@ def main(argv=None) -> int:
             for x in stt["libs"]:
                 print(f"  [{x['state']:8}] {x['path']}  ({x['detail']})")
         return 0 if stt["ok"] else 1
+    if args.cmd == "rebuild":
+        ok, msg = rebuild(args.target)
+        print(msg)
+        return 0 if ok else 1
+    if args.cmd == "steam-bg-shaders":
+        if args.state == "status":
+            s = steam_bg_shaders_status()
+            print("unknown (no Steam config found)" if s is None else s)
+            return 0 if s is not None else 1
+        ok, msg = set_steam_bg_shaders(args.state == "on")
+        print(msg)
+        return 0 if ok else 1
     if args.cmd == "clean":
         ok, msg = clean(args.what)
         print(msg)

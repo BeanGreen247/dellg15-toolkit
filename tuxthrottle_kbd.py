@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import configparser
+import fcntl
 import glob
 import json
 import os
@@ -143,6 +144,45 @@ def _run_once(args: list[str], server: bool = True) -> str:
     return blob
 
 
+# --- single-flight locks -------------------------------------------------- #
+# The keyboard "flickers between the colour I set and the desktop-accent
+# colour" bug: three unrelated writers (`apply-saved` from the boot service,
+# the systemd-sleep hook and the tray, plus the GUI's own apply thread) can
+# all be pushing openrgb at the same time, so the last-write-wins race plays
+# out visibly for several seconds. Two flocks fix it — a fixed /tmp path so a
+# root boot service and the unprivileged tray share the same lock:
+#   * WRITE_LOCK  — held for the duration of each openrgb call in `_run`, so
+#     no two writes interleave.
+#   * REASSERT_LOCK — `apply-saved` takes this non-blocking and bails if held,
+#     so boot vs resume vs tray don't stack three re-assert storms, and a live
+#     GUI change isn't stomped by a stale re-assert.
+_WRITE_LOCK_PATH = "/tmp/tuxthrottle-kbd.write.lock"
+_REASSERT_LOCK_PATH = "/tmp/tuxthrottle-kbd.reassert.lock"
+
+
+def _take_lock(path: str, *, blocking: bool):
+    fd = None
+    for mode in ("a", "r"):
+        try:
+            fd = open(path, mode)  # noqa: SIM115 — held for the caller's lifetime
+            break
+        except OSError:
+            continue
+    if fd is None:
+        return None
+    flags = fcntl.LOCK_EX if blocking else (fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        fcntl.flock(fd.fileno(), flags)
+    except OSError:
+        fd.close()
+        return None
+    try:
+        os.chmod(path, 0o666)  # let the other UID re-lock it later
+    except OSError:
+        pass
+    return fd
+
+
 def _run(args: list[str]) -> str:
     """Apply an openrgb command, fast path first.
 
@@ -150,18 +190,27 @@ def _run(args: list[str]) -> str:
     scan (~4s) if there's no server. Then writes the same command a second
     time immediately — on this AW-ELC controller a lone write often doesn't
     'take' (keys flash the colour then go dark a beat later); the repeat
-    locks it in, with no artificial delay so the GUI stays snappy."""
-    server = True
+    locks it in, with no artificial delay so the GUI stays snappy.
+
+    The whole call holds WRITE_LOCK so a concurrent writer (a stale
+    `apply-saved` re-assert, the tray, the GUI thread) can't interleave and
+    make the keyboard strobe between two colours."""
+    lk = _take_lock(_WRITE_LOCK_PATH, blocking=True)
     try:
-        blob = _run_once(args, server=True)
-    except (ElcError, subprocess.TimeoutExpired):
-        server = False
-        blob = _run_once(args, server=False)
-    try:
-        _run_once(args, server=server)
-    except (ElcError, subprocess.TimeoutExpired):
-        pass
-    return blob
+        server = True
+        try:
+            blob = _run_once(args, server=True)
+        except (ElcError, subprocess.TimeoutExpired):
+            server = False
+            blob = _run_once(args, server=False)
+        try:
+            _run_once(args, server=server)
+        except (ElcError, subprocess.TimeoutExpired):
+            pass
+        return blob
+    finally:
+        if lk is not None:
+            lk.close()
 
 
 def restart_server() -> bool:
@@ -473,13 +522,28 @@ def main(argv: list[str] | None = None) -> int:
             meta = load_meta()
             zones, br = st
 
+            # If another re-assert (boot vs resume vs tray) or a live GUI apply
+            # is already running, don't pile a second colour storm on top — the
+            # newer writer wins, this stale one yields. (WRITE_LOCK in _run only
+            # stops mid-write interleave; this stops the overlap entirely.)
+            _guard = _take_lock(_REASSERT_LOCK_PATH, blocking=False)
+            if _guard is None:
+                print("another keyboard write is in progress — skipping re-assert")
+                return 0
+
+            # Resolve the accent ONCE up front — re-reading kdeglobals on every
+            # loop pass could catch Plasma mid-accent-change and assert two
+            # different colours in the same run.
+            _accent_target = None
+            if meta["mode"] == "accent":
+                _fallback = next(iter(zones.values()), (255, 255, 255))
+                _accent_target = accent_hex(_hexify(_fallback))
+
             def _assert_saved():
                 if meta["mode"] in ALL_EFFECTS:
                     set_effect(meta["mode"], meta.get("speed", 50), br)
                 elif meta["mode"] == "accent":
-                    # follow the *current* Plasma accent, not a frozen colour
-                    fallback = next(iter(zones.values()), (255, 255, 255))
-                    set_all(accent_hex(_hexify(fallback)), br)
+                    set_all(_accent_target, br)
                 else:
                     set_zones(zones, br)
 
@@ -506,10 +570,13 @@ def main(argv: list[str] | None = None) -> int:
                 print("warning: keyboard controller not detected yet — trying anyway",
                       file=sys.stderr)
 
+            # Two passes (was six): _run already double-writes each command, so
+            # 2×2 = 4 writes is plenty to make it stick, and a shorter window
+            # means far less chance of overlapping anything else.
             last = None
-            for i in range(6):
+            for i in range(2):
                 if i:
-                    time.sleep(2)
+                    time.sleep(1.5)
                 try:
                     _assert_saved()
                     last = None

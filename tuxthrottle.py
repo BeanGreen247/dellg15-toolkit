@@ -3639,6 +3639,114 @@ class ToolkitApp:
                 pass
         return base
 
+    def _build_steamperf_box(self, parent):
+        lf = tb.Labelframe(parent, text="Steam client — low-resource mode", padding=10)
+        lf.pack(fill="x", pady=6)
+        tb.Label(lf, bootstyle=SECONDARY, wraplength=1100, justify="left", text=(
+            "Runs the Steam client (not games) as light as it goes — most of "
+            "Steam's idle CPU/RAM/VRAM is its embedded Chromium UI. Adds launch "
+            "flags via a user-level launcher override "
+            "(~/.local/share/applications/steam.desktop, shadows the system "
+            "one; autostart entry patched too):  -silent (start to tray),  "
+            "-cef-disable-gpu + -cef-disable-gpu-compositing (no GPU accel in "
+            "the store/library/friends web views — the big one on this hybrid "
+            "GPU),  -cef-disable-breakpad / -cef-disable-extra-info-spew (no "
+            "crash reporter, quieter logs),  and -noverifyfiles / "
+            "-nobootstrapupdate / -norepairfiles (skip the file-scan + "
+            "self-update + repair passes each launch — Steam still re-verifies "
+            "on demand). It runs Steam in a systemd scope "
+            "with a SOFT memory limit (MemoryHigh=1200M — the kernel just "
+            "reclaims cache above that, it never kills anything), and flips "
+            "every low-resource setting Steam keeps in a file (needs Steam "
+            "closed): no auto Friends & Chat sign-in (that renderer never "
+            "spawns), no friends animations, and background Vulkan-shader "
+            "processing off (the Steam Overlay + screenshots are kept). A few "
+            "more toggles live "
+            "in Steam's own store and can't be scripted — Enable prints them "
+            "in the log for you to tick (Library → Low Bandwidth / Low "
+            "Performance Mode, Interface → smooth scrolling off, Downloads → "
+            "Shader Pre-Caching off). No hard MemoryMax at any tier (that "
+            "OOM-kills Steam); the “Aggressive” toggle adds the heavier CEF "
+            "flags. Takes effect next Steam start (quit fully + relaunch from "
+            "the menu). Trade-off: manual chat sign-in. The Steam Overlay and "
+            "screenshots stay working. The toggles below add a hidden-on-login "
+            "autostart entry and an opt-in aggressive flag set (bigger cut, "
+            "can break the client — Disable reverts).")).pack(anchor="w")
+        row = tb.Frame(lf); row.pack(anchor="w", fill="x", pady=(6, 0))
+        tb.Label(row, text="Low-resource mode:", bootstyle=SECONDARY).pack(side="left")
+        self._sp_lbl = tb.Label(row, bootstyle=SECONDARY, text="—")
+        self._sp_lbl.pack(side="left", padx=(4, 8))
+        self._tip(tb.Button(row, text="Enable", bootstyle=SUCCESS,
+                  command=lambda: self._sp_set(True)),
+                  "Write the lightweight Steam launcher override. Restart Steam "
+                  "after.").pack(side="left")
+        self._tip(tb.Button(row, text="Disable", bootstyle=(SECONDARY, "outline"),
+                  command=lambda: self._sp_set(False)),
+                  "Remove the override — Steam goes back to the stock launcher."
+                  ).pack(side="left", padx=6)
+        orow = tb.Frame(lf); orow.pack(anchor="w", fill="x", pady=(4, 0))
+        self._sp_autostart = tk.BooleanVar(value=True)
+        self._tip(tb.Checkbutton(orow, text="Autostart Steam hidden on login",
+                  variable=self._sp_autostart, bootstyle="round-toggle"),
+                  "If you have no Steam autostart entry, Enable creates one with "
+                  "-silent so Steam comes up on login straight to the tray "
+                  "(no window). Disable removes it again.").pack(side="left")
+        self._sp_aggr = tk.BooleanVar(value=False)
+        self._tip(tb.Checkbutton(orow, text="Aggressive (biggest cut, can break UI)",
+                  variable=self._sp_aggr, bootstyle="round-toggle"),
+                  "Also adds -cef-single-process / -no-cef-sandbox / -no-browser "
+                  "/ -disablehighdpi / -skipinitialbootstrap, plus MemoryHigh "
+                  "1000M and cgroup CPU/IO weights so the client yields to your "
+                  "game. Biggest RAM saving, but the CEF flags can give a "
+                  "blank/tiny UI or hide the library on some Steam builds — "
+                  "un-tick and re-Enable, or run `tuxthrottle_steamperf.py off` "
+                  "in a terminal. (An unmounted Steam-library drive looks the "
+                  "same — check that first.)").pack(side="left", padx=12)
+        self.root.after(5400, self._sp_refresh)   # well clear of the startup probe burst
+
+    def _sp_helper(self, args: str) -> str:
+        return self._user_py("tuxthrottle_steamperf.py", args)
+
+    def _sp_set(self, enable: bool):
+        if enable:
+            args = "on"
+            if getattr(self, "_sp_aggr", None) is not None and self._sp_aggr.get():
+                args += " --aggressive"
+            if getattr(self, "_sp_autostart", None) is not None \
+                    and not self._sp_autostart.get():
+                args += " --no-autostart"
+        else:
+            args = "off"
+        self._run_stream(f"Steam low-resource mode {args}",
+                         self._sp_helper(args), tag="Steam")
+        self.root.after(1500, self._sp_refresh)
+
+    def _sp_refresh(self):
+        self._sp_state = None
+        threading.Thread(target=self._sp_worker, daemon=True).start()
+        self.root.after(300, self._sp_poll)
+
+    def _sp_worker(self):
+        try:
+            _ok, _rc, out = run_cmd3(self._sp_helper("status"), timeout=15)
+            self._sp_state = (out or "").strip().splitlines()[-1] if out else "?"
+        except Exception:  # noqa: BLE001
+            self._sp_state = "?"
+
+    def _sp_poll(self):
+        st = getattr(self, "_sp_state", None)
+        if st is None:
+            self.root.after(300, self._sp_poll)
+            return
+        lbl = getattr(self, "_sp_lbl", None)
+        if lbl is not None:
+            base = st.split("+")[0]
+            style = {"on": SUCCESS, "aggressive": WARNING}.get(base, SECONDARY)
+            txt = {"on": "ON", "off": "OFF", "aggressive": "ON (aggressive)"}.get(base, st)
+            if "+autostart" in st:
+                txt += " · autostart"
+            lbl.configure(text=txt, bootstyle=style)
+
     def _build_shadercache_box(self, parent):
         lf = tb.Labelframe(parent, text="Shader / pipeline cache storage", padding=10)
         lf.pack(fill="x", pady=6)
@@ -3715,8 +3823,36 @@ class ToolkitApp:
                   "Empty every shader cache under this folder. Optional — the "
                   "caches rebuild on next launch (first run of each game will "
                   "stutter). Close Steam first.").pack(side="left", padx=6)
-        self.root.after(400, self._sc_refresh_sizes)
-        self.root.after(900, self._sc_link_check)     # surface broken links on open
+
+        rbrow = tb.Frame(lf); rbrow.pack(anchor="w", fill="x", pady=(8, 0))
+        self._tip(tb.Button(rbrow, text="Force-rebuild Steam's shader cache",
+                  bootstyle=(WARNING, "outline"), command=self._sc_rebuild),
+                  "Delete Steam's own shader cache (the fossilize cache in "
+                  "steamapps/shadercache) so Steam regenerates it from scratch "
+                  "on the next launch. Use after a driver update or a "
+                  "corrupt-cache stutter. The Mesa / DXVK / NVIDIA caches are "
+                  "left alone. Close Steam first.").pack(side="left")
+        bgrow = tb.Frame(lf); bgrow.pack(anchor="w", fill="x", pady=(4, 0))
+        tb.Label(bgrow, text="Steam background Vulkan shader processing:",
+                 bootstyle=SECONDARY).pack(side="left")
+        self._sc_bg_lbl = tb.Label(bgrow, bootstyle=SECONDARY, text="—")
+        self._sc_bg_lbl.pack(side="left", padx=(4, 8))
+        self._tip(tb.Button(bgrow, text="Turn OFF", bootstyle=(DANGER, "outline"),
+                  command=lambda: self._sc_bg_shaders(False)),
+                  "Untick Steam → Settings → Downloads → “Allow background "
+                  "processing of Vulkan shaders” — stops the fossilize_replay "
+                  "background compiles that peg the CPU after every download. "
+                  "Close Steam first; restart Steam after.").pack(side="left")
+        self._tip(tb.Button(bgrow, text="Turn ON", bootstyle=(SECONDARY, "outline"),
+                  command=lambda: self._sc_bg_shaders(True)),
+                  "Re-enable Steam's background Vulkan shader processing."
+                  ).pack(side="left", padx=6)
+
+        # staggered + well after the startup hardware-probe / tweak-status burst,
+        # so this box's du / subprocess pollers never pile onto it
+        self.root.after(3000, self._sc_refresh_sizes)
+        self.root.after(3800, self._sc_link_check)     # surface broken links on open
+        self.root.after(4600, self._sc_bg_refresh)
 
     def _sc_link_check(self):
         self._sc_link_lbl.configure(text="link status: checking…", bootstyle=SECONDARY)
@@ -3886,6 +4022,56 @@ class ToolkitApp:
                          tag="Cache")
         self.root.after(2500, self._sc_refresh_sizes)
 
+    def _sc_rebuild(self):
+        if not messagebox.askyesno(
+                "Force-rebuild Steam's shader cache",
+                "Delete Steam's own shader cache (the fossilize cache in "
+                "steamapps/shadercache) so Steam rebuilds it from scratch on "
+                "the next launch?\n\nThe Mesa / DXVK / NVIDIA caches are left "
+                "alone. The first run of each game will stutter while Steam's "
+                "cache refills. Close Steam first."):
+            return
+        self._run_stream("force-rebuild Steam shader cache",
+                         self._sc_helper("rebuild all"), tag="Cache")
+        self.root.after(2500, self._sc_refresh_sizes)
+
+    def _sc_bg_shaders(self, enable: bool):
+        verb = "Re-enable" if enable else "Disable"
+        if not messagebox.askyesno(
+                "Steam background shader processing",
+                f"{verb} Steam's “Allow background processing of Vulkan "
+                f"shaders”?\n\nClose Steam first — it rewrites config.vdf on "
+                f"exit. Restart Steam afterwards for it to take effect."):
+            return
+        self._run_stream(
+            f"steam background shaders {'on' if enable else 'off'}",
+            self._sc_helper(f"steam-bg-shaders {'on' if enable else 'off'}"),
+            tag="Cache")
+        self.root.after(2500, self._sc_bg_refresh)
+
+    def _sc_bg_refresh(self):
+        self._sc_bg_state = None
+        threading.Thread(target=self._sc_bg_worker, daemon=True).start()
+        self.root.after(300, self._sc_bg_poll)
+
+    def _sc_bg_worker(self):
+        try:
+            _ok, _rc, out = run_cmd3(self._sc_helper("steam-bg-shaders status"),
+                                     timeout=15)
+            self._sc_bg_state = (out or "").strip().splitlines()[-1] if out else "?"
+        except Exception:  # noqa: BLE001
+            self._sc_bg_state = "?"
+
+    def _sc_bg_poll(self):
+        st = getattr(self, "_sc_bg_state", None)
+        if st is None:
+            self.root.after(300, self._sc_bg_poll)
+            return
+        lbl = getattr(self, "_sc_bg_lbl", None)
+        if lbl is not None:
+            style = SUCCESS if st == "off" else (WARNING if st == "on" else SECONDARY)
+            lbl.configure(text={"on": "ON", "off": "OFF"}.get(st, st), bootstyle=style)
+
     def _build_launch_opts_box(self, parent):
         lf = tb.Labelframe(parent, text="Steam / Lutris launch-options builder",
                            padding=10)
@@ -3913,6 +4099,9 @@ class ToolkitApp:
             "dxvk_cache": tk.BooleanVar(value=True),
             "dxvk_async": tk.BooleanVar(value=False),
             "proton_nolog": tk.BooleanVar(value=True),
+            # kernel ntsync (6.10+) — Proton 9+ uses it in place of e/fsync;
+            # lower overhead for CPU-bound games. Ignored where unsupported.
+            "ntsync": tk.BooleanVar(value=True),
             "anticheat": tk.BooleanVar(value=False),
         }
         self._lo_w = tk.StringVar(value="1920")
@@ -3933,6 +4122,10 @@ class ToolkitApp:
                            ("dxvk_async", "DXVK async shader compile (less stutter, "
                                           "can cause brief visual glitches)"),
                            ("proton_nolog", "Proton log off"),
+                           ("ntsync", "Proton ntsync (PROTON_USE_NTSYNC=1 — "
+                                      "lighter sync than esync/fsync for "
+                                      "CPU-bound games; needs Proton 9+ & "
+                                      "kernel 6.10+, ignored otherwise)"),
                            ("anticheat", "Anti-cheat safe — no injected Vulkan "
                                          "layers (MangoHud / vkBasalt / all "
                                          "implicit layers off)")):
@@ -4037,6 +4230,8 @@ class ToolkitApp:
             env.append("DXVK_ASYNC=1")
         if self._lo["proton_nolog"].get():
             env.append("PROTON_LOG=0")
+        if self._lo["ntsync"].get():
+            env.append("PROTON_USE_NTSYNC=1")
         anticheat = self._lo["anticheat"].get()
         if anticheat:
             env += ["MANGOHUD=0", "DISABLE_VKBASALT=1",
@@ -4546,6 +4741,8 @@ class ToolkitApp:
     def _mh_write_position(self, pos, ox, oy):
         """Clean-merge just position / offset_x / offset_y into the config,
         leaving cpu_text/gpu_text/etc. alone."""
+        if not self._mh_guard_global_preload():
+            return
         ok = self._mh_write_conf({
             "position": pos,
             "offset_x": str(ox) if ox else None,
@@ -4593,6 +4790,77 @@ class ToolkitApp:
 
     _MH_KEY_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)")
 
+    def _mh_global_preload_confs(self) -> list:
+        """environment.d files that force libMangoHud.so into EVERY process via
+        LD_PRELOAD — which drags the overlay layer into kwin_wayland /
+        plasmashell. Rewriting the live MangoHud.conf then crashes the desktop
+        (KWin SIGABRT → Plasma session reset → tray loses the power/battery
+        applets). This is the 'MangoHud Write relaunches my session' bug."""
+        import glob as _glob
+        try:
+            uhome = Path(pwd.getpwnam(self.user).pw_dir)
+        except (KeyError, Exception):  # noqa: BLE001
+            uhome = Path.home()
+        hits = []
+        for f in (_glob.glob(str(uhome / ".config" / "environment.d" / "*.conf"))
+                  + _glob.glob("/etc/environment.d/*.conf")):
+            try:
+                if re.search(r"^\s*LD_PRELOAD=\S*libMangoHud",
+                             Path(f).read_text(), re.M):
+                    hits.append(Path(f))
+            except OSError:
+                pass
+        return hits
+
+    def _mh_guard_global_preload(self) -> bool:
+        """True = ok to write the config; False = abort. If a global
+        LD_PRELOAD is present, offer to strip just that line (MANGOHUD=1 stays,
+        so games still show the overlay) before touching the live conf."""
+        confs = self._mh_global_preload_confs()
+        if not confs:
+            return True
+        try:
+            uhome = Path(pwd.getpwnam(self.user).pw_dir)
+        except (KeyError, Exception):  # noqa: BLE001
+            uhome = Path.home()
+        flist = "\n".join(f"  • {c}" for c in confs)
+        if not messagebox.askyesno(
+                "MangoHud is loaded into your whole desktop session",
+                "These files force MangoHud into every process with LD_PRELOAD, "
+                "including KWin and Plasma:\n\n" + flist +
+                "\n\nRewriting the overlay config while that is active can crash "
+                "the desktop — it comes back with no power/battery tray.\n\n"
+                "Remove the global LD_PRELOAD line now (MANGOHUD=1 stays, so games "
+                "keep the overlay), then log out and back in?\n\n"
+                "Yes = fix it and continue   ·   No = cancel this write"):
+            self._log("[MangoHud] write cancelled — global LD_PRELOAD still active")
+            return False
+        for c in confs:
+            try:
+                kept = [ln for ln in c.read_text().splitlines()
+                        if not re.match(r"\s*LD_PRELOAD=\S*libMangoHud", ln)]
+                body = "\n".join(kept).rstrip()
+                if body:
+                    c.write_text(body + "\n")
+                else:
+                    c.unlink()
+                if os.geteuid() == 0 and c.exists() and str(c).startswith(str(uhome)):
+                    try:
+                        pw = pwd.getpwnam(self.user)
+                        os.chown(c, pw.pw_uid, pw.pw_gid)
+                    except (KeyError, OSError):
+                        pass
+                self._log(f"[MangoHud] removed global LD_PRELOAD from {c}")
+            except OSError as exc:
+                self._log(f"[MangoHud] could not edit {c}: {exc}")
+                return False
+        messagebox.showinfo(
+            "Log out to finish",
+            "Global MangoHud LD_PRELOAD removed. Log out and back in so KWin / "
+            "Plasma restart without the overlay layer, then the config is safe "
+            "to edit.")
+        return True
+
     def _mh_write_conf(self, managed: dict) -> bool:
         """Rewrite the MangoHud config CLEANLY: every key appears once (last
         value wins), leading comments kept, blank lines / inline comments / junk
@@ -4639,14 +4907,19 @@ class ToolkitApp:
         out += [k if vals[k] is None else f"{k}={vals[k]}" for k in order]
         try:
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text("\n".join(out).rstrip() + "\n")
+            # Atomic replace, not an in-place truncate+write: MangoHud's live
+            # config watcher (inotify) must never see a half-written / empty
+            # file — a truncated read is one way the in-session layer chokes.
+            tmp = p.with_name(p.name + ".tuxthrottle-tmp")
+            tmp.write_text("\n".join(out).rstrip() + "\n")
             if os.geteuid() == 0:
                 pw = pwd.getpwnam(self.user)
-                for path in (p, p.parent):
+                for path in (tmp, p.parent):
                     try:
                         os.chown(path, pw.pw_uid, pw.pw_gid)
                     except OSError:
                         pass
+            os.replace(tmp, p)
         except (OSError, KeyError) as exc:
             self._log(f"[MangoHud] write failed: {exc}")
             return False
@@ -4691,6 +4964,8 @@ class ToolkitApp:
         return ",".join(str(i) for i in idxs) if len(set(idxs)) == n_gpu else fallback
 
     def _mh_apply(self):
+        if not self._mh_guard_global_preload():
+            return
         cpu = (self._mh_cpu_var.get() or "").strip()
         allgpu = [(v.get() or "").strip() for v in self._mh_gpu_vars]
         gpus = [g for g in allgpu if g and g != "detecting…"]
@@ -4744,6 +5019,8 @@ class ToolkitApp:
                   f"deduped, width={width or 'auto'})")
 
     def _mh_reset_conf(self):
+        if not self._mh_guard_global_preload():
+            return
         p = self._mh_conf_path()
         if not messagebox.askyesno(
                 "Reset MangoHud config",
@@ -4917,6 +5194,7 @@ class ToolkitApp:
                   "first. Blank AppID = every game.").pack(side="left")
 
         self._build_shadercache_box(frame)
+        self._build_steamperf_box(frame)
         self._build_launch_opts_box(frame)
         self._build_mangohud_box(frame)
         self._build_last_session_card(frame)
@@ -5843,11 +6121,11 @@ class ToolkitApp:
             ("Battery", "design-vs-full wear %, charge cycles, chemistry; a live Now card (charge, power flow, time-to-empty/full); the charge-limit control mirrored from Power & Limits; an Adaptive-Sync (VRR) status line"),
             ("VRAM", "live per-GPU video-memory bars + top consumers; a Regular/Medium/Extreme KWin budget that strips desktop eye-candy to shrink the compositor footprint (reversible to a captured baseline); a Free-VRAM action (AMD/Intel driver eviction + optional compositor restart); a desktop-GPU selector (KWIN_DRM_DEVICES); a dGPU runtime-power-management toggle"),
             ("Profiles", "capture / apply / delete named full-state bundles (profile, TDP, battery, NVIDIA limits, fan curve, refresh, hybrid GPU, keyboard); an automatic snapshot before every apply with per-row + latest rollback; a per-game auto-profile map and a time-of-day schedule run by the daemon"),
-            ("Presets", "one-click curated bundles of tweaks + app installs, plus a global “apply all recommended” button"),
+            ("Presets", "one-click curated bundles of tweaks + app installs — Safe Baseline, Competitive Gaming, Streaming Rig, Game Launchers, and Maximum Performance (aggressive: mitigations-off / PCIe-NVMe-latency kernel args, forced governors, NVIDIA max-PowerMizer + PAT/ReBAR, RADV-GPL GPU env, RT-priority IRQ threads, masked idle services — no fan/thermal changes) — plus a global “apply all recommended” button"),
             ("Updates", "nobara-sync wrapper (check / cli / install / fixups / repair) + per-manager dnf, Flatpak and fwupd sections and a Fedora-GPG-key fix; pending count tagged with the metadata age"),
             ("Setup Games", "per-game click-through walkthroughs (GTA V Online first) — each step has a status pill and either a streamed Run button or a manual Copy-command step"),
-            ("Game Tools", "any-game Steam/Proton helpers — Proton-prefix relocation off NTFS/exFAT, a save-game vault, one shared shader/pipeline-cache folder with Steam-link repair, a launch-options builder (MangoHud / gamemoderun / gamescope / PRIME / shader caches / anti-cheat-safe layer set), and a full MangoHud overlay editor (per-GPU fields, drag-to-place, Feral-GameMode status line, per-game configs)"),
-            ("Tweaks & Apps", "reversible system tweaks by category — Gaming, GPU, Power, Performance, KDE (13 Plasma 6 toggles), Stability — each with check/undo; plus one-directional native/Flatpak app installs with cross-manager “already installed” detection"),
+            ("Game Tools", "any-game Steam/Proton helpers — Proton-prefix relocation off NTFS/exFAT, a save-game vault, one shared shader/pipeline-cache folder with Steam-link repair plus a force-rebuild-Steam's-shader-cache button and a background-Vulkan-shader-processing switch, a Steam-client low-resource mode (CEF flags + a soft memory-cap systemd scope + no-auto-chat + hidden-on-login autostart, with an opt-in aggressive tier), a launch-options builder (MangoHud / gamemoderun / gamescope / PRIME / shader caches / ntsync / anti-cheat-safe layer set) with an Apply-to-every-game action, and a full MangoHud overlay editor (per-GPU fields, drag-to-place, Feral-GameMode status line, per-game configs)"),
+            ("Tweaks & Apps", "reversible system tweaks by category — Gaming, GPU, Power, Performance (curated + aggressive extras: mitigations-off / PCIe-NVMe kernel args, VM-writeback sysctls, NVIDIA aggressive module options, RADV-GPL GPU env, RT-priority IRQ threads, ananicy-cpp, idle-service masking, quiet-GameMode), KDE (14 Plasma 6 toggles), Stability — each with check/undo; plus one-directional native/Flatpak app installs with cross-manager “already installed” detection"),
             ("System tray", "an always-on PySide6 tray icon — left-click opens this window, middle-click toggles Game Mode, right-click shows live CPU/GPU readouts and quick actions; an About-tab toggle adds/removes it from login autostart"),
             ("tuxthrottled", "systemd daemon: closed-loop fan curve, AC↔battery auto-switch, per-game auto-profiles with a post-game summary, a time-of-day schedule, thermal-event notifications and fan-stall auto-recovery, and a root-only control socket the GUI + CLI write through"),
             ("tuxthrottlectl", "headless CLI (status / watch / get / set / profile / snapshot / rollback / gamemode / schedule / daemon / vram / collect-model, --json) for scripts, keybinds and ssh; routes through the daemon socket when it's up"),

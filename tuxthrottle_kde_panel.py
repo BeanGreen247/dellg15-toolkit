@@ -12,11 +12,14 @@ doesn't flush a stale in-memory copy back over the file.
   tuxthrottle_kde_panel.py clock-seconds  {on|off}
   tuxthrottle_kde_panel.py classic-menu   {on|off}
   tuxthrottle_kde_panel.py panel-floating {on|off}
+  tuxthrottle_kde_panel.py battery-tray   {on|off}
+  tuxthrottle_kde_panel.py launcher-power {on|off}
 """
 import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 APPLETS = "plasma-org.kde.plasma.desktop-appletsrc"
@@ -54,6 +57,93 @@ def _kwrite(cid: str, aid: str, group_chain: list[str], key: str, value):
     args += ["--key", key]
     args += ["--delete"] if value is None else [str(value)]
     subprocess.run(args, check=False)
+
+
+def _kread(groups: list[str], key: str) -> str:
+    args = ["kreadconfig6", "--file", APPLETS]
+    for g in groups:
+        args += ["--group", g]
+    args += ["--key", key]
+    r = subprocess.run(args, capture_output=True, text=True)
+    return (r.stdout or "").strip()
+
+
+def _csv(s: str) -> list[str]:
+    return [x for x in (p.strip() for p in s.split(",")) if x]
+
+
+def _stop_plasmashell() -> None:
+    """Fully stop plasmashell BEFORE editing the appletsrc — a running
+    plasmashell flushes its in-memory copy on exit and would clobber the edit
+    (the reason the first version of this 'did nothing'). main()'s trailing
+    restart_plasmashell() then brings it back up fresh."""
+    if subprocess.run(["systemctl", "--user", "stop",
+                       "plasma-plasmashell.service"],
+                      capture_output=True).returncode != 0:
+        subprocess.run(["kquitapp6", "plasmashell"], capture_output=True)
+    time.sleep(2)
+
+
+def systray_show(plugin: str, enable: bool) -> int:
+    """Force a system-tray item to 'Always shown' (enable) or back to 'auto'
+    (disable) by editing shownItems / hiddenItems on every
+    org.kde.plasma.systemtray applet.
+
+    The keys live in `[Containments][C][Applets][A][General]` — the same group
+    as `knownItems` / `extraItems` — NOT `[Configuration][General]` (writing
+    there is what the first version got wrong). plasmashell is stopped first so
+    it can't overwrite the file on the way down."""
+    applets = find_applets("org.kde.plasma.systemtray")
+    if not applets:
+        print("no system-tray applet in the panel config", file=sys.stderr)
+        return 0
+    _stop_plasmashell()
+    for cid, aid in applets:
+        base = ["Containments", cid, "Applets", aid, "General"]
+        shown = _csv(_kread(base, "shownItems"))
+        hidden = _csv(_kread(base, "hiddenItems"))
+        if enable:
+            if plugin not in shown:
+                shown.append(plugin)
+            hidden = [x for x in hidden if x != plugin]
+        else:
+            shown = [x for x in shown if x != plugin]
+        _kwrite(cid, aid, ["General"], "shownItems",
+                ",".join(shown) if shown else None)
+        _kwrite(cid, aid, ["General"], "hiddenItems",
+                ",".join(hidden) if hidden else None)
+        # scrub the wrong-group key an earlier build may have written
+        _kwrite(cid, aid, ["Configuration", "General"], "shownItems", None)
+        _kwrite(cid, aid, ["Configuration", "General"], "hiddenItems", None)
+    print(f"{plugin} -> {'always shown' if enable else 'auto'} "
+          f"in {len(applets)} system tray(s)")
+    return 0
+
+
+_LAUNCHER_PLUGINS = ("org.kde.plasma.kickoff", "org.kde.plasma.kicker",
+                     "org.kde.plasma.kickerdash")
+# the full session/power footer for the app launcher, in the usual order
+_SYSTEM_FAVORITES = ("suspend,hibernate,reboot,shutdown,lock-screen,"
+                     "logout,save-session,switch-user")
+
+
+def launcher_power(enable: bool) -> int:
+    """Restore the full power/session button row (Sleep, Hibernate, Restart,
+    Shut Down, Lock, Log Out, …) in the KDE application launcher — it goes to
+    just 'Log Out' when `systemFavorites` gets trimmed. plasmashell owns this
+    key, so stop it first or it writes the old value back on exit."""
+    targets = [(plug, cid, aid) for plug in _LAUNCHER_PLUGINS
+               for cid, aid in find_applets(plug)]
+    if not targets:
+        print("no application-launcher applet in the panel config", file=sys.stderr)
+        return 0
+    _stop_plasmashell()
+    for _plug, cid, aid in targets:
+        _kwrite(cid, aid, ["Configuration", "General"], "systemFavorites",
+                _SYSTEM_FAVORITES if enable else None)
+    print(f"launcher power buttons -> {'full set' if enable else 'default'} "
+          f"on {len(targets)} launcher(s)")
+    return 0
 
 
 def clock_seconds(enable: bool) -> int:
@@ -179,6 +269,10 @@ def main() -> int:
         rc = classic_menu(state)
     elif action == "panel-floating":
         rc = panel_floating(state)
+    elif action == "battery-tray":
+        rc = systray_show("org.kde.plasma.battery", state)
+    elif action == "launcher-power":
+        rc = launcher_power(state)
     else:
         print(f"unknown action: {action}", file=sys.stderr)
         return 2

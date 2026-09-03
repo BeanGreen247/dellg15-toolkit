@@ -394,7 +394,16 @@ Steam's own cache have no size knob). The box shows **three live sizes** —
 total, Steam's cache, and the rest (Mesa + DXVK + NVIDIA) — with a **↻
 Refresh** button; **Save location** and **Apply shader cache size** are
 separate buttons, and **Clean cache** is there but optional (the caches
-rebuild on next launch). A **Check links** button (auto-runs when you open the
+rebuild on next launch). **Force-rebuild Steam's shader cache** goes further
+for Steam specifically — it deletes Steam's own fossilize cache
+(`steamapps/shadercache`) so Steam regenerates it from scratch on the next
+launch (useful after a driver update or a corrupt-cache stutter; the Mesa /
+DXVK / NVIDIA caches are left alone; close Steam first). A **Steam background Vulkan shader
+processing** Off / On pair unticks (or re-ticks) Steam → *Settings →
+Downloads → "Allow background processing of Vulkan shaders"* — turning it off
+stops the `fossilize_replay` background compiles that peg the CPU after every
+download; it edits `config.vdf` (backed up first), so close Steam and restart
+it afterwards. A **Check links** button (auto-runs when you open the
 tab) verifies every Steam library's `steamapps/shadercache` symlink still
 points at this folder — a link left **dangling** (e.g. after moving the cache
 folder) makes Steam fail every download / verify with **"disk write error"**;
@@ -404,6 +413,52 @@ launch-options builder and the `NvidiaShaderCache` tweak both read this
 location; changing it doesn't rewrite launch options already pasted into a game
 — regenerate and re-paste those. All the `du` / directory work runs off the UI
 thread so a big or cold cache drive never freezes the window.
+
+A **Steam client — low-resource mode** box makes the Steam *client* (not
+games) as light as possible: **Enable** writes a user-level launcher override
+(`~/.local/share/applications/steam.desktop`, which shadows the system one,
+and patches the autostart entry) that starts Steam with `-silent`
+(straight to the tray) plus the safe CEF flags — `-cef-disable-gpu`,
+`-cef-disable-gpu-compositing`, `-cef-disable-breakpad`,
+`-cef-disable-extra-info-spew` — which stop Steam's embedded Chromium UI (its
+main source of idle CPU / RAM / VRAM) from GPU-compositing the
+store/library/friends views, and `-noverifyfiles` / `-nobootstrapupdate` /
+`-norepairfiles`, which skip the file-scan, self-update and repair passes Steam
+runs on every launch (it still re-verifies on demand if it finds corruption). The patched launcher also
+runs Steam in a `systemd` scope with a **soft** memory limit
+(`systemd-run --user --scope -p MemoryHigh=1200M`): above ~1.2 GB the kernel
+just reclaims cache harder so Chromium sheds its own caches — nothing is ever
+killed. And it flips **every low-resource setting Steam keeps in a file** (each
+`userdata/*/config/localconfig.vdf` + `config/config.vdf`; needs Steam closed —
+re-run Enable with Steam shut if it says so): no auto Friends & Chat sign-in
+(*SignIntoFriends = 0* — that renderer alone is a few hundred MB), no friends
+animations, and background Vulkan-shader processing off (the Steam Overlay and
+screenshots are left on). A few more toggles live in Steam's own internal
+store and can't be scripted — **Enable prints them in the log**: Library → *Low
+Bandwidth Mode* + *Low Performance Mode*, Interface → smooth scrolling off,
+Downloads → Shader Pre-Caching off. **Disable** removes the override, restores
+autostart, and flips the localconfig keys back (it leaves the background-shader
+setting alone — that has its own toggle).
+
+It uses only the levers that don't break the client: `-cef-single-process`,
+`-no-cef-sandbox`, `-no-browser` and a hard `MemoryMax` are deliberately *not*
+used — those gave a blank/broken client or OOM-killed Steam. This only affects
+Steam **launched from the application menu or autostart** — a Steam that's
+already running, or one started from a pinned taskbar icon (KDE caches that
+launcher's own command), keeps the old behaviour, so **fully quit Steam and
+relaunch it from the menu** after enabling. Trade-off: you sign into chat
+manually (the Steam Overlay and screenshots keep working).
+
+Two extra toggles in the box: **Autostart Steam hidden on login** (default on)
+— if you have no Steam autostart entry, Enable creates one carrying `-silent`
+so Steam comes up on login straight to the tray with no window; Disable removes
+it. And **Aggressive** (default off) — layers on `-cef-single-process`,
+`-no-cef-sandbox`, `-no-browser`, `-disablehighdpi`, `-skipinitialbootstrap`,
+drops `MemoryHigh` to 1000 MB and adds cgroup CPU/IO weights so the client
+yields to your game, for a bigger RAM cut. The CEF flags can give a blank /
+tiny UI, hide the library, or fail sign-in on some Steam builds — un-tick and
+re-Enable, or run `tuxthrottle_steamperf.py off` in a terminal. (An unmounted
+Steam-library drive looks the same — check that first.)
 
 A **launch-options builder** ticks together a Steam/Lutris launch-options
 string: MangoHud, Feral GameMode, gamescope (+ resolution/fps cap), NVIDIA
@@ -449,7 +504,14 @@ column is just "42 %" instead of "65.5 W"). MangoHud's own auto-width doesn't
 grow for a long custom label, so it would otherwise clip; re-hit Write after
 changing a name or a toggle. **Reset config** rebuilds
 the file from scratch — styling + keybind + the current toggles/names/position,
-old file kept as `.bak`.
+old file kept as `.bak`. Writes are **atomic** (temp file + rename) so
+MangoHud's live config watcher never sees a half-written file. If you enabled
+MangoHud globally via a `LD_PRELOAD=…libMangoHud.so` line in
+`~/.config/environment.d/` (older versions of the *MangoHud Global On/Off*
+tweak did this), that forces the overlay into KWin and Plasma themselves, and
+editing the config here would crash the desktop — the app now detects that
+line and offers to remove it (leaving `MANGOHUD=1`, which is all games need);
+log out and back in afterwards.
 
 A **Last game session** card shows the daemon's post-game summary (max temps,
 avg clocks, throttle %).
@@ -699,12 +761,27 @@ the curated kernel cmdline; `PowerProfileScripts` / `RyzenAdjTDP` /
 Tweaks)**. `RyzenCurveOptimizer` is *not* recommended-by-default — it's opt-in
 and stress-tested on demand.
 
-- **Presets tab** — Safe Baseline, Competitive Gaming, Streaming Rig: one
-  button applies a curated bundle. Plus **★ Apply all recommendations** —
-  applies every item the developer marked `recommended` across all categories
-  in one pass and offers to enable the background daemon (snapshot first).
+- **Presets tab** — Safe Baseline, Competitive Gaming, Streaming Rig,
+  **Maximum Performance (aggressive)**: one button applies a curated bundle.
+  *Maximum Performance* piles on the spicy stuff — `mitigations=off` +
+  PCIe/NVMe-latency + iGPU-PowerPlay kernel args, bounded-writeback VM sysctls,
+  forced CPU performance governor, NVIDIA max-PowerMizer / PAT / ReBAR module
+  options, RADV GPL + glthread + low-render-ahead GPU env, KWin tearing/low
+  latency, quiet GameMode tuning, ananicy-cpp, masked idle services. **No
+  fan/thermal changes** — fans stay on the stock auto curve (the dGPU just
+  runs warmer on its own), and it does *not* bundle `IrqThreadsRt` (RT IRQ
+  scheduling — advanced/experiment only) or `SchedExtGaming` (the scx_lavd
+  scheduler, which hard-freezes this kernel). Several entries need a reboot;
+  every one is individually reversible. Plus **★ Apply all recommendations** — applies every item the
+  developer marked `recommended` across all categories in one pass and offers
+  to enable the background daemon (snapshot first).
 - **Stability** — the C-state freeze fix (and the alternative `idle=nomwait`),
-  `clocksource=tsc`.
+  `clocksource=tsc`, **NtfsForceMount** (adds `force` to every `ntfs3`
+  `/etc/fstab` line + `ntfsfix -d` so a drive Windows left "dirty" — Fast
+  Startup / hibernation — still mounts instead of vanishing on boot),
+  **KernelVerboseBoot** (drop `quiet splash`, add `loglevel=7` / `printk.time`
+  / `systemd.show_status` — the full scrolling boot log; display-only, no
+  extra disk writes).
 - **GPU** — NVIDIA driver check/install, EnvyControl (AMD+NVIDIA hybrid
   switching), CoreCtrl, ryzenadj, amdgpu/nvidia perf-state scripts,
   **NvidiaPowerLimit** (persist `nvidia-smi -pl` where the GPU allows it).
@@ -722,16 +799,25 @@ and stress-tested on demand.
   auto-profiles + thermal-event alerts + the control socket), **StateResume**
   (re-apply the last profile after suspend/reboot), **GameModeBridge** (wires
   Feral gamemode's start/end hooks to the toggle scripts).
-- **KDE (Desktop GUI Tweaks)** — 10 reversible Plasma-6 toggles (see the
+- **KDE (Desktop GUI Tweaks)** — 14 reversible Plasma-6 toggles (see the
   "Desktop tweaks" section): animations off, KWin gaming compositor, classic
   Application Menu, clock seconds, panel flush to the screen edge, screen edges
   off, activities/recent-docs off, thumbnail I/O limit, launch feedback off,
-  splash off.
+  splash off, KWallet off, Meta-key off, KWin tearing, **KdeAutoShowBattery**
+  (pin the Battery & Brightness tray icon to Always-shown) and
+  **KdeLauncherPowerButtons** (restore Sleep / Restart / Shut Down in the app
+  launcher when it drops to just Log Out).
 - **Performance** — USB autosuspend off, flat mouse accel, swappiness, zram
   tuning, KDE Baloo indexer off. Plus a curated **kernel-cmdline** set
   (`split_lock_detect=off`, `nowatchdog`, `preempt=full`, `threadirqs`, … —
   reboot required; the Intel-only / laptop-dangerous entries from typical
-  desktop lists are deliberately left out), optional `ipv6.disable=1`,
+  desktop lists are deliberately left out), and an opt-in **aggressive** set
+  on top — `KernelUltraCmdline` (`mitigations=off` + PCIe/NVMe-latency + iGPU
+  PowerPlay), `VmWritebackSysctl`, `NvidiaAggressiveModule` (PAT / ReBAR /
+  forced max PowerMizer — runs the dGPU hotter), `GpuGamingEnv` (RADV GPL +
+  glthread + low render-ahead), `ServiceMaskGaming`, `AnanicyCpp`,
+  `GameModeQuietIni`, and `IrqThreadsRt` (RT priority on GPU/NVMe IRQ threads
+  — **risky, not in any preset**). Optional `ipv6.disable=1`,
   **CpuMaxPerformance** (pin the `performance` governor at boot),
   **BtrfsNoatime**, **NvmeIoTune**, **WifiPowersaveOff**,
   **NetLatencySysctl** (BBR + fq + TCP Fast Open), **DnfSpeed** (parallel
