@@ -3665,13 +3665,11 @@ class ToolkitApp:
             "in Steam's own store and can't be scripted — Enable prints them "
             "in the log for you to tick (Library → Low Bandwidth / Low "
             "Performance Mode, Interface → smooth scrolling off, Downloads → "
-            "Shader Pre-Caching off). No hard MemoryMax at any tier (that "
-            "OOM-kills Steam); the “Aggressive” toggle adds the heavier CEF "
-            "flags. Takes effect next Steam start (quit fully + relaunch from "
+            "Shader Pre-Caching off). No hard MemoryMax (that OOM-kills "
+            "Steam). Takes effect next Steam start (quit fully + relaunch from "
             "the menu). Trade-off: manual chat sign-in. The Steam Overlay and "
-            "screenshots stay working. The toggles below add a hidden-on-login "
-            "autostart entry and an opt-in aggressive flag set (bigger cut, "
-            "can break the client — Disable reverts).")).pack(anchor="w")
+            "screenshots stay working. The toggle below adds a hidden-on-login "
+            "autostart entry; Disable reverts everything.")).pack(anchor="w")
         row = tb.Frame(lf); row.pack(anchor="w", fill="x", pady=(6, 0))
         tb.Label(row, text="Low-resource mode:", bootstyle=SECONDARY).pack(side="left")
         self._sp_lbl = tb.Label(row, bootstyle=SECONDARY, text="—")
@@ -3691,17 +3689,6 @@ class ToolkitApp:
                   "If you have no Steam autostart entry, Enable creates one with "
                   "-silent so Steam comes up on login straight to the tray "
                   "(no window). Disable removes it again.").pack(side="left")
-        self._sp_aggr = tk.BooleanVar(value=False)
-        self._tip(tb.Checkbutton(orow, text="Aggressive (biggest cut, can break UI)",
-                  variable=self._sp_aggr, bootstyle="round-toggle"),
-                  "Also adds -cef-single-process / -no-cef-sandbox / -no-browser "
-                  "/ -disablehighdpi / -skipinitialbootstrap, plus MemoryHigh "
-                  "1000M and cgroup CPU/IO weights so the client yields to your "
-                  "game. Biggest RAM saving, but the CEF flags can give a "
-                  "blank/tiny UI or hide the library on some Steam builds — "
-                  "un-tick and re-Enable, or run `tuxthrottle_steamperf.py off` "
-                  "in a terminal. (An unmounted Steam-library drive looks the "
-                  "same — check that first.)").pack(side="left", padx=12)
         self.root.after(5400, self._sp_refresh)   # well clear of the startup probe burst
 
     def _sp_helper(self, args: str) -> str:
@@ -3710,8 +3697,6 @@ class ToolkitApp:
     def _sp_set(self, enable: bool):
         if enable:
             args = "on"
-            if getattr(self, "_sp_aggr", None) is not None and self._sp_aggr.get():
-                args += " --aggressive"
             if getattr(self, "_sp_autostart", None) is not None \
                     and not self._sp_autostart.get():
                 args += " --no-autostart"
@@ -3741,8 +3726,8 @@ class ToolkitApp:
         lbl = getattr(self, "_sp_lbl", None)
         if lbl is not None:
             base = st.split("+")[0]
-            style = {"on": SUCCESS, "aggressive": WARNING}.get(base, SECONDARY)
-            txt = {"on": "ON", "off": "OFF", "aggressive": "ON (aggressive)"}.get(base, st)
+            style = {"on": SUCCESS}.get(base, SECONDARY)
+            txt = {"on": "ON", "off": "OFF"}.get(base, st)
             if "+autostart" in st:
                 txt += " · autostart"
             lbl.configure(text=txt, bootstyle=style)
@@ -6124,7 +6109,7 @@ class ToolkitApp:
             ("Presets", "one-click curated bundles of tweaks + app installs — Safe Baseline, Competitive Gaming, Streaming Rig, Game Launchers, and Maximum Performance (aggressive: mitigations-off / PCIe-NVMe-latency kernel args, forced governors, NVIDIA max-PowerMizer + PAT/ReBAR, RADV-GPL GPU env, RT-priority IRQ threads, masked idle services — no fan/thermal changes) — plus a global “apply all recommended” button"),
             ("Updates", "nobara-sync wrapper (check / cli / install / fixups / repair) + per-manager dnf, Flatpak and fwupd sections and a Fedora-GPG-key fix; pending count tagged with the metadata age"),
             ("Setup Games", "per-game click-through walkthroughs (GTA V Online first) — each step has a status pill and either a streamed Run button or a manual Copy-command step"),
-            ("Game Tools", "any-game Steam/Proton helpers — Proton-prefix relocation off NTFS/exFAT, a save-game vault, one shared shader/pipeline-cache folder with Steam-link repair plus a force-rebuild-Steam's-shader-cache button and a background-Vulkan-shader-processing switch, a Steam-client low-resource mode (CEF flags + a soft memory-cap systemd scope + no-auto-chat + hidden-on-login autostart, with an opt-in aggressive tier), a launch-options builder (MangoHud / gamemoderun / gamescope / PRIME / shader caches / ntsync / anti-cheat-safe layer set) with an Apply-to-every-game action, and a full MangoHud overlay editor (per-GPU fields, drag-to-place, Feral-GameMode status line, per-game configs)"),
+            ("Game Tools", "any-game Steam/Proton helpers — Proton-prefix relocation off NTFS/exFAT, a save-game vault, one shared shader/pipeline-cache folder with Steam-link repair plus a force-rebuild-Steam's-shader-cache button and a background-Vulkan-shader-processing switch, a Steam-client low-resource mode (CEF flags + a soft memory-cap systemd scope + no-auto-chat + hidden-on-login autostart), a launch-options builder (MangoHud / gamemoderun / gamescope / PRIME / shader caches / ntsync / anti-cheat-safe layer set) with an Apply-to-every-game action, and a full MangoHud overlay editor (per-GPU fields, drag-to-place, Feral-GameMode status line, per-game configs)"),
             ("Tweaks & Apps", "reversible system tweaks by category — Gaming, GPU, Power, Performance (curated + aggressive extras: mitigations-off / PCIe-NVMe kernel args, VM-writeback sysctls, NVIDIA aggressive module options, RADV-GPL GPU env, RT-priority IRQ threads, ananicy-cpp, idle-service masking, quiet-GameMode), KDE (14 Plasma 6 toggles), Stability — each with check/undo; plus one-directional native/Flatpak app installs with cross-manager “already installed” detection"),
             ("System tray", "an always-on PySide6 tray icon — left-click opens this window, middle-click toggles Game Mode, right-click shows live CPU/GPU readouts and quick actions; an About-tab toggle adds/removes it from login autostart"),
             ("tuxthrottled", "systemd daemon: closed-loop fan curve, AC↔battery auto-switch, per-game auto-profiles with a post-game summary, a time-of-day schedule, thermal-event notifications and fan-stall auto-recovery, and a root-only control socket the GUI + CLI write through"),

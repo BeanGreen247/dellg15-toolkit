@@ -442,23 +442,23 @@ setting alone — that has its own toggle).
 
 It uses only the levers that don't break the client: `-cef-single-process`,
 `-no-cef-sandbox`, `-no-browser` and a hard `MemoryMax` are deliberately *not*
-used — those gave a blank/broken client or OOM-killed Steam. This only affects
-Steam **launched from the application menu or autostart** — a Steam that's
+used — those gave a blank/broken client or OOM-killed Steam. (They were briefly
+offered as an opt-in **Aggressive** tier; on 2026-09-03 that tier was confirmed
+to crash-loop `steamwebhelper` — SIGTRAP in libcef roughly every 10 s, no
+usable client — on a current Steam build, and was removed. `--aggressive` on
+the CLI is now a no-op.) This only affects Steam **launched from the
+application menu or autostart** — a Steam that's
 already running, or one started from a pinned taskbar icon (KDE caches that
 launcher's own command), keeps the old behaviour, so **fully quit Steam and
 relaunch it from the menu** after enabling. Trade-off: you sign into chat
 manually (the Steam Overlay and screenshots keep working).
 
-Two extra toggles in the box: **Autostart Steam hidden on login** (default on)
+One extra toggle in the box: **Autostart Steam hidden on login** (default on)
 — if you have no Steam autostart entry, Enable creates one carrying `-silent`
 so Steam comes up on login straight to the tray with no window; Disable removes
-it. And **Aggressive** (default off) — layers on `-cef-single-process`,
-`-no-cef-sandbox`, `-no-browser`, `-disablehighdpi`, `-skipinitialbootstrap`,
-drops `MemoryHigh` to 1000 MB and adds cgroup CPU/IO weights so the client
-yields to your game, for a bigger RAM cut. The CEF flags can give a blank /
-tiny UI, hide the library, or fail sign-in on some Steam builds — un-tick and
-re-Enable, or run `tuxthrottle_steamperf.py off` in a terminal. (An unmounted
-Steam-library drive looks the same — check that first.)
+it. If Steam ever looks broken after Enable, first check your Steam-library
+drive is actually mounted — an unmounted library looks identical (no games) —
+then run `tuxthrottle_steamperf.py off` in a terminal.
 
 A **launch-options builder** ticks together a Steam/Lutris launch-options
 string: MangoHud, Feral GameMode, gamescope (+ resolution/fps cap), NVIDIA

@@ -20,11 +20,13 @@ levers — nothing that has been seen to break the client or get it OOM-killed:
 The last three only cut the CPU/I-O spike each time Steam starts — Steam still
 re-verifies on demand if it detects corruption. `off` removes them all.
 
-Never used at any tier: a hard MemoryMax (that OOM-kills Steam). The
---aggressive tier layers on the extra CEF flags below plus a mildly tighter
-soft memory limit (1200 → 1000 MB) and cgroup CPU/IO weights. If Steam looks
-broken with --aggressive: turn it off — but also check that your Steam-library
-drive is actually mounted, an unmounted library looks identical (no games).
+Never used: a hard MemoryMax (that OOM-kills Steam), and the CEF process
+flags -cef-single-process / -no-cef-sandbox / -no-browser. Those three were
+an opt-in "--aggressive" tier until 2026-09-03, when they were confirmed to
+crash-loop steamwebhelper (SIGTRAP in libcef roughly every 10 s, no usable
+UI) on a current Steam build — the tier was removed. If Steam still looks
+broken after `on`, check that your Steam-library drive is actually mounted;
+an unmounted library looks identical (no games).
 
 …the patched launcher also wraps Steam in a systemd scope with a **soft**
 memory limit only (`systemd-run --user --scope -p MemoryHigh=1200M`):
@@ -60,9 +62,9 @@ Autostart: if there's no `~/.config/autostart/steam.desktop`, `on` creates one
 never painting a window — `off` deletes the one it made. `--no-autostart`
 skips that.
 
-CLI:  tuxthrottle_steamperf.py on [--aggressive] [--no-autostart]
+CLI:  tuxthrottle_steamperf.py on [--no-autostart]
       tuxthrottle_steamperf.py {off|status}
-  (run as the real user; `status` → off / on / aggressive [+autostart])
+  (run as the real user; `status` → off / on [+autostart])
 """
 from __future__ import annotations
 
@@ -79,31 +81,18 @@ FLAGS = ("-silent -cef-disable-gpu -cef-disable-gpu-compositing "
          "-cef-disable-breakpad -cef-disable-extra-info-spew "
          "-noverifyfiles -nobootstrapupdate -norepairfiles")
 
-# Opt-in `--aggressive` layer. Biggest RAM cut, but every one of these has been
-# seen to give a blank/tiny UI, hide the library, or fail sign-in on some Steam
-# build — turn it off (or run `tuxthrottle_steamperf.py off`) if the client
-# misbehaves. (An unmounted Steam-library drive looks the same — check that
-# first.) On top of these flags the aggressive tier also runs a mildly tighter
-# soft memory limit + cgroup CPU/IO weights so the client yields to your game.
-#   -cef-single-process   one steamwebhelper instead of ~5   (biggest RAM cut)
-#   -no-cef-sandbox       makes -cef-single-process actually take effect
-#   -no-browser           drop the embedded store/community browser renderer
-#   -disablehighdpi       no HiDPI scaling in the UI (tiny text above 100% scale)
-#   -skipinitialbootstrap skip the bootstrap entirely
-AGGRESSIVE_FLAGS = ("-cef-single-process -no-cef-sandbox -no-browser "
-                    "-disablehighdpi -skipinitialbootstrap")
+# Removed 2026-09-03: an opt-in `--aggressive` layer that added
+# -cef-single-process / -no-cef-sandbox / -no-browser / -disablehighdpi /
+# -skipinitialbootstrap plus a tighter MemoryHigh and cgroup CPU/IO weights.
+# The three CEF process flags were confirmed to crash-loop steamwebhelper
+# (SIGTRAP in libcef every ~10 s, no usable client) on a current Steam build,
+# so the whole tier is gone. `--aggressive` is now a silently-deprecated
+# no-op on the CLI. Do not re-add these flags without per-build testing.
 
 # Soft memory pressure only. MemoryHigh throttles + makes the kernel reclaim
 # page cache above the threshold (Chromium sheds its caches) — it NEVER kills a
 # process. No MemoryMax (a hard cap is what OOM-kills Steam), no swap cap.
-MEM_HIGH_MB = 1200          # safe tier
-MEM_HIGH_AGGR_MB = 1000     # --aggressive tier (mild — 900 risked constant reclaim)
-
-# Extra cgroup weights for the --aggressive tier only. Both are cgroup-v2
-# *weights*: they change nothing while the CPU / disk are idle and only make
-# the Steam client yield to whatever else wants them (i.e. your game) under
-# contention. They cannot break or stall the client.
-_AGGR_SCOPE_PROPS = ("CPUWeight=50", "IOWeight=50")
+MEM_HIGH_MB = 1200
 
 
 def _scope_prefix(mem_high_mb: int, extra_props: tuple = ()) -> str:
@@ -312,15 +301,12 @@ def _base_desktop_body() -> str:
             "Categories=Network;FileTransfer;Game;\n")
 
 
-def enable(aggressive: bool = False, autostart: bool = True) -> tuple[bool, str]:
-    flags = FLAGS + (" " + AGGRESSIVE_FLAGS if aggressive else "")
-    mem = MEM_HIGH_AGGR_MB if aggressive else MEM_HIGH_MB
-    marker_val = "aggressive" if aggressive else "true"
-
-    scope_props = _AGGR_SCOPE_PROPS if aggressive else ()
+def enable(autostart: bool = True) -> tuple[bool, str]:
+    flags = FLAGS
+    mem = MEM_HIGH_MB
 
     def _patch(text: str) -> str:
-        return _stamp(_patch_exec_lines(text, flags, mem, scope_props), marker_val)
+        return _stamp(_patch_exec_lines(text, flags, mem, ()), "true")
 
     body = _patch(_base_desktop_body())
     dst = _user_desktop()
@@ -358,10 +344,7 @@ def enable(aggressive: bool = False, autostart: bool = True) -> tuple[bool, str]
     cap = (f"memory scope: MemoryHigh={mem}M (soft — reclaims, never kills)"
            if shutil.which("systemd-run") else "memory scope: (systemd-run absent — skipped)")
     hints = "\n".join(f"    • {h}" for h in MANUAL_HINTS)
-    lvl = ("AGGRESSIVE — extra CEF flags + MemoryHigh 1000M + CPU/IO weights; "
-           "if the UI breaks, run `… off` (and check the library drive is mounted)") \
-        if aggressive else "safe"
-    return True, (f"Steam low-resource mode ON [{lvl}] — " + ", ".join(did)
+    return True, ("Steam low-resource mode ON — " + ", ".join(did)
                   + "\n  " + cap
                   + "\n  client settings (no auto chat / no friends animations / "
                   "no bg shaders; overlay kept): " + "; ".join(settings)
@@ -409,15 +392,15 @@ def disable() -> tuple[bool, str]:
 
 
 def status() -> str:
-    """'off' / 'on' / 'aggressive' — plus '+autostart' when we created the
-    login entry."""
+    """'off' / 'on' — plus '+autostart' when we created the login entry.
+    A legacy 'X-TuxThrottle-LowResource=aggressive' marker also reads as 'on'."""
     dst = _user_desktop()
     try:
         if not (dst.is_file() and MARKER in dst.read_text()):
             return "off"
-        val = "aggressive" if f"{MARKER}=aggressive" in dst.read_text() else "on"
     except OSError:
         return "off"
+    val = "on"
     au = _autostart()
     try:
         if au.is_file() and "X-TuxThrottle-Created=true" in au.read_text():
@@ -431,8 +414,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("state", choices=["on", "off", "status"])
-    ap.add_argument("--aggressive", action="store_true",
-                    help="also apply the risky flags (may break the client)")
+    ap.add_argument("--aggressive", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--no-autostart", action="store_true",
                     help="don't create a hidden-Steam login entry if none exists")
     a = ap.parse_args(argv)
@@ -443,7 +425,10 @@ def main(argv=None) -> int:
         print(status())
         return 0
     if a.state == "on":
-        ok, msg = enable(aggressive=a.aggressive, autostart=not a.no_autostart)
+        if a.aggressive:
+            print("note: --aggressive was removed (it crash-looped steamwebhelper); "
+                  "enabling standard low-resource mode instead", flush=True)
+        ok, msg = enable(autostart=not a.no_autostart)
     else:
         ok, msg = disable()
     print(msg)
