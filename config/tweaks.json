@@ -1189,6 +1189,24 @@
     ],
     "recommended": true
   },
+  "SteamClientIgpu": {
+    "Content": "Steam: run the client on the iGPU (fixes steamwebhelper crash-loop)",
+    "Description": "Nobara/Fedora ship /usr/share/applications/steam.desktop with PrefersNonDefaultGPU=true + X-KDE-RunOnDiscreteGpu=true. On a muxless Optimus laptop (G15 5515 — the panel is wired to the iGPU) that launches the whole Steam *client* with the NVIDIA PRIME-offload environment, and the embedded-Chromium 'steamwebhelper' GPU subprocess then fails to initialise GL on the dGPU and aborts in a loop ('GPU process launch failed: error_code=1002 ... GPU process isn't usable. Goodbye.', SIGTRAP) — you get no usable Steam window, just DrKonqi crash dialogs. This writes a user-level ~/.local/share/applications/steam.desktop shadow forcing both keys false so the client renders on the iGPU. Individual games still PRIME-offload to the NVIDIA GPU via their own launch options — only the store/library/friends UI moves. Fully quit and relaunch Steam from the app menu after applying. Reversible (removes the shadow).",
+    "category": "Gaming",
+    "risk": "safe",
+    "requires_vendor": "nvidia",
+    "recommended": true,
+    "check": "grep -q 'X-TuxThrottle-SteamIgpu' /home/{USER}/.local/share/applications/steam.desktop 2>/dev/null || ! grep -q '^PrefersNonDefaultGPU=true' /usr/share/applications/steam.desktop 2>/dev/null",
+    "reinstall_if": [
+      "/home/{USER}/.local/share/applications/steam.desktop"
+    ],
+    "apply": [
+      "sudo -u {USER} -H python3 {TOOLKIT_DIR}/tuxthrottle_steamperf.py igpu-on"
+    ],
+    "undo": [
+      "sudo -u {USER} -H python3 {TOOLKIT_DIR}/tuxthrottle_steamperf.py igpu-off"
+    ]
+  },
   "KernelVerboseBoot": {
     "Content": "Verbose boot — show the scrolling kernel + systemd log",
     "Description": "Turns the boot into the classic full-detail scroll instead of the graphical splash. Drops 'quiet splash' and adds loglevel=7 (every kernel message on the console), printk.time=1 ([seconds] timestamp per line), systemd.show_status=1 + systemd.status_unit_format=combined (every 'Starting/Started <unit> - <description>' line), plymouth.enable=0. These only change what's DISPLAYED — kernel messages already live in a RAM ring buffer and systemd-journald captures the lot regardless, so there are no extra SSD writes. No disk encryption on this machine. Needs a reboot; fully reversible. Add 'systemd.log_level=debug' or 'debug' by hand for even more (that one does grow the journal).",

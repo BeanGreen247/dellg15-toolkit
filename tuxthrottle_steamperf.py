@@ -62,8 +62,16 @@ Autostart: if there's no `~/.config/autostart/steam.desktop`, `on` creates one
 never painting a window — `off` deletes the one it made. `--no-autostart`
 skips that.
 
+Separately, `igpu-on` / `igpu-off` write a user-level steam.desktop shadow that
+forces the Steam *client* onto the iGPU (`PrefersNonDefaultGPU=false`,
+`X-KDE-RunOnDiscreteGpu=false`) — the fix for the Nobara steam.desktop shipping
+those keys `true`, which on a muxless Optimus laptop makes `steamwebhelper`'s
+CEF GPU process crash-loop on the dGPU. Composes with low-resource mode (shared
+shadow file). Games still PRIME-offload via their own launch options.
+
 CLI:  tuxthrottle_steamperf.py on [--no-autostart]
       tuxthrottle_steamperf.py {off|status}
+      tuxthrottle_steamperf.py {igpu-on|igpu-off|igpu-status}
   (run as the real user; `status` → off / on [+autostart])
 """
 from __future__ import annotations
@@ -77,9 +85,25 @@ import time
 from pathlib import Path
 
 MARKER = "X-TuxThrottle-LowResource"
+IGPU_MARKER = "X-TuxThrottle-SteamIgpu"
 FLAGS = ("-silent -cef-disable-gpu -cef-disable-gpu-compositing "
          "-cef-disable-breakpad -cef-disable-extra-info-spew "
          "-noverifyfiles -nobootstrapupdate -norepairfiles")
+
+# Nobara / Fedora ship /usr/share/applications/steam.desktop with
+#   PrefersNonDefaultGPU=true
+#   X-KDE-RunOnDiscreteGpu=true
+# On a *muxless* Optimus laptop (G15 5515: panel wired to the iGPU) that makes
+# Plasma launch the whole Steam *client* with the NVIDIA PRIME-offload env
+# (__NV_PRIME_RENDER_OFFLOAD / __GLX_VENDOR_LIBRARY_NAME=nvidia /
+# __VK_LAYER_NV_optimus=NVIDIA_only / VK_LOADER_DRIVERS_SELECT=*nvidia*). The
+# CEF `steamwebhelper` GPU subprocess then fails to init GL on the dGPU and
+# aborts in a loop ("GPU process launch failed: error_code=1002 … GPU process
+# isn't usable. Goodbye.", SIGTRAP) — no usable Steam UI. The client only ever
+# needs the iGPU; individual games still PRIME-offload via their own launch
+# options. `igpu-on` writes a user-level shadow desktop entry forcing both keys
+# false; `igpu-off` removes it.
+_GPU_KEYS = ("PrefersNonDefaultGPU", "X-KDE-RunOnDiscreteGpu")
 
 # Removed 2026-09-03: an opt-in `--aggressive` layer that added
 # -cef-single-process / -no-cef-sandbox / -no-browser / -disablehighdpi /
@@ -301,12 +325,126 @@ def _base_desktop_body() -> str:
             "Categories=Network;FileTransfer;Game;\n")
 
 
+def _force_igpu_keys(text: str) -> str:
+    """Ensure `PrefersNonDefaultGPU=false` and `X-KDE-RunOnDiscreteGpu=false`
+    under [Desktop Entry] — rewrite an existing line, else insert one. Leaves
+    the steam:// action groups untouched (they carry no GPU keys)."""
+    lines = text.splitlines()
+    out: list[str] = []
+    seen = dict.fromkeys(_GPU_KEYS, False)
+    in_entry = False
+    for ln in lines:
+        s = ln.strip()
+        if s.startswith("[") and s.endswith("]"):
+            if in_entry:
+                for k, ok in seen.items():
+                    if not ok:
+                        out.append(f"{k}=false")
+                        seen[k] = True
+            in_entry = s == "[Desktop Entry]"
+            out.append(ln)
+            continue
+        key = s.split("=", 1)[0].strip() if "=" in s else ""
+        if in_entry and key in _GPU_KEYS:
+            out.append(f"{key}=false")
+            seen[key] = True
+        else:
+            out.append(ln)
+    if in_entry:
+        for k, ok in seen.items():
+            if not ok:
+                out.append(f"{k}=false")
+    return "\n".join(out) + ("\n" if text.endswith("\n") else "")
+
+
+def _stamp_key(text: str, marker: str, val: str = "true") -> str:
+    lines = [ln for ln in text.splitlines() if not ln.startswith(marker + "=")]
+    txt = "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+    return txt.replace("[Desktop Entry]\n", f"[Desktop Entry]\n{marker}={val}\n", 1)
+
+
+def enable_igpu() -> tuple[bool, str]:
+    """Write a user-level steam.desktop shadow that runs the Steam client on the
+    iGPU (discrete-GPU keys forced false). Independent of low-resource mode; if
+    that shadow already exists this just also flips its GPU keys."""
+    dst = _user_desktop()
+    if dst.is_file() and MARKER in dst.read_text():
+        body = _force_igpu_keys(dst.read_text())
+        body = _stamp_key(body, IGPU_MARKER, "true")
+        dst.write_text(body)
+        return True, (f"Steam client pinned to the iGPU (folded into the existing "
+                      f"low-resource shadow {dst}).\nFully quit Steam and relaunch "
+                      f"it from the application menu.")
+    body = _stamp_key(_force_igpu_keys(_base_desktop_body()), IGPU_MARKER, "true")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_text(body)
+    au = _autostart()
+    did = [str(dst)]
+    if au.is_file() and IGPU_MARKER not in au.read_text() and MARKER not in au.read_text():
+        bak = au.with_name(au.name + ".tuxthrottle-igpu-bak")
+        if not bak.exists():
+            bak.write_text(au.read_text())
+        au.write_text(_stamp_key(_force_igpu_keys(au.read_text()), IGPU_MARKER, "true"))
+        did.append(f"{au} (patched)")
+    return True, ("Steam client pinned to the iGPU — " + ", ".join(did)
+                  + "\n(games still PRIME-offload to the dGPU via their own launch "
+                  "options).\n\nFully QUIT Steam (tray → Quit) and relaunch it from "
+                  "the application menu — a running Steam, or one started from a "
+                  "pinned taskbar entry, keeps the old GPU assignment.")
+
+
+def disable_igpu() -> tuple[bool, str]:
+    done = []
+    dst = _user_desktop()
+    if dst.is_file() and IGPU_MARKER in dst.read_text():
+        if MARKER in dst.read_text():
+            # shared with low-resource mode — just drop our marker + restore the
+            # GPU keys to whatever the system file has (default: remove our lines)
+            txt = "\n".join(ln for ln in dst.read_text().splitlines()
+                            if not ln.startswith(IGPU_MARKER + "=")
+                            and ln.split("=", 1)[0].strip() not in _GPU_KEYS)
+            dst.write_text(txt + ("\n" if not txt.endswith("\n") else ""))
+            done.append(f"un-pinned GPU keys in {dst} (low-resource shadow kept)")
+        else:
+            dst.unlink()
+            done.append(f"removed {dst}")
+    au = _autostart()
+    bak = au.with_name(au.name + ".tuxthrottle-igpu-bak")
+    if bak.is_file():
+        au.write_text(bak.read_text())
+        bak.unlink()
+        done.append(f"restored {au}")
+    elif au.is_file() and IGPU_MARKER in au.read_text():
+        txt = "\n".join(ln for ln in au.read_text().splitlines()
+                        if not ln.startswith(IGPU_MARKER + "="))
+        au.write_text(txt + ("\n" if not txt.endswith("\n") else ""))
+        done.append(f"cleaned {au}")
+    if not done:
+        return True, "Steam client iGPU pin was not set — nothing to do"
+    return True, ("Steam client iGPU pin removed — " + "; ".join(done)
+                  + "\nRestart Steam for it to take effect.")
+
+
+def status_igpu() -> str:
+    for p in (_user_desktop(), _autostart()):
+        try:
+            if p.is_file() and IGPU_MARKER in p.read_text():
+                return "on"
+        except OSError:
+            pass
+    return "off"
+
+
 def enable(autostart: bool = True) -> tuple[bool, str]:
     flags = FLAGS
     mem = MEM_HIGH_MB
+    igpu = status_igpu() == "on"
 
     def _patch(text: str) -> str:
-        return _stamp(_patch_exec_lines(text, flags, mem, ()), "true")
+        t = _patch_exec_lines(text, flags, mem, ())
+        if igpu:
+            t = _stamp_key(_force_igpu_keys(t), IGPU_MARKER, "true")
+        return _stamp(t, "true")
 
     body = _patch(_base_desktop_body())
     dst = _user_desktop()
@@ -359,8 +497,15 @@ def disable() -> tuple[bool, str]:
     done = []
     dst = _user_desktop()
     if dst.is_file() and MARKER in dst.read_text():
-        dst.unlink()
-        done.append(f"removed {dst}")
+        if IGPU_MARKER in dst.read_text():
+            # keep the shadow alive for the iGPU pin — just strip low-resource
+            body = _stamp_key(_force_igpu_keys(_base_desktop_body()),
+                              IGPU_MARKER, "true")
+            dst.write_text(body)
+            done.append(f"stripped low-resource flags from {dst} (iGPU pin kept)")
+        else:
+            dst.unlink()
+            done.append(f"removed {dst}")
     au = _autostart()
     bak = au.with_name(au.name + ".tuxthrottle-bak")
     if au.is_file() and "X-TuxThrottle-Created=true" in au.read_text():
@@ -413,7 +558,8 @@ def status() -> str:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("state", choices=["on", "off", "status"])
+    ap.add_argument("state", choices=["on", "off", "status",
+                                      "igpu-on", "igpu-off", "igpu-status"])
     ap.add_argument("--aggressive", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--no-autostart", action="store_true",
                     help="don't create a hidden-Steam login entry if none exists")
@@ -424,6 +570,17 @@ def main(argv=None) -> int:
     if a.state == "status":
         print(status())
         return 0
+    if a.state == "igpu-status":
+        print(status_igpu())
+        return 0
+    if a.state == "igpu-on":
+        ok, msg = enable_igpu()
+        print(msg)
+        return 0 if ok else 1
+    if a.state == "igpu-off":
+        ok, msg = disable_igpu()
+        print(msg)
+        return 0 if ok else 1
     if a.state == "on":
         if a.aggressive:
             print("note: --aggressive was removed (it crash-looped steamwebhelper); "
