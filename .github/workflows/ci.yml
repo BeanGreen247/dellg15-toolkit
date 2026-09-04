@@ -60,7 +60,8 @@ jobs:
           mypy --ignore-missing-imports --no-error-summary \
             --disable-error-code=annotation-unchecked \
             sensors.py tuxthrottle_control.py tuxthrottle_modelgen.py \
-            tuxthrottlectl.py tuxthrottle_profiles.py tuxthrottle_powerd.py
+            tuxthrottlectl.py tuxthrottle_profiles.py tuxthrottle_powerd.py \
+            tuxthrottle_btrfs.py tuxthrottle_watchdog.py
 
   gui-smoke:
     runs-on: ubuntu-latest

@@ -62,7 +62,9 @@ try:
 except Exception:  # noqa: BLE001
     tuxthrottle_kbd = None
 
+import tuxthrottle_btrfs  # noqa: E402  (stdlib, filesystem snapshot-before-apply)
 import tuxthrottle_profiles  # noqa: E402  (stdlib, imports sensors)
+import tuxthrottle_watchdog  # noqa: E402  (stdlib, confirm-or-auto-revert timer)
 
 try:
     import tuxthrottle_vram  # noqa: E402  (stdlib, imports sensors)
@@ -6769,13 +6771,109 @@ class ToolkitApp:
         self._begin_busy("Applying selected tweaks / apps", steps=max(1, n))
         threading.Thread(target=self._apply_worker, args=(selected_ids,), daemon=True).start()
 
-    def _apply_worker(self, item_ids: list[str]):
-        # always leave a rollback point before a bulk change
+    # ---------- pre-apply snapshot + confirm-or-auto-revert watchdog ----------
+
+    def _pre_risky_snapshot(self, label: str) -> None:
+        """Config snapshot (always) + best-effort Btrfs filesystem snapshot
+        (only where the root is Btrfs with snapper configured — a no-op
+        elsewhere, never fatal). Call this at the start of every worker that
+        applies a batch of tweaks."""
         try:
-            snap = tuxthrottle_profiles.snapshot(label="pre-apply-selected")
+            snap = tuxthrottle_profiles.snapshot(label=label)
             self._log(f"[snapshot] pre-apply rollback point: {snap.name}")
         except Exception as exc:  # noqa: BLE001
             self._log(f"[snapshot] couldn't capture a rollback point: {exc}")
+        try:
+            res = tuxthrottle_btrfs.create_snapshot(label)
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[btrfs] snapshot attempt failed: {exc}")
+            return
+        if res["ok"]:
+            self._log(f"[btrfs] {res['msg']} — {tuxthrottle_btrfs.rollback_hint(res['id'])}")
+        else:
+            self._log(f"[btrfs] {res['msg']}")
+
+    def _arm_watchdog_if_risky(self, item_ids: list[str], seconds: int = 20) -> None:
+        """If any item in this batch is risk == 'advanced', arm the
+        confirm-or-auto-revert watchdog and pop a countdown dialog on the
+        main thread. The watchdog itself is an independent systemd timer —
+        it fires the rollback even if this GUI process locks up, which is
+        the whole point (see tuxthrottle_watchdog.py docstring)."""
+        risky = any(getattr(self.items.get(iid), "risk", "safe") == "advanced"
+                   for iid in item_ids)
+        if not risky:
+            return
+        try:
+            unit = tuxthrottle_watchdog.arm(seconds, user=self.user)
+        except RuntimeError as exc:
+            self._log(f"[watchdog] couldn't arm auto-revert timer: {exc}")
+            return
+        self._log(f"[watchdog] armed — auto-revert in {seconds}s unless confirmed")
+        self.root.after(0, self._show_revert_confirm, unit, seconds)
+
+    def _show_revert_confirm(self, unit: str, seconds: int) -> None:
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Confirm risky change")
+        dlg.transient(self.root)
+        dlg.grab_set()
+        dlg.resizable(False, False)
+        remaining = {"n": seconds}
+
+        tb.Label(dlg, padding=16, wraplength=360, justify="left", text=(
+            "A risky (ADVANCED) tweak was just applied. If the system looks "
+            "fine, click Keep. If anything is wrong, click Revert Now — "
+            "otherwise it reverts automatically when the countdown ends.")
+                 ).pack()
+        count_lbl = tb.Label(dlg, font=("Sans", 14, "bold"), bootstyle=WARNING,
+                             text=f"Auto-revert in {remaining['n']}s")
+        count_lbl.pack(pady=(0, 10))
+
+        def _finish(disarm: bool):
+            if disarm:
+                try:
+                    tuxthrottle_watchdog.disarm(unit)
+                except Exception:  # noqa: BLE001
+                    pass
+            try:
+                dlg.destroy()
+            except tk.TclError:
+                pass
+
+        def _revert_now():
+            try:
+                tuxthrottle_profiles.rollback("last", user=self.user)
+                self._log("[watchdog] user chose Revert Now — rolled back")
+            except Exception as exc:  # noqa: BLE001
+                self._log(f"[watchdog] revert-now failed: {exc}")
+            _finish(disarm=True)
+
+        def _keep():
+            self._log("[watchdog] user confirmed — keeping the change")
+            _finish(disarm=True)
+
+        btn_row = tb.Frame(dlg, padding=(0, 0, 0, 12))
+        btn_row.pack()
+        tb.Button(btn_row, text="Keep", bootstyle=SUCCESS, command=_keep
+                 ).pack(side="left", padx=8)
+        tb.Button(btn_row, text="Revert Now", bootstyle=DANGER, command=_revert_now
+                 ).pack(side="left", padx=8)
+
+        def _tick():
+            if not dlg.winfo_exists():
+                return
+            remaining["n"] -= 1
+            if remaining["n"] <= 0:
+                count_lbl.configure(text="Reverting…")
+                dlg.after(300, lambda: _finish(disarm=False))
+                return
+            count_lbl.configure(text=f"Auto-revert in {remaining['n']}s")
+            dlg.after(1000, _tick)
+
+        dlg.after(1000, _tick)
+
+    def _apply_worker(self, item_ids: list[str]):
+        # always leave a rollback point before a bulk change
+        self._pre_risky_snapshot("pre-apply-selected")
         n_skipped = 0
         done = 0
         for item_id in item_ids:
@@ -6804,6 +6902,7 @@ class ToolkitApp:
             self._log(f"[skipped {n_skipped} already-applied/installed item(s)]")
         self._log("=== Done. Click Refresh Status to confirm. ===")
         self._busy_queue.put("Done — refresh to confirm.")
+        self._arm_watchdog_if_risky(item_ids)
         threading.Thread(target=self._refresh_all_status, daemon=True).start()
 
     # ---------- per-section "developer-recommended" apply ----------
@@ -6914,11 +7013,7 @@ class ToolkitApp:
                          args=(ids, f"recommended-{cat}"), daemon=True).start()
 
     def _apply_ids_worker(self, item_ids: list[str], label: str):
-        try:
-            snap = tuxthrottle_profiles.snapshot(label=f"pre-{label}")
-            self._log(f"[snapshot] pre-apply rollback point: {snap.name}")
-        except Exception as exc:  # noqa: BLE001
-            self._log(f"[snapshot] couldn't capture a rollback point: {exc}")
+        self._pre_risky_snapshot(f"pre-{label}")
         done = 0
         for item_id in item_ids:
             item = self.items.get(item_id)
@@ -6931,6 +7026,7 @@ class ToolkitApp:
         self._progress(overall=done)
         self._log(f"=== Applied {done} recommended item(s). Refresh Status to confirm. ===")
         self._busy_queue.put(f"{label}: {done} applied — refresh to confirm.")
+        self._arm_watchdog_if_risky(item_ids)
         threading.Thread(target=self._refresh_all_status, daemon=True).start()
 
     def _on_apply_preset(self, preset_id: str):
@@ -6948,9 +7044,10 @@ class ToolkitApp:
         n = sum(1 for i in ids
                 if (it := self.items.get(i)) and it.hw_supported and not it.done)
         self._begin_busy(f"Applying preset — {preset['Content']}", steps=max(1, n))
-        threading.Thread(target=self._preset_worker, args=(ids,), daemon=True).start()
+        threading.Thread(target=self._preset_worker, args=(ids, preset_id), daemon=True).start()
 
-    def _preset_worker(self, item_ids: list[str]):
+    def _preset_worker(self, item_ids: list[str], preset_id: str = ""):
+        self._pre_risky_snapshot(f"pre-preset-{preset_id}" if preset_id else "pre-preset")
         done = 0
         for item_id in item_ids:
             item = self.items.get(item_id)
@@ -6967,6 +7064,7 @@ class ToolkitApp:
         self._progress(overall=done)
         self._log("=== Preset done. Click Refresh Status to confirm. ===")
         self._busy_queue.put("Preset done — refresh to confirm.")
+        self._arm_watchdog_if_risky(item_ids)
         threading.Thread(target=self._refresh_all_status, daemon=True).start()
 
 

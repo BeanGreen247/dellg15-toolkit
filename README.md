@@ -261,9 +261,18 @@ Capture the current state as a named profile, apply one with a click, or roll
 back.
 
 - **Automatic snapshots** — applying a profile, rolling back, or hitting
-  "Apply Selected" on the tweaks first drops a timestamped snapshot in
-  `~/.config/tuxthrottle/snapshots/` (newest 20 kept), so there is always a
-  known-good state to return to if something misbehaves.
+  "Apply Selected"/a preset/a recommended-set on the tweaks first drops a
+  timestamped config snapshot in `~/.config/tuxthrottle/snapshots/` (newest
+  20 kept), so there is always a known-good state to return to if something
+  misbehaves. On a Btrfs root with `snapper` configured, the same moment
+  also takes a real filesystem-level snapshot (see "Safety net" below) —
+  the config snapshot undoes TuxThrottle's own settings, the Btrfs one lets
+  you undo anything else the change touched.
+- **Confirm-or-auto-revert watchdog** — applying any tweak tagged ADVANCED
+  arms an independent countdown (systemd timer, not a thread in the GUI):
+  confirm within the window or it rolls back to the pre-apply snapshot on
+  its own, even if the change froze the GUI or the whole session. See
+  "Safety net" below.
 - **Per-game auto-profiles** — map an executable name (for Proton games, the
   Windows `.exe`) to a profile; the `tuxthrottle_powerd.py` daemon snapshots
   and applies it while the game runs, and restores it on exit. `*` matches
@@ -278,6 +287,35 @@ back.
 - **Suspend/resume** — the **StateResume** tweak re-applies the last applied
   state after a wake or reboot (TDP/battery/NVIDIA limits set directly don't
   always survive on their own).
+
+## Safety net (Btrfs snapshots + auto-revert watchdog)
+
+Two mechanisms layered on top of the config-snapshot system above, aimed
+squarely at the class of failure that can't just be undone by reapplying a
+JSON state — a kernel/boot-config change gone wrong, or a live change that
+locks the machine up before you get to click anything:
+
+- **Btrfs filesystem snapshot before a risky batch** (`tuxthrottle_btrfs.py`)
+  — if `/` is Btrfs and `snapper` is configured (config `root`), every
+  "Apply Selected" / preset / recommended-set run also takes a read-only
+  `snapper` snapshot, tagged `tuxthrottle: <label>`, before touching
+  anything. This module only *creates* snapshots — it never touches the
+  bootloader or the default subvolume itself; the log line after a risky
+  apply prints the exact `snapper rollback <N>` command to run (then
+  reboot) if you ever need it. On any other filesystem, or without
+  `snapper`, it's a silent no-op — nothing else about the apply flow
+  changes. CLI: `tuxthrottlectl btrfs-snapshot {available|create [desc]|list}`.
+- **Confirm-or-auto-revert watchdog** (`tuxthrottle_watchdog.py`) — the
+  pattern Windows/NVIDIA display-settings dialogs use: whenever a batch
+  includes an ADVANCED-tagged tweak, a transient systemd timer is armed
+  alongside a Keep / Revert Now countdown dialog. Click Keep and it's
+  cancelled; click Revert Now and it rolls back immediately; do nothing and
+  it reverts to the pre-apply snapshot on its own when the timer runs out.
+  Because the timer is an independent systemd unit (not a thread inside the
+  GUI process), it still fires the rollback even if the change itself
+  freezes the GUI or the desktop session — the exact failure mode a purely
+  in-app confirmation dialog can't survive. CLI:
+  `tuxthrottlectl watchdog {arm SECONDS --user NAME|disarm UNIT|status UNIT}`.
 
 ## Desktop tweaks (KDE Plasma 6)
 
@@ -609,11 +647,13 @@ no `models` key applies everywhere, which is every entry today. See
 - `hotkey_listener.py` — the G-key → Game Mode binding (needs `python3-evdev`)
 - `sensors.py` — shared sensor reads + Game Mode logic + CPU TDP (ryzenadj), battery, NVIDIA/hybrid-GPU helpers, **no GUI dependency**, used by everything below so they never disagree on state
 - `tuxthrottle_profiles.py` — stdlib: capture / apply / snapshot / rollback of named full-state profiles; used by the Profiles tab, the CLI, the daemon and the `StateResume` tweak
+- `tuxthrottle_btrfs.py` — stdlib: Btrfs/snapper filesystem snapshot-before-apply (create-only, never touches the bootloader); see "Safety net"
+- `tuxthrottle_watchdog.py` — stdlib: confirm-or-auto-revert systemd-timer watchdog for ADVANCED-tagged tweaks; see "Safety net"
 - `tuxthrottle_powerd.py` — stdlib daemon: closed-loop fan curve + AC/battery auto-switch (profile + TDP + panel refresh) + per-game auto-profiles + **time-of-day schedule** + **thermal-event alerts** + the **control socket** (installed by the **Fan-curve + AC-switch daemon** tweak)
 - `tuxthrottle_control.py` — stdlib: the newline-JSON RPC over `/run/tuxthrottle/control.sock` (server in the daemon, client in the GUI / `tuxthrottlectl`)
 - `tuxthrottle_co_stress.py` — stdlib, root: Ryzen Curve Optimizer undervolt with a stress-test-and-auto-revert harness (`apply` / `confirm` / `revert` / `reapply` / `status`)
 - `tuxthrottle_kde_panel.py` — stdlib helper for the panel-applet KDE tweaks (clock seconds, classic menu, panel-flush) — finds applet / panel containment IDs and restarts `plasmashell`
-- `tuxthrottlectl.py` — headless CLI over `sensors.py` + profiles (`status` / `get` / `set {power-profile,tdp,fan-boost,battery,nvpl,gpumode,refresh,gpu-clock}` / `profile` / `snapshot` / `rollback` / `gamemode` / `schedule` / `daemon`, `--json`), installed as `/usr/local/bin/tuxthrottlectl`
+- `tuxthrottlectl.py` — headless CLI over `sensors.py` + profiles (`status` / `get` / `set {power-profile,tdp,fan-boost,battery,nvpl,gpumode,refresh,gpu-clock}` / `profile` / `snapshot` / `rollback` / `gamemode` / `schedule` / `daemon` / `btrfs-snapshot` / `watchdog`, `--json`), installed as `/usr/local/bin/tuxthrottlectl`
 - `models/` — per-board hardware profiles keyed by DMI (`g15-5515.json` is the reference); `sensors.model_profile()` picks one, and a tweak/app can gate itself with `"models": [ ... ]`
 - `clients/` — optional panel front-ends: a **waybar** module and a **KDE plasmoid**, both over `tuxthrottlectl status --json`
 - `packaging/` — the noarch RPM `.spec` + `.github/workflows/copr.yml` (SRPM on tag → COPR)

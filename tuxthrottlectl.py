@@ -380,6 +380,18 @@ def main() -> int:
     rb.add_argument("target", nargs="?", default="last")
     rb.add_argument("--with-gpu-mode", action="store_true")
 
+    bf = sub.add_parser("btrfs-snapshot",
+                        help="Btrfs filesystem snapshot (snapper) before a risky change",
+                        add_help=False)
+    bf.add_argument("rest", nargs=argparse.REMAINDER,
+                    help="available | create [desc] | list [--limit N]")
+
+    wd = sub.add_parser("watchdog",
+                        help="confirm-or-auto-revert timer for a risky live change",
+                        add_help=False)
+    wd.add_argument("rest", nargs=argparse.REMAINDER,
+                    help="arm SECONDS --user NAME | disarm UNIT | status UNIT")
+
     dm = sub.add_parser("daemon", help="control-socket status / actions",
                         parents=[common])
     dm.add_argument("action", choices=["status", "ping", "reload"], nargs="?",
@@ -401,6 +413,12 @@ def main() -> int:
     if args.cmd == "vram":
         import tuxthrottle_vram as vram
         return vram.main(args.rest or ["status"])
+    if args.cmd == "btrfs-snapshot":
+        import tuxthrottle_btrfs as btrfs
+        return btrfs.main(args.rest or ["available"])
+    if args.cmd == "watchdog":
+        import tuxthrottle_watchdog as watchdog
+        return watchdog.main(args.rest)
     if args.cmd == "collect-model":
         import tuxthrottle_modelgen as modelgen
         return modelgen.main(
