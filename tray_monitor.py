@@ -133,6 +133,7 @@ class TrayMonitor:
         self.about_action = QAction(f"{APP_NAME} {APP_AUTHOR}", self.menu)
         self.about_action.triggered.connect(self._open_project_page)
         self.menu.addAction(self.about_action)
+        self.menu.addSeparator()
         self.open_action = QAction(f"Open {APP_NAME}", self.menu)
         _f = self.open_action.font()
         _f.setBold(True)
