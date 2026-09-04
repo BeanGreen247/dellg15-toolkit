@@ -24,6 +24,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import webbrowser
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -33,6 +34,7 @@ import sensors  # noqa: E402
 APP_NAME = "TuxThrottle"
 APP_BLURB = "Dell G15 power & gaming tuning"
 APP_AUTHOR = "by BeanGreen247"
+PROJECT_URL = "https://github.com/BeanGreen247/tuxthrottle"
 
 
 def _reassert_keyboard_rgb() -> None:
@@ -128,6 +130,9 @@ class TrayMonitor:
         self.menu = QMenu()
         # keep a ref on self — a parent-less QAction added to a QMenu is not
         # owned by it and would be GC'd out of the menu once __init__ returns
+        self.about_action = QAction(f"{APP_NAME} {APP_AUTHOR}", self.menu)
+        self.about_action.triggered.connect(self._open_project_page)
+        self.menu.addAction(self.about_action)
         self.open_action = QAction(f"Open {APP_NAME}", self.menu)
         _f = self.open_action.font()
         _f.setBold(True)
@@ -234,6 +239,12 @@ class TrayMonitor:
         ok, err = _launch_gui()
         if not ok:
             QMessageBox.warning(None, APP_NAME, f"Couldn't open the window:\n{err}")
+
+    def _open_project_page(self):
+        try:
+            webbrowser.open(PROJECT_URL)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _on_tray_activated(self, reason):
         Reason = QSystemTrayIcon.ActivationReason
