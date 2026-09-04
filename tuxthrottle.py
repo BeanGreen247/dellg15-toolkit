@@ -639,6 +639,21 @@ class SidebarNav(tb.Frame):
         elif not need and self._nav_vsb.winfo_ismapped():
             self._nav_vsb.pack_forget()
 
+    # A small monochrome-glyph icon per nav label — the one visual habit every
+    # peer tool researched (TuxedoControlCenter, asusctl/rog-control-center,
+    # LenovoLegionLinux/Legion-Linux-Toolkit, LACT) shares that this sidebar
+    # didn't: icon + label, not label alone. Plain Unicode symbols, not color
+    # emoji, matching the ★/↩/⇅ glyphs already used elsewhere in this GUI.
+    _NAV_ICONS = {
+        "Dashboard": "▦", "Keyboard": "⌨", "Touchpad": "▢", "Fans": "❄",
+        "Battery": "⏻", "VRAM": "▥", "Power & Limits": "⚡", "Display": "▭",
+        "Profiles": "❖", "Presets": "★", "Setup Games": "♦", "Game Tools": "⚙",
+        "Updates": "⬇", "About": "ℹ", "Report a Bug": "⚠",
+        # data-driven tweak categories (config/tweaks.json "category" values)
+        "Performance": "▲", "GPU": "◈", "Power": "☉", "Stability": "▣",
+        "Gaming": "♞", "KDE (Desktop GUI Tweaks)": "◧", "Software": "⬢",
+    }
+
     def add(self, frame, text: str = "", *, kind: str = "normal",
             spacer: bool = False, pin: bool = False):
         frame.master  # noqa: B018  (frame was created as tb.Frame(self); fine)
@@ -648,7 +663,9 @@ class SidebarNav(tb.Frame):
             self._rail_bottom_sep = tb.Separator(self._rail_bottom, orient="horizontal")
             self._rail_bottom_sep.pack(side="top", fill="x", padx=12, pady=(4, 2))
         base = "NavSupport.TButton" if kind == "support" else "Nav.TButton"
-        btn = tb.Button(parent, text=text, style=base,
+        icon = self._NAV_ICONS.get(text, "")
+        label = f"{icon}  {text}" if icon else text
+        btn = tb.Button(parent, text=label, style=base,
                         takefocus=False, command=lambda f=frame: self.select(f))
         btn.pack(side="top", fill="x", padx=0, pady=1)
         btn._nav_kind = kind  # noqa: SLF001
