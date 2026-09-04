@@ -729,7 +729,8 @@ or Competitive Gaming) or the toggle has nothing to call. The context menu
 also has **Power profile** (Balanced / Performance) and **Fan boost**
 (0 / 50 / 100 %) submenus, routed through `pkexec tuxthrottlectl` (the
 **PolkitTuxthrottlectl** tweak makes that passwordless for an active local
-user) or the daemon socket.
+user) or the daemon socket. The top of the menu is a "TuxThrottle by
+BeanGreen247" link to the GitHub repo, above "Open TuxThrottle".
 
 ```bash
 # needs PySide6: dnf install python3-pyside6   (or: pip install --user PySide6)
