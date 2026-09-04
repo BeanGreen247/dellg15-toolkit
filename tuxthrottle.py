@@ -1242,6 +1242,7 @@ class ToolkitApp:
         self._build_keyboard_tab()
         self._build_fan_tab()
         self._build_power_tab()
+        self._build_display_tab()
         self._build_battery_health_tab()
         self._build_vram_tab()
         self._build_profiles_tab()
@@ -2409,18 +2410,6 @@ class ToolkitApp:
                                variable=self._chg_mode, bootstyle="toolbutton",
                                command=self._apply_charge_mode).pack(side="left", padx=3)
 
-        # --- VRR / adaptive-sync (informational) ---
-        vrr = self._probe("vrr")
-        vf = tb.Frame(frame); vf.pack(fill="x", pady=(10, 0))
-        tb.Label(vf, text="Adaptive Sync", width=18, anchor="w").pack(side="left")
-        tb.Label(vf, bootstyle=SECONDARY,
-                 text=(f"{', '.join(vrr['capable'])} report VRR-capable — enable it "
-                       f"per-display in System Settings → Display, and apply the "
-                       f"KDE “allow tearing” tweak for lowest latency."
-                       if vrr["capable"]
-                       else "no VRR-capable panel detected on this system")
-                 ).pack(side="left")
-
         self._bath_live_on = True
         self._bath_poll()
 
@@ -2733,7 +2722,6 @@ class ToolkitApp:
         self._build_gpuclock_section(frame)
         self._build_gpumode_section(frame)
         self._build_battery_section(frame)
-        self._build_refresh_section(frame)
         self._build_autoswitch_section(frame)
 
         self._power_live = True
@@ -3016,6 +3004,30 @@ class ToolkitApp:
 
         threading.Thread(target=work, daemon=True).start()
 
+    # ---------- Display tab ----------
+    # Consolidates the panel-tuning controls that used to be scattered across
+    # Power & Limits (refresh rate) and Battery (VRR, as a buried info line)
+    # into one place — same idea as Legion-Linux-Toolkit's Display tab.
+
+    def _build_display_tab(self):
+        outer = tb.Frame(self.notebook)
+        self.notebook.add(outer, text="Display")
+        frame = self._scroll_body(outer, pad=16)
+        self._build_refresh_section(frame)
+        self._build_vrr_section(frame)
+
+    def _build_vrr_section(self, parent):
+        vrr = self._probe("vrr")
+        lf = tb.Labelframe(parent, text="Adaptive Sync (VRR)", padding=12)
+        lf.pack(fill="x", pady=6)
+        tb.Label(lf, bootstyle=SECONDARY, wraplength=1000, justify="left",
+                 text=(f"{', '.join(vrr['capable'])} report VRR-capable — enable it "
+                       f"per-display in System Settings → Display, and apply the "
+                       f"KDE “allow tearing” tweak (Gaming category) for lowest latency."
+                       if vrr["capable"]
+                       else "no VRR-capable panel detected on this system")
+                 ).pack(anchor="w")
+
     # --- Panel refresh rate (KDE / KScreen) ---
 
     def _build_refresh_section(self, parent):
@@ -3045,8 +3057,9 @@ class ToolkitApp:
             text=f"current: {round(cur)} Hz" if cur else "current: unknown")
         self._refresh_now.pack(anchor="w", pady=(6, 0))
         tb.Label(lf, wraplength=1000, justify="left", bootstyle=SECONDARY, text=(
-            "Tip: set the AC/battery auto-switch below to flip this with the "
-            "charger — “AC → 120 Hz, battery → 60 Hz”.")).pack(anchor="w", pady=(6, 0))
+            "Tip: the AC/battery auto-switch on the Power & Limits tab can flip "
+            "this with the charger — “AC → 120 Hz, battery → 60 Hz”.")
+                 ).pack(anchor="w", pady=(6, 0))
 
     def _refresh_apply(self, hz: int):
         def work():

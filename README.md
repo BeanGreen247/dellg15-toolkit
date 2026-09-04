@@ -232,9 +232,6 @@ ThrottleStop / the ASUS Armoury sliders:
   `charge_control_end_threshold` where present, or Dell firmware (libsmbios)
   via the **Dell battery threshold** tweak on machines like the 5515 that
   lack the sysfs attribute.
-- **Panel refresh rate** — switch the internal panel between its rates (the
-  5515 is 144 Hz; 60 Hz on battery is a real power saving). Resolution is
-  kept; KScreen remembers the choice. KDE / kscreen-doctor only.
 - **AC / battery auto-switch** — pick a bundle (profile + TDP preset), and
   optionally a refresh rate, to apply automatically when the charger is
   plugged or pulled; handled by the same `tuxthrottle_powerd.py` daemon.
@@ -248,6 +245,25 @@ and re-applied at boot by the matching tweaks' units. When the daemon is up it
 also exposes a **root-only control socket** at `/run/tuxthrottle/control.sock`
 so the GUI and `tuxthrottlectl` route hardware writes through the one process
 that owns the hardware (they fall back to writing directly when it's not).
+
+## The Display tab
+
+Panel-tuning controls in one place, instead of scattered across other tabs
+(the LenovoLegionLinux/Legion-Linux-Toolkit "Display" tab was the model):
+
+- **Panel refresh rate** — switch the internal panel between its rates (the
+  5515 is 144 Hz; 60 Hz on battery is a real power saving). Resolution is
+  kept; KScreen remembers the choice. KDE / kscreen-doctor only. The AC/
+  battery auto-switch on the Power & Limits tab can flip this with the
+  charger.
+- **Adaptive Sync (VRR)** — reports which displays are VRR-capable; enable
+  per-display in System Settings, pair with the KDE "allow tearing" tweak
+  for lowest latency. Informational only — VRR itself is a KDE display
+  setting, not something TuxThrottle writes.
+
+No screen-brightness slider here on purpose — KDE's own brightness control
+(tray/OSD) already owns that; duplicating it would just fight the desktop's
+own state.
 
 ## The Battery tab
 
