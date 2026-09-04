@@ -282,8 +282,14 @@ back.
   midnight and carry a weekday mask (all days by default); a running per-game
   profile wins. Config block `schedule` in `powerd.json`; toggle from the CLI
   with `tuxthrottlectl schedule {show|on|off}`.
-- **CLI** — `tuxthrottlectl profile list|apply|save`, `tuxthrottlectl
-  snapshot`, `tuxthrottlectl rollback [last]`.
+- **Export / import** — a saved profile is already a plain, hardware-agnostic
+  JSON (semantic units, no raw hwmon paths), so "Export…" on any profile just
+  writes it to a file you pick, tagged so import can validate it; "Import
+  profile…" reads one back (rejecting anything that isn't a real TuxThrottle
+  export). Trade known-good curves/TDP loadouts with other G15 owners the way
+  the CachyOS community trades configs.
+- **CLI** — `tuxthrottlectl profile list|apply|save|export|import`,
+  `tuxthrottlectl snapshot`, `tuxthrottlectl rollback [last]`.
 - **Suspend/resume** — the **StateResume** tweak re-applies the last applied
   state after a wake or reboot (TDP/battery/NVIDIA limits set directly don't
   always survive on their own).

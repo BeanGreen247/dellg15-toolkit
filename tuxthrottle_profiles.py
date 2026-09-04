@@ -279,6 +279,51 @@ def delete_profile(name: str, user=None) -> bool:
 
 
 # --------------------------------------------------------------------------- #
+#  export / import — shareable profile files
+# --------------------------------------------------------------------------- #
+#
+# A saved profile is already a plain, hardware-agnostic JSON (semantic units
+# like "stapm watts" and "refresh_hz", never raw hwmon paths) — export/import
+# is just a thin, validated wrapper for moving that file in and out of
+# ~/.config/tuxthrottle/profiles/ so people can actually trade known-good
+# curves the way the CachyOS community trades configs, without hand-editing
+# paths. Import is validated (schema marker + must-be-a-dict) so a garbage
+# or unrelated JSON file doesn't silently become a "profile".
+
+PROFILE_EXPORT_MARKER = "_tuxthrottle_profile"
+
+
+def export_profile(name: str, dest: Path, user=None) -> Path:
+    """Write profile `name` out to an arbitrary file `dest`, tagged so
+    `import_profile` can tell it's a real TuxThrottle export. Raises
+    FileNotFoundError if the profile doesn't exist."""
+    st = load_profile(name, user)
+    if not st:
+        raise FileNotFoundError(f"no such profile: {name}")
+    payload = {PROFILE_EXPORT_MARKER: 1, "name": name, **st}
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    return dest
+
+
+def import_profile(src: Path, name: str | None = None, user=None) -> str:
+    """Read a profile exported by `export_profile` from `src` and save it
+    under `name` (or the name it was exported with, or the file stem).
+    Raises ValueError if `src` isn't a valid TuxThrottle profile export."""
+    src = Path(src)
+    data = _read_json(src)
+    if not data or PROFILE_EXPORT_MARKER not in data:
+        raise ValueError(
+            f"{src} is not a TuxThrottle profile export (missing schema marker)")
+    payload = {k: v for k, v in data.items()
+               if k not in (PROFILE_EXPORT_MARKER, "name")}
+    final_name = name or data.get("name") or src.stem
+    save_profile(final_name, payload, user)
+    return final_name
+
+
+# --------------------------------------------------------------------------- #
 #  snapshots
 # --------------------------------------------------------------------------- #
 
@@ -372,6 +417,12 @@ def main() -> int:
         sp = sub.add_parser(name, parents=[common])
         sp.add_argument("name")
     sub.add_parser("list", parents=[common])
+    sp = sub.add_parser("export", parents=[common])
+    sp.add_argument("name")
+    sp.add_argument("dest")
+    sp = sub.add_parser("import", parents=[common])
+    sp.add_argument("src")
+    sp.add_argument("name", nargs="?")
     sp = sub.add_parser("snapshot", parents=[common])
     sp.add_argument("label", nargs="?", default="manual")
     sub.add_parser("snapshots", parents=[common])
@@ -400,6 +451,22 @@ def main() -> int:
         return 0 if st else 1
     if a.cmd == "delete":
         return 0 if delete_profile(a.name, u) else 1
+    if a.cmd == "export":
+        try:
+            dest = export_profile(a.name, Path(a.dest), u)
+        except FileNotFoundError as exc:
+            print(f"export failed: {exc}", file=sys.stderr)
+            return 1
+        print(str(dest))
+        return 0
+    if a.cmd == "import":
+        try:
+            final_name = import_profile(Path(a.src), a.name, u)
+        except ValueError as exc:
+            print(f"import failed: {exc}", file=sys.stderr)
+            return 1
+        print(f"imported '{final_name}'")
+        return 0
     if a.cmd == "apply":
         st = load_profile(a.name, u)
         if not st:

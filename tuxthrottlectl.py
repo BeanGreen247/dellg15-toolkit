@@ -307,6 +307,22 @@ def cmd_profile(args) -> int:
         return 0 if st else 1
     if act == "delete":
         return 0 if profiles.delete_profile(args.name) else _fail("no such profile")
+    if act == "export":
+        if not args.path:
+            return _fail("'profile export' needs a name and a destination path")
+        try:
+            dest = profiles.export_profile(args.name, Path(args.path))
+        except FileNotFoundError as exc:
+            return _fail(str(exc))
+        print(f"exported '{args.name}' -> {dest}")
+        return 0
+    if act == "import":
+        try:
+            final_name = profiles.import_profile(Path(args.name), args.path)
+        except ValueError as exc:
+            return _fail(str(exc))
+        print(f"imported '{final_name}' from {args.name}")
+        return 0
     if act == "apply":
         st = profiles.load_profile(args.name)
         if not st:
@@ -368,8 +384,13 @@ def main() -> int:
                      default="show")
 
     pr = sub.add_parser("profile", help="named full-state bundles", parents=[common])
-    pr.add_argument("action", choices=["list", "apply", "save", "show", "delete"])
-    pr.add_argument("name", nargs="?")
+    pr.add_argument("action",
+                    choices=["list", "apply", "save", "show", "delete", "export", "import"])
+    pr.add_argument("name", nargs="?",
+                    help="profile name, or (for import) the source file path")
+    pr.add_argument("path", nargs="?",
+                    help="export: destination file path. import: target profile "
+                         "name (default: the name it was exported with)")
     pr.add_argument("--with-gpu-mode", action="store_true",
                     help="also switch hybrid graphics (needs logout)")
 

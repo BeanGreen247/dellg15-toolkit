@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 import tuxthrottle_profiles as tp
 
 
@@ -126,3 +128,60 @@ def test_safe_name_strips_junk():
     assert tp._safe_name("../etc/passwd") == "etcpasswd"
     assert tp._safe_name("  ok name 1 ") == "ok name 1"
     assert tp._safe_name("///") == "unnamed"
+
+
+def test_export_profile_writes_tagged_json(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    tp.save_profile("quiet-loadout", {"platform_profile": "quiet"})
+    dest = tmp_path / "shared" / "quiet-loadout.json"
+    out = tp.export_profile("quiet-loadout", dest)
+    assert out == dest
+    data = json.loads(dest.read_text())
+    assert data[tp.PROFILE_EXPORT_MARKER] == 1
+    assert data["name"] == "quiet-loadout"
+    assert data["platform_profile"] == "quiet"
+
+
+def test_export_missing_profile_raises(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    with pytest.raises(FileNotFoundError):
+        tp.export_profile("does-not-exist", tmp_path / "x.json")
+
+
+def test_import_profile_roundtrips(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    tp.save_profile("original", {"platform_profile": "performance", "refresh_hz": 144})
+    dest = tmp_path / "exported.json"
+    tp.export_profile("original", dest)
+
+    tp.delete_profile("original")  # simulate: this is a *different* machine
+    final_name = tp.import_profile(dest)
+    assert final_name == "original"
+    loaded = tp.load_profile("original")
+    assert loaded["platform_profile"] == "performance"
+    assert loaded["refresh_hz"] == 144
+    assert tp.PROFILE_EXPORT_MARKER not in loaded  # marker doesn't leak into the saved profile
+
+
+def test_import_profile_with_explicit_name(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    tp.save_profile("original", {"platform_profile": "balanced"})
+    dest = tmp_path / "exported.json"
+    tp.export_profile("original", dest)
+    final_name = tp.import_profile(dest, name="renamed-on-import")
+    assert final_name == "renamed-on-import"
+    assert tp.load_profile("renamed-on-import")["platform_profile"] == "balanced"
+
+
+def test_import_rejects_unrelated_json(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    junk = tmp_path / "not-a-profile.json"
+    junk.write_text('{"hello": "world"}')
+    with pytest.raises(ValueError, match="not a TuxThrottle profile export"):
+        tp.import_profile(junk)
+
+
+def test_import_rejects_unreadable_file(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    with pytest.raises(ValueError):
+        tp.import_profile(tmp_path / "does-not-exist.json")

@@ -3269,6 +3269,12 @@ class ToolkitApp:
 
         pf = tb.Labelframe(frame, text="Saved profiles", padding=12)
         pf.pack(fill="x", pady=6)
+        tb.Label(pf, wraplength=1000, justify="left", bootstyle=SECONDARY, text=(
+            "A saved profile is a plain JSON file — export one to share a "
+            "known-good curve/TDP loadout with another G15 owner, or import "
+            "one someone shared with you.")).pack(anchor="w", pady=(0, 6))
+        tb.Button(pf, text="Import profile…", bootstyle=(INFO, "outline"),
+                  command=self._profile_import).pack(anchor="w", pady=(0, 8))
         self._prof_list = tb.Frame(pf); self._prof_list.pack(fill="x")
 
         sf = tb.Labelframe(frame, text="Snapshots — automatic rollback points", padding=12)
@@ -3433,6 +3439,8 @@ class ToolkitApp:
                       command=lambda n=name: self._profile_apply(n, False)).pack(side="left", padx=2)
             tb.Button(r, text="Apply +GPU", bootstyle=(WARNING, "outline"), width=11,
                       command=lambda n=name: self._profile_apply(n, True)).pack(side="left", padx=2)
+            tb.Button(r, text="Export…", bootstyle=(INFO, "outline"), width=9,
+                      command=lambda n=name: self._profile_export(n)).pack(side="left", padx=2)
             tb.Button(r, text="Delete", bootstyle=(DANGER, "outline"), width=7,
                       command=lambda n=name: self._profile_delete(n)).pack(side="left", padx=2)
 
@@ -3466,6 +3474,46 @@ class ToolkitApp:
             return
         tuxthrottle_profiles.delete_profile(name, self.user)
         self._log(f"[Profiles] deleted '{name}'")
+        self._profiles_refresh()
+
+    def _profile_export(self, name: str):
+        from tkinter import filedialog
+        try:
+            home = pwd.getpwnam(self.user).pw_dir
+        except KeyError:
+            home = os.path.expanduser("~")
+        safe = "".join(c for c in name if c.isalnum() or c in "-_ ").strip() or "profile"
+        path = filedialog.asksaveasfilename(
+            parent=self.root, initialdir=home, initialfile=f"{safe}.tuxthrottle-profile.json",
+            defaultextension=".json", title=f"Export profile '{name}'")
+        if not path:
+            return
+        try:
+            dest = tuxthrottle_profiles.export_profile(name, Path(path), self.user)
+            if os.geteuid() == 0:
+                pw = pwd.getpwnam(self.user)
+                os.chown(dest, pw.pw_uid, pw.pw_gid)
+            self._log(f"[Profiles] exported '{name}' -> {dest}")
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[Profiles] export failed: {exc}")
+
+    def _profile_import(self):
+        from tkinter import filedialog
+        try:
+            home = pwd.getpwnam(self.user).pw_dir
+        except KeyError:
+            home = os.path.expanduser("~")
+        path = filedialog.askopenfilename(
+            parent=self.root, initialdir=home, filetypes=[("TuxThrottle profile", "*.json")],
+            title="Import profile")
+        if not path:
+            return
+        try:
+            name = tuxthrottle_profiles.import_profile(Path(path), user=self.user)
+            self._log(f"[Profiles] imported '{name}' from {path}")
+        except (ValueError, OSError) as exc:
+            messagebox.showerror("Import failed", str(exc))
+            return
         self._profiles_refresh()
 
     def _profile_apply(self, name: str, with_gpu: bool):
