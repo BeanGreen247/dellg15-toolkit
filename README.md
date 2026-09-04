@@ -176,6 +176,12 @@ DAMX's fan-control equivalent for this board:
 
 - **Thermal profile** — `balanced` / `performance` / `custom`
   (`/sys/firmware/acpi/platform_profile`, same lever Game Mode uses).
+  Optional **"Tie keyboard colour to the active profile"** toggle (off by
+  default) — Quiet=blue / Balanced=white / Performance=red, the same
+  LED-per-profile convention LenovoLegionLinux/Legion-Linux-Toolkit use;
+  a free physical status indicator since the keyboard is single-zone
+  anyway. Currently covers this tab's profile switch and its presets, not
+  yet a named-profile apply from the Profiles tab.
 - **Per-fan boost** — sliders (0–100 % → `alienware_wmi/fanN_boost` 0–255) for
   the CPU and GPU fans, with live RPM readouts. Boost only *adds* airflow on
   top of the firmware curve, so it can't stall a fan.

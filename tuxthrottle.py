@@ -1921,6 +1921,14 @@ class ToolkitApp:
                                variable=self._fan_profile_var, bootstyle="toolbutton",
                                command=lambda v=c: self._fan_set_profile(v)
                                ).pack(side="left", padx=4)
+            if tuxthrottle_kbd is not None:
+                tie_cfg = self._read_power_state("kbd_profile_tie.json") or {}
+                self._kbd_tie_var = tk.BooleanVar(value=bool(tie_cfg.get("enabled")))
+                tb.Checkbutton(
+                    pf, text="Tie keyboard colour to the active profile "
+                             "(Quiet=blue / Balanced=white / Performance=red)",
+                    variable=self._kbd_tie_var, bootstyle="round-toggle",
+                    command=self._kbd_tie_toggle).pack(anchor="w", pady=(8, 0))
 
         lf = tb.Labelframe(frame, text="Fans & boost", padding=12)
         lf.pack(fill="x", pady=6)
@@ -2165,6 +2173,38 @@ class ToolkitApp:
     def _fan_set_profile(self, name: str):
         ok, err = sensors.set_platform_profile(name)
         self._log(f"[Fans] thermal profile → {name}" + ("" if ok else f"  FAILED: {err}"))
+        if ok:
+            self._kbd_tie_to_profile(name)
+
+    # Quiet=blue / Balanced=white / Performance=red, matching the physical
+    # LED-per-profile convention other vendor tools (LenovoLegionLinux /
+    # Legion-Linux-Toolkit) use — free status indicator on a single-zone
+    # keyboard. Opt-in (off by default): see the checkbox in the Fans tab.
+    _KBD_PROFILE_COLORS = {"quiet": "3B82F6", "balanced": "FFFFFF", "performance": "FF3B3B"}
+
+    def _kbd_tie_toggle(self):
+        self._write_power_state("kbd_profile_tie.json",
+                                {"enabled": bool(self._kbd_tie_var.get())})
+        if self._kbd_tie_var.get():
+            self._kbd_tie_to_profile(sensors.get_platform_profile())
+
+    def _kbd_tie_to_profile(self, name: str):
+        if tuxthrottle_kbd is None or not getattr(self, "_kbd_tie_var", None) \
+                or not self._kbd_tie_var.get():
+            return
+        color = self._KBD_PROFILE_COLORS.get((name or "").lower())
+        if not color:
+            return
+        # tuxthrottle_kbd.set_all() blocks ~1-4s (OpenRGB round-trip + its
+        # own retry write) and is internally lock-serialized against other
+        # writers — always call it off the GUI thread, never in a loop.
+        def work():
+            try:
+                tuxthrottle_kbd.set_all(color)
+                self._log(f"[Keyboard] tied to profile '{name}' → #{color}")
+            except Exception as exc:  # noqa: BLE001
+                self._log(f"[Keyboard] profile tie-in failed: {exc}")
+        threading.Thread(target=work, daemon=True).start()
 
     def _fan_set_boost(self, index: int):
         pct = self._fan_boost_vars[index].get()
@@ -2214,6 +2254,7 @@ class ToolkitApp:
         if hasattr(self, "_fan_profile_var") and prof in sensors.platform_profile_choices():
             sensors.set_platform_profile(prof)
             self._fan_profile_var.set(prof)
+            self._kbd_tie_to_profile(prof)
         for i, bv in self._fan_boost_vars.items():
             bv.set(boost)
             sensors.set_fan_boost(i, round(boost * 255 / 100))
