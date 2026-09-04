@@ -1107,6 +1107,7 @@ class ToolkitApp:
         "bat_health":     lambda: sensors.battery_health_info(),
         "bat_mode":       lambda: sensors.battery_charge_mode(),
         "vrr":            lambda: sensors.vrr_status(),
+        "touchpad":       lambda: sensors.touchpad_info(),
         "ryzenadj_avail": lambda: sensors.ryzenadj_available(),
         "ryzenadj_co":    lambda: sensors.ryzenadj_co_supported(),
     }
@@ -1240,6 +1241,7 @@ class ToolkitApp:
 
         self._build_dashboard_tab()
         self._build_keyboard_tab()
+        self._build_touchpad_tab()
         self._build_fan_tab()
         self._build_power_tab()
         self._build_display_tab()
@@ -3027,6 +3029,77 @@ class ToolkitApp:
                        if vrr["capable"]
                        else "no VRR-capable panel detected on this system")
                  ).pack(anchor="w")
+
+    # ---------- Touchpad tab ----------
+    # Live KWin D-Bus property writes (org.kde.KWin.InputDevice) — the
+    # Wayland-native mechanism, not xinput (X11-only, doesn't exist here).
+    # Session-only by design: nothing here is boot-persisted, so a disabled
+    # touchpad can never survive past the next logout/reboot on its own —
+    # see sensors.py's touchpad section docstring for why that's deliberate.
+
+    def _build_touchpad_tab(self):
+        info = self._probe("touchpad")
+        outer = tb.Frame(self.notebook)
+        self.notebook.add(outer, text="Touchpad")
+        frame = self._scroll_body(outer, pad=16)
+
+        if not info or not info.get("available"):
+            tb.Label(frame, wraplength=1000, justify="left", bootstyle=SECONDARY, text=(
+                "No touchpad reachable via KWin's D-Bus interface — needs KDE "
+                "Plasma on Wayland with a touchpad (xinput-based X11 toggles "
+                "don't apply here).")).pack(anchor="w")
+            return
+
+        tb.Label(frame, wraplength=1000, justify="left", bootstyle=SECONDARY,
+                 text=f"Device: {info.get('name') or '(unnamed)'}").pack(anchor="w", pady=(0, 12))
+
+        ef = tb.Labelframe(frame, text="Enable / disable", padding=12)
+        ef.pack(fill="x", pady=6)
+        tb.Label(ef, wraplength=1000, justify="left", bootstyle=SECONDARY, text=(
+            "Takes effect immediately. This is a live session setting, not a "
+            "boot-persisted tweak — a reboot or logout always brings the "
+            "touchpad back, so turning it off can't lock you out permanently.")
+                 ).pack(anchor="w", pady=(0, 8))
+        self._tp_enabled_var = tk.BooleanVar(value=bool(info.get("enabled", True)))
+        tb.Checkbutton(ef, text="Touchpad enabled", variable=self._tp_enabled_var,
+                       bootstyle="round-toggle",
+                       command=lambda: self._touchpad_set("enabled", self._tp_enabled_var,
+                                                          sensors.set_touchpad_enabled)
+                       ).pack(anchor="w")
+
+        tf = tb.Labelframe(frame, text="Behaviour", padding=12)
+        tf.pack(fill="x", pady=6)
+        self._tp_tap_var = tk.BooleanVar(value=bool(info.get("tap_to_click", True)))
+        tb.Checkbutton(tf, text="Tap to click", variable=self._tp_tap_var,
+                       bootstyle="round-toggle",
+                       command=lambda: self._touchpad_set("tap_to_click", self._tp_tap_var,
+                                                          sensors.set_touchpad_tap_to_click)
+                       ).pack(anchor="w", pady=2)
+        self._tp_scroll_var = tk.BooleanVar(value=bool(info.get("natural_scroll", False)))
+        tb.Checkbutton(tf, text="Natural scrolling", variable=self._tp_scroll_var,
+                       bootstyle="round-toggle",
+                       command=lambda: self._touchpad_set(
+                           "natural_scroll", self._tp_scroll_var,
+                           sensors.set_touchpad_natural_scroll)
+                       ).pack(anchor="w", pady=2)
+        self._tp_dwt_var = tk.BooleanVar(value=bool(info.get("disable_while_typing", True)))
+        tb.Checkbutton(tf, text="Disable while typing", variable=self._tp_dwt_var,
+                       bootstyle="round-toggle",
+                       command=lambda: self._touchpad_set(
+                           "disable_while_typing", self._tp_dwt_var,
+                           sensors.set_touchpad_disable_while_typing)
+                       ).pack(anchor="w", pady=2)
+
+    def _touchpad_set(self, label: str, var: tk.BooleanVar, setter):
+        val = var.get()
+
+        def work():
+            ok, msg = setter(val)
+            self._log(f"[Touchpad] {label} → {val}" + ("" if ok else f"  FAILED: {msg}"))
+            if not ok:
+                self.root.after(0, lambda: var.set(not val))  # snap the toggle back
+
+        threading.Thread(target=work, daemon=True).start()
 
     # --- Panel refresh rate (KDE / KScreen) ---
 

@@ -246,6 +246,27 @@ also exposes a **root-only control socket** at `/run/tuxthrottle/control.sock`
 so the GUI and `tuxthrottlectl` route hardware writes through the one process
 that owns the hardware (they fall back to writing directly when it's not).
 
+## The Touchpad tab
+
+Enable/disable + a few behaviour toggles, read and written live through
+KWin's own `org.kde.KWin.InputDevice` D-Bus interface — the Wayland-native
+mechanism (there's no `xinput` here; that's X11-only and doesn't exist on
+this session). Same interface KDE's own System Settings → Touchpad panel
+uses under the hood.
+
+- **Enable / disable** — takes effect immediately. Deliberately a **live
+  session setting, not a boot-persisted tweak**: nothing here survives a
+  reboot or logout on its own, so disabling the touchpad can never lock you
+  out permanently — worst case, log out and back in (or reboot) and it's
+  back. This was the design constraint for shipping it at all; see the
+  project's own notes on why a blind, remote, irreversible input-disable
+  would have been the wrong call.
+- **Tap to click**, **Natural scrolling**, **Disable while typing** — the
+  same per-device libinput behaviours KDE's touchpad KCM exposes.
+
+Hidden with an explanatory note on anything that isn't KDE Plasma on
+Wayland with a reachable touchpad.
+
 ## The Display tab
 
 Panel-tuning controls in one place, instead of scattered across other tabs

@@ -223,3 +223,115 @@ def test_gpu_names_nvidia_and_lspci(monkeypatch):
 def test_gpu_names_empty_without_tools(monkeypatch):
     monkeypatch.setattr(sensors, "which", lambda c: None)
     assert sensors.gpu_names() == []
+
+
+# --- touchpad (KWin InputDevice D-Bus) ------------------------------------
+
+_TOUCHPAD_TREE = """\
+├─ /org/kde/KWin/InputDevice/event3
+├─ /org/kde/KWin/InputDevice/event6
+"""
+
+
+def _touchpad_busctl_run(touchpad_path="/org/kde/KWin/InputDevice/event6", enabled=True):
+    def run(cmd, *_a, **_k):
+        if cmd[:3] == ["busctl", "--user", "tree"]:
+            return types.SimpleNamespace(stdout=_TOUCHPAD_TREE, stderr="", returncode=0)
+        if "get-property" in cmd:
+            path, prop = cmd[-3], cmd[-1]
+            if prop == "touchpad":
+                val = "true" if path == touchpad_path else "false"
+                return types.SimpleNamespace(stdout=f"b {val}\n", stderr="", returncode=0)
+            if prop == "enabled":
+                return types.SimpleNamespace(
+                    stdout=f"b {'true' if enabled else 'false'}\n", stderr="", returncode=0)
+            if prop == "name":
+                return types.SimpleNamespace(
+                    stdout='s "DELL0A6E:00 04F3:317E Touchpad"\n', stderr="", returncode=0)
+            if prop in ("tapToClick", "naturalScroll", "disableWhileTyping"):
+                return types.SimpleNamespace(stdout="b true\n", stderr="", returncode=0)
+        return types.SimpleNamespace(stdout="", stderr="", returncode=1)
+    return run
+
+
+def test_touchpad_device_path_finds_the_touchpad(monkeypatch):
+    monkeypatch.setattr(sensors, "which", lambda c: "/usr/bin/busctl")
+    monkeypatch.setattr(sensors, "_session_cmd", lambda a: a)
+    monkeypatch.setattr(subprocess, "run", _touchpad_busctl_run())
+    assert sensors._touchpad_device_path() == "/org/kde/KWin/InputDevice/event6"
+
+
+def test_touchpad_device_path_none_without_busctl(monkeypatch):
+    monkeypatch.setattr(sensors, "which", lambda c: None)
+    assert sensors._touchpad_device_path() is None
+
+
+def test_touchpad_info_full_shape(monkeypatch):
+    monkeypatch.setattr(sensors, "which", lambda c: "/usr/bin/busctl")
+    monkeypatch.setattr(sensors, "_session_cmd", lambda a: a)
+    monkeypatch.setattr(subprocess, "run", _touchpad_busctl_run(enabled=True))
+    info = sensors.touchpad_info()
+    assert info == {
+        "available": True, "name": "DELL0A6E:00 04F3:317E Touchpad",
+        "enabled": True, "tap_to_click": True, "natural_scroll": True,
+        "disable_while_typing": True,
+    }
+
+
+def test_touchpad_info_unavailable_without_kwin(monkeypatch):
+    monkeypatch.setattr(sensors, "which", lambda c: None)
+    info = sensors.touchpad_info()
+    assert info["available"] is False
+    assert info["enabled"] is None
+
+
+def test_set_touchpad_enabled_success(monkeypatch):
+    monkeypatch.setattr(sensors, "which", lambda c: "/usr/bin/busctl")
+    monkeypatch.setattr(sensors, "_session_cmd", lambda a: a)
+    seen = {}
+
+    def run(cmd, *_a, **_k):
+        if cmd[:3] == ["busctl", "--user", "tree"]:
+            return types.SimpleNamespace(stdout=_TOUCHPAD_TREE, stderr="", returncode=0)
+        if "get-property" in cmd and cmd[-1] == "touchpad":
+            path = cmd[-3]
+            val = "true" if path == "/org/kde/KWin/InputDevice/event6" else "false"
+            return types.SimpleNamespace(stdout=f"b {val}\n", stderr="", returncode=0)
+        if "set-property" in cmd:
+            seen["cmd"] = cmd
+            return types.SimpleNamespace(stdout="", stderr="", returncode=0)
+        return types.SimpleNamespace(stdout="", stderr="", returncode=1)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    ok, msg = sensors.set_touchpad_enabled(False)
+    assert ok is True
+    assert seen["cmd"][-2:] == ["b", "false"]
+    assert seen["cmd"][-3] == "enabled"
+
+
+def test_set_touchpad_enabled_no_touchpad(monkeypatch):
+    monkeypatch.setattr(sensors, "which", lambda c: None)
+    ok, msg = sensors.set_touchpad_enabled(True)
+    assert ok is False
+    assert "KWin" in msg
+
+
+def test_set_touchpad_enabled_busctl_failure(monkeypatch):
+    monkeypatch.setattr(sensors, "which", lambda c: "/usr/bin/busctl")
+    monkeypatch.setattr(sensors, "_session_cmd", lambda a: a)
+
+    def run(cmd, *_a, **_k):
+        if cmd[:3] == ["busctl", "--user", "tree"]:
+            return types.SimpleNamespace(stdout=_TOUCHPAD_TREE, stderr="", returncode=0)
+        if "get-property" in cmd and cmd[-1] == "touchpad":
+            path = cmd[-3]
+            val = "true" if path == "/org/kde/KWin/InputDevice/event6" else "false"
+            return types.SimpleNamespace(stdout=f"b {val}\n", stderr="", returncode=0)
+        if "set-property" in cmd:
+            return types.SimpleNamespace(stdout="", stderr="Access denied", returncode=1)
+        return types.SimpleNamespace(stdout="", stderr="", returncode=1)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    ok, msg = sensors.set_touchpad_enabled(True)
+    assert ok is False
+    assert "Access denied" in msg

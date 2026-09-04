@@ -1681,6 +1681,117 @@ def set_panel_refresh(hz: int) -> "tuple[bool, str]":
 
 
 # --------------------------------------------------------------------------- #
+#  Touchpad (KWin's own D-Bus InputDevice interface — Wayland-native, no
+#  xinput). Session-only by design: these are live KWin property writes, not
+#  a boot-persisted config, so "disable" only lasts until the next KWin
+#  session (logout/reboot) — a stuck-off touchpad can never survive a reboot
+#  on its own, which is the safety margin that matters most here.
+# --------------------------------------------------------------------------- #
+
+_TOUCHPAD_PATH_RE = re.compile(r"(/org/kde/KWin/InputDevice/\S+)")
+
+
+def _touchpad_device_path() -> "str | None":
+    """The KWin D-Bus object path for the touchpad, or None if KWin isn't
+    reachable or no device reports `touchpad=true`. Re-resolved every call —
+    the eventN path isn't guaranteed stable across reconnects."""
+    if not which("busctl"):
+        return None
+    try:
+        r = subprocess.run(_session_cmd(["busctl", "--user", "tree", "org.kde.KWin"]),
+                           capture_output=True, text=True, timeout=6)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    for path in _TOUCHPAD_PATH_RE.findall(r.stdout):
+        try:
+            rr = subprocess.run(_session_cmd(
+                ["busctl", "--user", "get-property", "org.kde.KWin", path,
+                 "org.kde.KWin.InputDevice", "touchpad"]),
+                capture_output=True, text=True, timeout=6)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if rr.returncode == 0 and rr.stdout.split()[:2] == ["b", "true"]:
+            return path
+    return None
+
+
+def _touchpad_get_bool(path: str, prop: str) -> "bool | None":
+    try:
+        r = subprocess.run(_session_cmd(
+            ["busctl", "--user", "get-property", "org.kde.KWin", path,
+             "org.kde.KWin.InputDevice", prop]),
+            capture_output=True, text=True, timeout=6)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    parts = r.stdout.split()
+    if r.returncode != 0 or len(parts) < 2 or parts[0] != "b":
+        return None
+    return parts[1] == "true"
+
+
+def touchpad_info() -> dict:
+    """{'available', 'name', 'enabled', 'tap_to_click', 'natural_scroll',
+    'disable_while_typing'}. `available=False` when no touchpad is reachable
+    via KWin's D-Bus (not Plasma/Wayland, or no touchpad on this machine)."""
+    path = _touchpad_device_path()
+    if not path:
+        return {"available": False, "name": None, "enabled": None,
+                "tap_to_click": None, "natural_scroll": None,
+                "disable_while_typing": None}
+    name = None
+    try:
+        r = subprocess.run(_session_cmd(
+            ["busctl", "--user", "get-property", "org.kde.KWin", path,
+             "org.kde.KWin.InputDevice", "name"]),
+            capture_output=True, text=True, timeout=6)
+        if r.returncode == 0:
+            name = r.stdout.split(" ", 1)[-1].strip().strip('"')
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return {
+        "available": True, "name": name,
+        "enabled": _touchpad_get_bool(path, "enabled"),
+        "tap_to_click": _touchpad_get_bool(path, "tapToClick"),
+        "natural_scroll": _touchpad_get_bool(path, "naturalScroll"),
+        "disable_while_typing": _touchpad_get_bool(path, "disableWhileTyping"),
+    }
+
+
+def _touchpad_set_bool(prop: str, value: bool) -> "tuple[bool, str]":
+    path = _touchpad_device_path()
+    if not path:
+        return False, "no touchpad reachable via KWin D-Bus (KDE Plasma / Wayland only)"
+    try:
+        r = subprocess.run(_session_cmd(
+            ["busctl", "--user", "set-property", "org.kde.KWin", path,
+             "org.kde.KWin.InputDevice", prop, "b", "true" if value else "false"]),
+            capture_output=True, text=True, timeout=6)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc)
+    if r.returncode != 0:
+        return False, (r.stderr or r.stdout or "busctl set-property failed").strip()
+    return True, f"{prop} -> {value}"
+
+
+def set_touchpad_enabled(on: bool) -> "tuple[bool, str]":
+    return _touchpad_set_bool("enabled", on)
+
+
+def set_touchpad_tap_to_click(on: bool) -> "tuple[bool, str]":
+    return _touchpad_set_bool("tapToClick", on)
+
+
+def set_touchpad_natural_scroll(on: bool) -> "tuple[bool, str]":
+    return _touchpad_set_bool("naturalScroll", on)
+
+
+def set_touchpad_disable_while_typing(on: bool) -> "tuple[bool, str]":
+    return _touchpad_set_bool("disableWhileTyping", on)
+
+
+# --------------------------------------------------------------------------- #
 #  NVIDIA graphics-clock lock. Unlike -pl (firmware-locked on the 3050 Ti),
 #  `nvidia-smi --lock-gpu-clocks` works in both directions — underclocking for
 #  battery / heat is the useful one on this chassis.
