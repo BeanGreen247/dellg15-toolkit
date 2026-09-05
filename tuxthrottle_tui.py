@@ -42,6 +42,7 @@ def _ctl(*args: str) -> tuple[bool, str]:
     _ctl() exactly, so Game Mode / fan-boost behave identically from the TUI,
     the tray, and the GUI."""
     ctl = shutil.which("tuxthrottlectl") or "/usr/local/bin/tuxthrottlectl"
+    last = ""
     for launcher in (["pkexec"], ["sudo", "-n"], []):
         if launcher and not shutil.which(launcher[0]):
             continue
@@ -52,10 +53,26 @@ def _ctl(*args: str) -> tuple[bool, str]:
             return False, str(exc)
         if r.returncode == 0:
             return True, (r.stdout or "").strip()
-    return False, "no launcher found (need pkexec or passwordless sudo)"
+        last = (r.stderr or r.stdout or "").strip()
+    return False, last or "no launcher found (need pkexec or passwordless sudo)"
 
 
-class StatBox(Static):
+class ValueStatic(Static):
+    """A Static that tracks its own last-set text in `.value` — Static's
+    internal renderable storage isn't a stable attribute across Textual
+    versions (confirmed: differs between the pip "textual" on PyPI and the
+    one Fedora/Nobara packages), so tests/CI check `.value`, not internals."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.value = ""
+
+    def update(self, content="") -> None:  # type: ignore[override]
+        self.value = str(content)
+        super().update(content)
+
+
+class StatBox(ValueStatic):
     """A single labelled stat panel, e.g. 'CPU' / '62°C, 2.9 GHz'."""
 
     def __init__(self, label: str, **kw):
@@ -118,7 +135,7 @@ class TuxThrottleTUI(App):
                 yield Button("Fan boost: Max", id="btn_fan_100")
             with VerticalScroll(id="fixes"):
                 yield Static("Recent fixes / crash-watch findings", id="fixes_title")
-                self.fixes_log = Static("")
+                self.fixes_log = ValueStatic("")
                 yield self.fixes_log
         yield Footer()
 

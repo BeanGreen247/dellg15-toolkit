@@ -17,7 +17,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install deps
-        run: pip install pytest ruff
+        run: pip install pytest pytest-asyncio ruff textual rich
 
       - name: Byte-compile every module
         run: python -m compileall -q *.py tests/*.py
@@ -115,7 +115,7 @@ jobs:
               async with app.run_test() as pilot:
                   await pilot.pause()
                   for box in (app.cpu_box, app.igpu_box, app.dgpu_box, app.gamemode_box):
-                      assert box.renderable, f"{box.id} never populated"
+                      assert box.value, f"{box.id} never populated"
                   await pilot.click("#btn_fan_0")
                   await pilot.pause()
               print("TUI built OK — stat boxes populated, a button click round-tripped")
