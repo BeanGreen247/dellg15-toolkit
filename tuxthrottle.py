@@ -65,6 +65,7 @@ except Exception:  # noqa: BLE001
 import tuxthrottle_btrfs  # noqa: E402  (stdlib, filesystem snapshot-before-apply)
 import tuxthrottle_fixlog as fixlog  # noqa: E402  (stdlib, shared fix-history log)
 import tuxthrottle_profiles  # noqa: E402  (stdlib, imports sensors)
+import tuxthrottle_protondb as protondb  # noqa: E402  (stdlib, network optional)
 import tuxthrottle_watchdog  # noqa: E402  (stdlib, confirm-or-auto-revert timer)
 
 try:
@@ -1984,6 +1985,13 @@ class ToolkitApp:
                   command=lambda: self._fan_preset("cool")).pack(side="left", padx=4)
         tb.Button(pr, text="Max cooling", bootstyle=(DANGER, "outline"),
                   command=lambda: self._fan_preset("max")).pack(side="left", padx=4)
+        self._tip(tb.Button(pr, text="⏱ Boost 100% for 60s", bootstyle=(WARNING, "outline"),
+                  command=self._fan_boost_60s),
+                  "Spin every fan to max right now, then automatically put boost "
+                  "back to whatever it was before — for the 'about to load into "
+                  "a match' moment, without committing to a whole profile change. "
+                  "The revert is a background timer independent of this window, "
+                  "so it still happens even if you close the app.").pack(side="left", padx=(12, 4))
 
         if sensors.get_pwm_state():
             adv = tb.Labelframe(frame, text="Manual PWM — advanced / risky",
@@ -2231,6 +2239,31 @@ class ToolkitApp:
         pct = self._fan_boost_vars[index].get()
         ok, err = sensors.set_fan_boost(index, round(pct * 255 / 100))
         self._log(f"[Fans] fan {index} boost → {pct}%" + ("" if ok else f"  FAILED: {err}"))
+
+    def _fan_boost_60s(self):
+        prev_raw = {i: round(bv.get() * 255 / 100) for i, bv in self._fan_boost_vars.items()}
+        for i, bv in self._fan_boost_vars.items():
+            bv.set(100)
+            self._fan_set_boost(i)
+        restore = "; ".join(f"sensors.set_fan_boost({i}, {v})" for i, v in prev_raw.items())
+        script = f"import sys; sys.path.insert(0, {str(BASE_DIR)!r}); import sensors; {restore}"
+        unit = f"tuxthrottle-fanboost-{int(time.time())}"
+        try:
+            subprocess.run(
+                ["systemd-run", f"--unit={unit}", "--on-active=60", "--collect",
+                 "--description=TuxThrottle: restore fan boost after a 60s burst",
+                 "/usr/bin/python3", "-c", script],
+                capture_output=True, timeout=10, text=True,
+            )
+            was = ", ".join(f"fan {i}: {round(v / 255 * 100)}%" for i, v in prev_raw.items())
+            self._log(f"[Fans] boosted to 100% for 60s — auto-restoring to ({was}) after; "
+                      "the revert runs as an independent timer, so it still fires even if "
+                      "you close TuxThrottle")
+            fixlog.log_event("fan-boost-60s", f"boosted to 100% for 60s, will restore {was}",
+                             user=self.user)
+        except (OSError, subprocess.SubprocessError) as exc:
+            self._log(f"[Fans] boosted to 100% but couldn't schedule the auto-revert "
+                      f"({exc}) — set the sliders back manually in ~60s")
 
     def _fan_manual_toggle(self):
         on = self._fan_manual.get()
@@ -5551,6 +5584,13 @@ class ToolkitApp:
                 tb.Label(inner, text=desc, wraplength=1150, justify="left",
                          bootstyle=SECONDARY).pack(anchor="w", pady=(0, 12))
 
+            appid = str(game.get("appid") or "")
+            if appid.isdigit():
+                pdb_lbl = tb.Label(inner, text="", bootstyle=SECONDARY,
+                                   font=("Sans", 9, "italic"))
+                pdb_lbl.pack(anchor="w", pady=(0, 10))
+                self._pdb_start(appid, pdb_lbl)
+
             steps = game.get("steps", [])
             n_auto = sum(1 for s in steps if s.get("run"))
             n_manual = sum(1 for s in steps if s.get("manual") and not s.get("run"))
@@ -5570,6 +5610,37 @@ class ToolkitApp:
                 self._game_step_card(inner, gid, step)
 
         self._games_q.put("refresh")
+
+    def _pdb_start(self, appid: str, widget):
+        """ProtonDB lookup off-thread (network + disk cache); the worker only
+        writes a plain dict, never touches Tk — a root.after poller (started
+        here, on the main thread) is what applies the result. Mirrors
+        _sc_link_check_worker/_sc_link_check_poll: calling root.after() from
+        the worker thread itself can crash with 'main thread is not in main
+        loop' if it fires before the event loop is fully pumping."""
+        result: dict = {}
+
+        def work():
+            try:
+                result["text"] = protondb.label(protondb.lookup(appid))
+            except Exception:  # noqa: BLE001 — a badge is never worth a crash
+                result["text"] = ""
+
+        threading.Thread(target=work, daemon=True).start()
+        self._pdb_poll(widget, result, tries=0)
+
+    def _pdb_poll(self, widget, result: dict, tries: int):
+        if "text" not in result:
+            if tries < 100:      # ~20s cap (200ms steps) then give up quietly
+                self.root.after(200, self._pdb_poll, widget, result, tries + 1)
+            return
+        text = result["text"]
+        if not text:
+            return
+        try:
+            widget.configure(text=f"⚗ {text}")
+        except tk.TclError:
+            pass
 
     def _game_subst(self, gid: str, s: str) -> str:
         return (s.replace("{USER}", self.user)
