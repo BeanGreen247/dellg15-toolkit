@@ -64,6 +64,7 @@ except Exception:  # noqa: BLE001
 
 import tuxthrottle_btrfs  # noqa: E402  (stdlib, filesystem snapshot-before-apply)
 import tuxthrottle_fixlog as fixlog  # noqa: E402  (stdlib, shared fix-history log)
+import tuxthrottle_mangohud_status as mangohud_status  # noqa: E402  (stdlib)
 import tuxthrottle_profiles  # noqa: E402  (stdlib, imports sensors)
 import tuxthrottle_protondb as protondb  # noqa: E402  (stdlib, network optional)
 import tuxthrottle_watchdog  # noqa: E402  (stdlib, confirm-or-auto-revert timer)
@@ -2175,6 +2176,15 @@ class ToolkitApp:
             c.create_oval(X(t) - 3, Y(b) - 3, X(t) + 3, Y(b) + 3, fill=acc, outline="")
             c.create_text(X(t), Y(b) - 10, text=f"{t}°", fill=CHART_AXIS, font=("Sans", 7))
 
+        live = getattr(self, "_fc_live_point", None)
+        if live is not None:
+            lt, lb = live
+            lt = max(tmin, min(tmax, lt))
+            lb = max(0, min(100, lb))
+            x, y = X(lt), Y(lb)
+            c.create_oval(x - 6, y - 6, x + 6, y + 6, outline="#ff5555", width=2)
+            c.create_oval(x - 2, y - 2, x + 2, y + 2, fill="#ff5555", outline="")
+
     def _fc_save(self):
         merged = self._read_power_state("powerd.json") or {}
         merged["fan_curve"] = {
@@ -2335,6 +2345,8 @@ class ToolkitApp:
                     temp = max([v for v in (cpu, gt) if v is not None] or [0])
                 tgt = fancurve_interp(self._fc_points(), temp)
                 live.configure(text=f"now {temp:.0f}°C → target boost {tgt:.0f}%")
+                self._fc_live_point = (temp, tgt)
+                self._fc_redraw()
             except (tk.TclError, ValueError):
                 pass
         self.root.after(2000, self._fan_poll)
@@ -4745,6 +4757,15 @@ class ToolkitApp:
                   "overlay so you can see at a glance whether Feral GameMode "
                   "(gamemoderun) actually engaged for the running game."
                   ).pack(side="left", padx=(0, 12))
+        self._mh_status_line = tk.BooleanVar(value=mangohud_status.is_enabled(self.user))
+        self._tip(tb.Checkbutton(dl2, text="TuxThrottle live status line",
+                                 variable=self._mh_status_line, bootstyle="round-toggle",
+                                 command=self._mh_toggle_status_line),
+                  "Show Game Mode / fan boost / CPU+dGPU temps as a line in the "
+                  "overlay, kept live by the tray monitor (~2s refresh) — see "
+                  "throttle-relevant state without alt-tabbing out. Needs the "
+                  "tray running (Diagnostics → “Launch tray now”, or its "
+                  "autostart entry).").pack(side="left", padx=(0, 12))
 
         brow = tb.Frame(lf); brow.pack(anchor="w", fill="x", pady=(4, 0))
         self._tip(tb.Button(brow, text="↻ Detect", bootstyle=(SECONDARY, "outline"),
@@ -5334,6 +5355,15 @@ class ToolkitApp:
             return fallback
         idxs = [order.index(p) for p in pcis]
         return ",".join(str(i) for i in idxs) if len(set(idxs)) == n_gpu else fallback
+
+    def _mh_toggle_status_line(self):
+        enabled = self._mh_status_line.get()
+        mangohud_status.set_enabled(enabled, user=self.user)
+        self._log(f"[MangoHud] live status line {'enabled' if enabled else 'disabled'}"
+                  + ("" if enabled else " (line removed from MangoHud.conf)")
+                  + " — shown by the tray monitor, refreshed every ~2s")
+        fixlog.log_event("mangohud-status-line",
+                         f"status line {'enabled' if enabled else 'disabled'}", user=self.user)
 
     def _mh_apply(self):
         if not self._mh_guard_global_preload():
@@ -6833,6 +6863,10 @@ class ToolkitApp:
     # ---------- dashboard loop ----------
 
     def _dashboard_loop(self):
+        loop_n = 0
+        stapm_limit = None       # refreshed every ~10 ticks — ryzenadj -i isn't free,
+                                 # and the configured limit only changes when the user
+                                 # touches Power & Limits, not every 2s
         while self.dash_running:
             if not getattr(self, "_dash_active", False):
                 for _ in range(10):                 # idle ~1s, stay responsive
@@ -6847,8 +6881,13 @@ class ToolkitApp:
             dgpu_clock, dgpu_temp, dgpu_util, dgpu_power = sensors.read_dgpu_values()
             rapl_ok = sensors.rapl_permissions_ok()
             gamemode = sensors.get_game_mode_state()
+            if loop_n % 10 == 0:
+                info = sensors.read_ryzenadj_info() if sensors.ryzenadj_available() else None
+                stapm_limit = info.get("stapm_limit") if info else None
+            loop_n += 1
             self.dash_queue.put((cpu_temp, cpu_freq, cpu_power, igpu_clock, igpu_temp,
-                                  dgpu_clock, dgpu_temp, dgpu_util, dgpu_power, rapl_ok, gamemode))
+                                  dgpu_clock, dgpu_temp, dgpu_util, dgpu_power, rapl_ok,
+                                  gamemode, stapm_limit))
             for _ in range(19):  # ~2s poll total (0.1s already spent above), checkable for shutdown
                 if not self.dash_running:
                     return
@@ -6866,7 +6905,8 @@ class ToolkitApp:
         try:
             while True:
                 (cpu_temp, cpu_freq, cpu_power, igpu_clock, igpu_temp,
-                 dgpu_clock, dgpu_temp, dgpu_util, dgpu_power, rapl_ok, gamemode) = self.dash_queue.get_nowait()
+                 dgpu_clock, dgpu_temp, dgpu_util, dgpu_power, rapl_ok,
+                 gamemode, stapm_limit) = self.dash_queue.get_nowait()
                 if not self._dash_first_data:
                     self._dash_reveal()
                 self.meter_cpu_temp.set(cpu_temp)
@@ -6878,6 +6918,11 @@ class ToolkitApp:
                 self.meter_dgpu_util.set(dgpu_util)
                 self.meter_dgpu_power.set(dgpu_power)
                 cpu_power_txt = f", {cpu_power:.1f} W" if cpu_power is not None else ""
+                stock = (sensors.model_profile().get("cpu", {}) or {}).get("stock_ppt_w")
+                if stapm_limit is not None and stock:
+                    delta = stapm_limit - stock[0]
+                    sign = "+" if delta >= 0 else ""
+                    cpu_power_txt += f"  (STAPM {stapm_limit:.0f}W, {sign}{delta:.0f}W vs stock {stock[0]}W)"
                 self.dash_cpu_label.configure(text=f"CPU: {cpu_freq:.2f} GHz, {cpu_temp:.0f} C{cpu_power_txt}" if cpu_temp else "CPU: n/a")
                 if igpu_clock is not None:
                     self.dash_igpu_label.configure(text=f"iGPU: {igpu_clock} MHz, {igpu_temp:.0f} C" if igpu_temp else f"iGPU: {igpu_clock} MHz")
