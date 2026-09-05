@@ -81,6 +81,7 @@ import glob
 import os
 import re
 import shutil
+import subprocess
 import time
 from pathlib import Path
 
@@ -435,15 +436,38 @@ def status_igpu() -> str:
     return "off"
 
 
+_MOUNTWAIT_BIN = "/usr/local/bin/tuxthrottle-wait-mounts"
+
+
+def _reapply_mountwait(text: str) -> str:
+    """Re-prefix the Exec= line with the mount-wait wrapper (see
+    SteamAutostartMountWait in config/tweaks.json) if it isn't there already.
+    No-op if the wrapper binary was never installed — callers only invoke
+    this to preserve a wrapper that was already present before a rewrite."""
+    if _MOUNTWAIT_BIN in text:
+        return text
+    result = []
+    for ln in text.splitlines():
+        # only the primary launcher Exec line ends in a %U/%u placeholder —
+        # the steam:// action groups' Exec lines never take one
+        if ln.startswith("Exec=") and re.search(r"%[uU]['\"]?$", ln.rstrip()):
+            result.append(f"Exec={_MOUNTWAIT_BIN} " + ln[len('Exec='):])
+        else:
+            result.append(ln)
+    return "\n".join(result) + ("\n" if text.endswith("\n") else "")
+
+
 def enable(autostart: bool = True) -> tuple[bool, str]:
     flags = FLAGS
     mem = MEM_HIGH_MB
     igpu = status_igpu() == "on"
 
-    def _patch(text: str) -> str:
+    def _patch(text: str, had_mountwait: bool = False) -> str:
         t = _patch_exec_lines(text, flags, mem, ())
         if igpu:
             t = _stamp_key(_force_igpu_keys(t), IGPU_MARKER, "true")
+        if had_mountwait:
+            t = _reapply_mountwait(t)
         return _stamp(t, "true")
 
     body = _patch(_base_desktop_body())
@@ -456,15 +480,17 @@ def enable(autostart: bool = True) -> tuple[bool, str]:
     bak = au.with_name(au.name + ".tuxthrottle-bak")
     if au.is_file() and MARKER not in au.read_text():
         # a real pre-existing Steam autostart entry — back it up, patch in place
+        had_mountwait = _MOUNTWAIT_BIN in au.read_text()
         if not bak.exists():
             bak.write_text(au.read_text())
-        au.write_text(_patch(au.read_text()))
+        au.write_text(_patch(au.read_text(), had_mountwait))
         did.append(f"{au} (patched)")
     elif au.is_file() and MARKER in au.read_text():
         # ours from a previous run — regenerate so a flag/level change lands
+        had_mountwait = _MOUNTWAIT_BIN in au.read_text()
         created = "X-TuxThrottle-Created=true" in au.read_text()
         base = bak.read_text() if bak.is_file() else _base_desktop_body()
-        new = _patch(base)
+        new = _patch(base, had_mountwait)
         if created:
             new = new.replace("[Desktop Entry]\n",
                               "[Desktop Entry]\nX-TuxThrottle-Created=true\n", 1)
@@ -555,18 +581,111 @@ def status() -> str:
     return val
 
 
+_REMOVED_AGGRESSIVE_FLAGS = ("-cef-single-process", "-no-cef-sandbox", "-no-browser")
+
+
+def diagnose(user: str | None = None) -> list[tuple[str, str]]:
+    """Read-only checks for the most common 'Steam won't start / a library's
+    games are missing' causes seen on this laptop so far. Returns a list of
+    (status, message) with status 'ok' or 'bad' — never modifies anything,
+    this only reports; the Diagnostics/Fixes page decides what to offer."""
+    results: list[tuple[str, str]] = []
+
+    # 1) Steam client forced onto the discrete GPU on a muxless laptop
+    forced = False
+    if status_igpu() != "on":
+        sys_desktop = Path(_SYS_DESKTOP)
+        try:
+            txt = sys_desktop.read_text() if sys_desktop.is_file() else ""
+        except OSError:
+            txt = ""
+        forced = "PrefersNonDefaultGPU=true" in txt or "X-KDE-RunOnDiscreteGpu=true" in txt
+    if forced:
+        results.append(("bad",
+            "Steam's launcher forces the client onto the discrete GPU "
+            "(PrefersNonDefaultGPU=true) — on a muxless laptop this crash-loops "
+            "steamwebhelper. Fix: Game Tools -> Steam client low-resource mode -> "
+            "pin Steam client to the iGPU."))
+    else:
+        results.append(("ok", "Steam client is not being forced onto the discrete GPU."))
+
+    # 2) a known-broken CEF flag combo left in the low-resource shadow
+    dst = _user_desktop()
+    try:
+        shadow = dst.read_text() if dst.is_file() else ""
+    except OSError:
+        shadow = ""
+    stale = [f for f in _REMOVED_AGGRESSIVE_FLAGS if f in shadow]
+    if stale:
+        results.append(("bad",
+            f"Steam launcher still has removed/unsafe CEF flags set: {', '.join(stale)} "
+            "— these are known to crash-loop steamwebhelper. Fix: turn Steam low-resource "
+            "mode off then back on to regenerate the launcher without them."))
+    else:
+        results.append(("ok", "No known-broken CEF flags in the Steam launcher."))
+
+    # 3) a declared Steam library folder that looks unmounted/missing
+    home = Path(f"~{user}").expanduser() if user else Path.home()
+    lf = home / ".local" / "share" / "Steam" / "steamapps" / "libraryfolders.vdf"
+    default_lib = home / ".local" / "share" / "Steam"
+    missing = []
+    try:
+        text = lf.read_text(errors="replace") if lf.is_file() else ""
+    except OSError:
+        text = ""
+    for m in re.finditer(r'"path"\s*"([^"]+)"', text):
+        p = Path(m.group(1).replace("\\\\", "/"))
+        if p == default_lib:
+            continue
+        if not (p / "steamapps").is_dir():
+            missing.append(str(p))
+    if missing:
+        results.append(("bad",
+            "Steam library folder(s) look unmounted or missing: " + ", ".join(missing) +
+            " — its games will show as 'missing' until the drive is mounted. Check "
+            "Diagnostics/Fixes -> unmounted drives, or fstab for that mount."))
+    elif text:
+        results.append(("ok", "All declared Steam library folders are present."))
+
+    # 4) an NTFS volume Windows left 'dirty' (won't mount without NtfsForceMount)
+    try:
+        j = subprocess.run(  # noqa: S603 — fixed argv, read-only
+            ["journalctl", "--since", "-1d", "--no-pager", "-o", "cat"],
+            capture_output=True, text=True, timeout=15)
+        if re.search(r"ntfs3.*volume is dirty", j.stdout, re.I):
+            results.append(("bad",
+                "An NTFS drive was refused as 'dirty' by the kernel in the last day "
+                "— any Steam library on it silently vanishes. Fix: enable the "
+                "NtfsForceMount tweak (Stability tab)."))
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    return results
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("state", choices=["on", "off", "status",
-                                      "igpu-on", "igpu-off", "igpu-status"])
+                                      "igpu-on", "igpu-off", "igpu-status",
+                                      "diagnose"])
     ap.add_argument("--aggressive", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--no-autostart", action="store_true",
                     help="don't create a hidden-Steam login entry if none exists")
+    ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     if os.geteuid() == 0:
         print("run as the real user, not root", flush=True)
         return 2
+    if a.state == "diagnose":
+        results = diagnose()
+        if a.json:
+            import json as _json
+            print(_json.dumps(results))
+        else:
+            for status_word, msg in results:
+                print(f"[{status_word}] {msg}")
+        return 0 if all(s == "ok" for s, _ in results) else 1
     if a.state == "status":
         print(status())
         return 0

@@ -63,6 +63,7 @@ except Exception:  # noqa: BLE001
     tuxthrottle_kbd = None
 
 import tuxthrottle_btrfs  # noqa: E402  (stdlib, filesystem snapshot-before-apply)
+import tuxthrottle_fixlog as fixlog  # noqa: E402  (stdlib, shared fix-history log)
 import tuxthrottle_profiles  # noqa: E402  (stdlib, imports sensors)
 import tuxthrottle_watchdog  # noqa: E402  (stdlib, confirm-or-auto-revert timer)
 
@@ -3888,6 +3889,139 @@ class ToolkitApp:
     def _sp_helper(self, args: str) -> str:
         return self._user_py("tuxthrottle_steamperf.py", args)
 
+    # ---------- Fixes: one-click diagnosis + the small repairs that don't ----------
+    # ---------- warrant their own on/off tweak (unmounted-drive detection, ----------
+    # ---------- "Steam won't start" checks, and a log of what auto-fixed itself) ---
+
+    def _build_fixes_box(self, parent):
+        lf = tb.Labelframe(parent, text="Fixes — quick diagnosis & one-click repairs", padding=10)
+        lf.pack(fill="x", pady=6)
+        tb.Label(lf, bootstyle=SECONDARY, wraplength=1100, justify="left", text=(
+            "Checks for the causes behind Steam problems already tracked down on this "
+            "laptop — the client forced onto the discrete GPU, stale removed CEF flags, "
+            "an unmounted Steam library drive, an NTFS volume Windows left 'dirty'. "
+            "Read-only until you press a fix button below.")).pack(anchor="w")
+
+        row = tb.Frame(lf); row.pack(anchor="w", fill="x", pady=(8, 2))
+        self._tip(tb.Button(row, text="Diagnose: “Steam won't start”",
+                  bootstyle=(INFO, "outline"), command=self._fx_diagnose),
+                  "Run the checks above and list what's wrong, if anything. "
+                  "Read-only.").pack(side="left")
+        self._tip(tb.Button(row, text="Check for unmounted library drives",
+                  bootstyle=(INFO, "outline"), command=self._fx_check_mounts),
+                  "Look for a 'nofail' drive in /etc/fstab that isn't currently "
+                  "mounted — the race that makes Steam briefly report a library's "
+                  "games as missing right after login. Read-only; offers a Mount "
+                  "button per drive found.").pack(side="left", padx=6)
+
+        self._fx_text = self._make_log_text(lf)
+        self._fx_text.configure(height=6)
+        self._fx_text.pack(fill="x", pady=(8, 0))
+        self._fx_mount_row = tb.Frame(lf)
+        self._fx_mount_row.pack(anchor="w", fill="x", pady=(4, 0))
+
+        tb.Separator(lf).pack(fill="x", pady=(10, 6))
+        hrow = tb.Frame(lf); hrow.pack(anchor="w", fill="x")
+        tb.Label(hrow, text="Recently auto-fixed / diagnosed:", bootstyle=SECONDARY).pack(side="left")
+        self._tip(tb.Button(hrow, text="Refresh", bootstyle=(SECONDARY, "outline"),
+                  command=self._fx_refresh_history),
+                  "Reload the fix-history log (also written to by the tray's "
+                  "background crash watcher).").pack(side="left", padx=6)
+        self._fx_history_text = self._make_log_text(lf)
+        self._fx_history_text.configure(height=5)
+        self._fx_history_text.pack(fill="x", pady=(4, 0))
+        self._fx_refresh_history()
+
+    def _fx_set_text(self, widget, text: str):
+        widget.configure(state="normal")
+        widget.delete("1.0", "end")
+        widget.insert("end", text)
+        widget.configure(state="disabled")
+
+    def _fx_diagnose(self):
+        self._fx_set_text(self._fx_text, "checking…")
+        threading.Thread(target=self._fx_diagnose_worker, daemon=True).start()
+
+    def _fx_diagnose_worker(self):
+        try:
+            _ok, _rc, out = run_cmd3(self._sp_helper("diagnose --json"), timeout=20)
+            results = json.loads(out[out.index("["):out.rindex("]") + 1])
+        except (ValueError, OSError):
+            results = [["bad", "could not run the diagnostic — see the log console"]]
+        lines = [f"{'✓' if s == 'ok' else '✗'}  {m}" for s, m in results]
+        for s, m in results:
+            if s != "ok":
+                fixlog.log_event("diagnose", m, level="warn", user=self.user)
+        self.root.after(0, lambda: self._fx_set_text(self._fx_text, "\n".join(lines)))
+        self.root.after(0, self._fx_refresh_history)
+
+    def _fx_check_mounts(self):
+        self._fx_set_text(self._fx_text, "checking…")
+        threading.Thread(target=self._fx_check_mounts_worker, daemon=True).start()
+
+    def _fx_check_mounts_worker(self):
+        unmounted = []
+        try:
+            for line in Path("/etc/fstab").read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                fields = line.split()
+                if len(fields) < 4:
+                    continue
+                mountpoint, opts = fields[1], fields[3]
+                if mountpoint in ("none", "swap") or "nofail" not in opts.split(","):
+                    continue
+                r = subprocess.run(["findmnt", "-n", mountpoint], capture_output=True)
+                if r.returncode != 0:
+                    unmounted.append(mountpoint)
+        except OSError:
+            pass
+        self.root.after(0, lambda: self._fx_show_unmounted(unmounted))
+
+    def _fx_show_unmounted(self, unmounted: list):
+        if not unmounted:
+            self._fx_set_text(self._fx_text, "✓  every 'nofail' drive in /etc/fstab is mounted")
+        else:
+            self._fx_set_text(self._fx_text, "✗  not mounted:\n"
+                              + "\n".join(f"  {m}" for m in unmounted))
+        for w in self._fx_mount_row.winfo_children():
+            w.destroy()
+        for m in unmounted:
+            self._tip(tb.Button(self._fx_mount_row, text=f"Mount {m}",
+                      bootstyle=(WARNING, "outline"),
+                      command=lambda mp=m: self._fx_mount_now(mp)),
+                      f"Run 'mount {m}' now (the GUI is already elevated).").pack(
+                      side="left", padx=(0, 6))
+
+    def _fx_mount_now(self, mountpoint: str):
+        try:
+            r = subprocess.run(["mount", mountpoint], capture_output=True,
+                              text=True, timeout=30)
+            ok = r.returncode == 0
+            msg = (f"mounted {mountpoint}" if ok else
+                  f"mount {mountpoint} failed: {(r.stderr or '').strip()}")
+        except (OSError, subprocess.SubprocessError) as exc:
+            ok, msg = False, f"mount {mountpoint} failed: {exc}"
+        self._log(f"[Fixes] {msg}")
+        fixlog.log_event("mount-now", msg, level="info" if ok else "error", user=self.user)
+        self._fx_check_mounts()
+
+    def _fx_refresh_history(self):
+        try:
+            entries = fixlog.read_recent(20, user=self.user)
+        except Exception:  # noqa: BLE001
+            entries = []
+        if not entries:
+            text = "no fixes logged yet"
+        else:
+            lines = []
+            for e in entries:
+                when = time.strftime("%Y-%m-%d %H:%M", time.localtime(e.get("ts", 0)))
+                lines.append(f"[{when}] {e.get('source', '?')}: {e.get('message', '')}")
+            text = "\n".join(lines)
+        self._fx_set_text(self._fx_history_text, text)
+
     def _sp_set(self, enable: bool):
         if enable:
             args = "on"
@@ -4350,7 +4484,33 @@ class ToolkitApp:
                   "On: skip any game that already has custom Launch Options. "
                   "Off: overwrite every game's Launch Options with this string."
                   ).pack(side="left", padx=(10, 0))
+        self._tip(tb.Button(arow, text="Remove from every game", bootstyle=(SECONDARY, "outline"),
+                  command=self._lo_remove_all),
+                  "Changed your mind about a flag you bulk-applied earlier? This "
+                  "strips just that token out of whichever game's Launch Options "
+                  "contains it, leaving the rest of each string intact — it does "
+                  "NOT replace the whole string like 'Apply to every game' does."
+                  ).pack(side="left", padx=(10, 0))
         self._lo_refresh()
+
+    def _lo_remove_all(self):
+        opts = self._lo_out.get().strip()
+        if not opts:
+            self._log("[Game Tools] launch-options string is empty — nothing to remove")
+            return
+        if not messagebox.askyesno(
+                "Remove from every game",
+                "Strip this token out of every installed Steam game's Launch "
+                "Options that contains it (the rest of each game's string is "
+                "left as-is):"
+                f"\n\n{opts}\n\n"
+                "Steam must be closed first — it rewrites its config on exit. "
+                "Every localconfig.vdf is backed up."):
+            return
+        blob = base64.b64encode(opts.encode()).decode()
+        cmd = (f"su - {self.user} -c 'python3 {BASE_DIR}/tuxthrottle_launchopts.py "
+               f"remove-token --b64 {blob}'")
+        self._run_stream("launch options → remove from every installed game", cmd, tag="Game Tools")
 
     def _lo_apply_all(self):
         opts = self._lo_out.get().strip()
@@ -5374,6 +5534,7 @@ class ToolkitApp:
 
         self._build_shadercache_box(frame)
         self._build_steamperf_box(frame)
+        self._build_fixes_box(frame)
         self._build_launch_opts_box(frame)
         self._build_mangohud_box(frame)
         self._build_last_session_card(frame)

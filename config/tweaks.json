@@ -1243,5 +1243,21 @@
       "systemctl daemon-reload"
     ],
     "recommended": true
+  },
+  "SteamAutostartMountWait": {
+    "Content": "Steam autostart: wait for external drives to mount first",
+    "Description": "A 'nofail' external drive in /etc/fstab (an NTFS/exFAT Steam library, a Proton-prefix drive, ...) can still be mid-mount a few seconds after login, but a Steam autostart entry fires immediately — Steam then briefly logs 'Staging library folder not found' / 'Install library folder not found' for that library until the mount catches up (harmless once it does, but looks like a broken install in the meantime). This installs a small wrapper script and prefixes the Exec= line of ~/.config/autostart/steam.desktop with it, so Steam's autostart waits (up to 10s) for every 'nofail' fstab mountpoint to actually be mounted before launching. No-op if you have no 'nofail' drives, or no Steam autostart entry yet — enable Steam's own 'Start automatically' or the Game Tools low-resource-mode autostart first. autostart file backed up to steam.desktop.tuxthrottle-mountwait-bak (a separate backup from Steam low-resource mode's own, so the two don't clobber each other); 'undo' restores it.",
+    "category": "Stability",
+    "risk": "safe",
+    "check": "AS=/home/{USER}/.config/autostart/steam.desktop; [ -f \"$AS\" ] && grep -q tuxthrottle-wait-mounts \"$AS\"",
+    "apply": [
+      "install -m 0755 {TOOLKIT_DIR}/tuxthrottle_wait_mounts.sh /usr/local/bin/tuxthrottle-wait-mounts",
+      "AS=/home/{USER}/.config/autostart/steam.desktop; if [ -f \"$AS\" ] && ! grep -q tuxthrottle-wait-mounts \"$AS\"; then cp -a \"$AS\" \"$AS.tuxthrottle-mountwait-bak\"; sed -i 's|^Exec=|Exec=/usr/local/bin/tuxthrottle-wait-mounts |' \"$AS\"; fi"
+    ],
+    "undo": [
+      "AS=/home/{USER}/.config/autostart/steam.desktop; if [ -f \"$AS.tuxthrottle-mountwait-bak\" ]; then mv -f \"$AS.tuxthrottle-mountwait-bak\" \"$AS\"; elif [ -f \"$AS\" ]; then sed -i 's|^Exec=/usr/local/bin/tuxthrottle-wait-mounts |Exec=|' \"$AS\"; fi",
+      "rm -f /usr/local/bin/tuxthrottle-wait-mounts"
+    ],
+    "recommended": false
   }
 }

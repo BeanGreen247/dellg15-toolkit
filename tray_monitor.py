@@ -30,6 +30,8 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))
 import sensors  # noqa: E402
+import tuxthrottle_crashwatch as crashwatch  # noqa: E402
+import tuxthrottle_fixlog as fixlog  # noqa: E402
 
 APP_NAME = "TuxThrottle"
 APP_BLURB = "Dell G15 power & gaming tuning"
@@ -186,6 +188,14 @@ class TrayMonitor:
         self.state_timer.timeout.connect(self._sync_gamemode_state)
         self.state_timer.start(10_000)
 
+        # first crash-watch scan only looks back over the *next* interval
+        # (avoids replaying every stale coredump from earlier in the boot
+        # the moment the tray starts)
+        crashwatch.scan(since_seconds=1)
+        self.crashwatch_timer = QTimer()
+        self.crashwatch_timer.timeout.connect(self._crashwatch_scan)
+        self.crashwatch_timer.start(30_000)
+
     def _info_action(self, text: str) -> QAction:
         a = QAction(text)
         a.setEnabled(False)
@@ -235,6 +245,20 @@ class TrayMonitor:
         if not ok:
             QMessageBox.warning(None, "Fan boost", f"Failed: {msg}")
         self._refresh()
+
+    def _crashwatch_scan(self):
+        threading.Thread(target=self._crashwatch_scan_worker, daemon=True).start()
+
+    def _crashwatch_scan_worker(self):
+        try:
+            findings = crashwatch.scan(since_seconds=35)
+        except Exception:  # noqa: BLE001 — never take the tray down over this
+            return
+        for f in findings:
+            fixlog.log_event("crashwatch", f["label"],
+                             level="info" if f.get("benign") else "warn")
+            if not f.get("benign"):
+                sensors.notify(f["label"], f["hint"])
 
     def _open_gui(self):
         ok, err = _launch_gui()

@@ -12,6 +12,13 @@ Usage:
     python3 tuxthrottle_launchopts.py set-all  '<string>'  [--only-empty] [--dry-run]
     python3 tuxthrottle_launchopts.py set-all  --b64 <base64-of-string> [--only-empty] [--dry-run]
     python3 tuxthrottle_launchopts.py clear-all [--dry-run]
+    python3 tuxthrottle_launchopts.py remove-token '<token>' [--dry-run]
+    python3 tuxthrottle_launchopts.py remove-token --b64 <base64-of-token> [--dry-run]
+
+`remove-token` strips one token (e.g. a flag you bulk-applied earlier and
+have since decided against) out of *whichever* game's LaunchOptions contains
+it, leaving the rest of that game's string intact — unlike `set-all`, which
+replaces the whole string everywhere.
 
 Rules:
   * Steam must be **closed** — it rewrites localconfig.vdf on exit and would
@@ -293,6 +300,54 @@ def _write_all(value: str, only_empty: bool, dry: bool) -> int:
     return 0
 
 
+def _remove_token(token: str, dry: bool) -> int:
+    if not token.strip():
+        print("empty token — nothing to remove")
+        return 1
+    if steam_running():
+        print("Steam is running — quit Steam completely first (it overwrites "
+              "localconfig.vdf on exit).")
+        return 2
+    files = find_localconfigs()
+    if not files:
+        print("no localconfig.vdf found — is Steam installed for this user?")
+        return 1
+    total = 0
+    for lc in files:
+        cfg = _load(lc)
+        apps = _apps_dict(cfg)
+        if not apps:
+            continue
+        changed = 0
+        for _aid, entry in _iter_games(apps):
+            cur = _ci_get(entry, "LaunchOptions") or ""
+            if token not in cur:
+                continue
+            # drop the token as a whole word/flag, then collapse extra spaces
+            parts = [p for p in cur.split() if p != token]
+            new = " ".join(parts)
+            for k in list(entry):
+                if k.lower() == "launchoptions" and k != "LaunchOptions":
+                    del entry[k]
+            entry["LaunchOptions"] = new
+            changed += 1
+        if not changed:
+            continue
+        if dry:
+            print(f"  {lc.parent.parent.name}: would strip token from {changed} game(s)")
+        else:
+            bak = lc.with_name(lc.name + f".tuxthrottle-bak-{int(time.time())}")
+            shutil.copy2(lc, bak)
+            _dump(cfg, lc)
+            print(f"  {lc.parent.parent.name}: stripped token from {changed} game(s)  "
+                  f"(backup {bak.name})")
+        total += changed
+    verb = "would strip" if dry else "stripped"
+    print(f"{verb} {token!r} from {total} game(s)"
+          + ("" if dry else " — restart Steam to pick it up"))
+    return 0
+
+
 def main() -> int:
     if os.geteuid() == 0 and not os.environ.get("TUXTHROTTLE_ALLOW_ROOT"):
         sys.exit("run this as your normal user, not root")
@@ -319,7 +374,18 @@ def main() -> int:
         else:
             sys.exit('set-all needs the launch-options string (or --b64 <blob>)')
         return _write_all(value, only_empty=only_empty, dry=dry)
-    sys.exit(f"unknown command {cmd!r} (list | set-all | clear-all)")
+    if cmd == "remove-token":
+        if "--b64" in rest:
+            try:
+                token = base64.b64decode(pos[0]).decode("utf-8")
+            except (IndexError, ValueError) as exc:
+                sys.exit(f"bad --b64 argument: {exc}")
+        elif pos:
+            token = pos[0]
+        else:
+            sys.exit("remove-token needs the token string (or --b64 <blob>)")
+        return _remove_token(token, dry=dry)
+    sys.exit(f"unknown command {cmd!r} (list | set-all | clear-all | remove-token)")
 
 
 if __name__ == "__main__":
