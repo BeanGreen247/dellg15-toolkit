@@ -117,23 +117,32 @@ def _classify(exe: str, cmdline: str):
 
 
 def _coredump_events(since_seconds: int) -> list[dict]:
+    """Use --json=short, not the plain-text table: a text EXE column can
+    contain spaces (e.g. a real path seen in the wild —
+    '.../Proton - Experimental/files/lib/wine/x86_64-unix/wine-preloader')
+    and some rows carry a trailing '-' placeholder column, both of which
+    silently corrupt a whitespace-split parse (this shipped once — the
+    'unknown-crash' fallback below showed up as a bare '- crashed')."""
     try:
         out = subprocess.run(
-            ["coredumpctl", "list", "--no-legend", "--since", f"-{since_seconds}s"],
+            ["coredumpctl", "list", "--json=short", "--since", f"-{since_seconds}s"],
             capture_output=True, text=True, timeout=15,
         )
     except (OSError, subprocess.SubprocessError):
         return []
-    if out.returncode not in (0, 1):  # 1 = "no matches", not an error here
+    if not out.stdout.strip():
+        return []
+    try:
+        rows = json.loads(out.stdout)
+    except ValueError:
         return []
     events = []
-    for line in out.stdout.splitlines():
-        parts = line.split()
-        if len(parts) < 9:
+    for row in rows:
+        pid = str(row.get("pid", ""))
+        if not pid:
             continue
-        timestamp = " ".join(parts[0:3])
-        pid = parts[4]
-        exe = parts[-1]
+        exe = row.get("exe") or ""
+        ts = row.get("time")
         info = subprocess.run(["coredumpctl", "info", pid],
                               capture_output=True, text=True, timeout=15)
         cmdline = ""
@@ -141,7 +150,7 @@ def _coredump_events(since_seconds: int) -> list[dict]:
             if il.strip().startswith("Command Line:"):
                 cmdline = il.split(":", 1)[1].strip()
                 break
-        events.append({"key": f"core:{pid}:{timestamp}", "timestamp": timestamp,
+        events.append({"key": f"core:{pid}:{ts}", "timestamp": ts,
                        "pid": pid, "exe": exe, "cmdline": cmdline})
     return events
 
@@ -176,7 +185,8 @@ def scan(since_seconds: int = 120, user: str | None = None) -> list[dict]:
         seen.add(ev["key"])
         sig = _classify(ev["exe"], ev["cmdline"])
         if sig is None:
-            sig = {"id": "unknown-crash", "label": f"{Path(ev['exe']).name} crashed",
+            name = Path(ev["exe"]).name if ev["exe"] else "An unidentified process"
+            sig = {"id": "unknown-crash", "label": f"{name} crashed",
                   "hint": "No known signature for this one yet.", "benign": False}
         findings.append({**sig, "detail": ev["exe"]})
 

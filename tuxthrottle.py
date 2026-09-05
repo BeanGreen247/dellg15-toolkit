@@ -7892,6 +7892,47 @@ def _decode_key_caps() -> str:
     return "\n".join(out) or "(no KEY-capable devices found)"
 
 
+def _collect_display_txt() -> str:
+    """kscreen-doctor needs the real user's Wayland/D-Bus session — run bare
+    as root (which every other bundle command here does, via plain shell) it
+    SIGABRTs instead of erring cleanly, leaving a coredump behind every single
+    time the bundle is collected. sensors._session_cmd() hops back to the
+    real user's session the same way the Display tab's refresh-rate switcher
+    already does."""
+    out = ["# kscreen-doctor"]
+    for args in (["kscreen-doctor", "-o"], ["kscreen-doctor", "-j"]):
+        try:
+            r = subprocess.run(sensors._session_cmd(args), capture_output=True,
+                               text=True, timeout=6)
+            out.append(r.stdout.strip())
+        except (OSError, subprocess.SubprocessError) as exc:
+            out.append(f"(kscreen-doctor failed: {exc})")
+        out.append("")
+    out.append("# xrandr")
+    try:
+        r = subprocess.run(sensors._session_cmd(["xrandr", "--verbose"]),
+                           capture_output=True, text=True, timeout=6)
+        out.append("\n".join(r.stdout.splitlines()[:120]))
+    except (OSError, subprocess.SubprocessError) as exc:
+        out.append(f"(xrandr failed: {exc})")
+    out.append("")
+    out.append("# drm modes")
+    for m in sorted(glob.glob("/sys/class/drm/*/modes")):
+        out.append(f"{m}:")
+        try:
+            out.append(Path(m).read_text().strip())
+        except OSError:
+            pass
+    out.append("")
+    out.append("# vrr_capable")
+    for m in sorted(glob.glob("/sys/class/drm/*/vrr_capable")):
+        try:
+            out.append(f"{m}:{Path(m).read_text().strip()}")
+        except OSError:
+            pass
+    return "\n".join(out)
+
+
 _HW_BUNDLE_FILES = [
     ("model-scaffold.json", _model_scaffold_json),
     ("dmi.txt", "grep -r . /sys/class/dmi/id/ 2>/dev/null | sed 's#/sys/class/dmi/id/##' "
@@ -7946,11 +7987,7 @@ _HW_BUNDLE_FILES = [
      "iasl -d acpi.bin'; for t in /sys/firmware/acpi/tables/DSDT /sys/firmware/acpi/tables/SSDT*; do "
      "[ -r \"$t\" ] || continue; echo \"=== $(basename $t) ===\"; base64 \"$t\" 2>/dev/null; echo; done "
      "|| echo '(ACPI tables need root to read)'"),
-    ("display.txt", "echo '# kscreen-doctor'; timeout 4 kscreen-doctor -o 2>/dev/null; echo; "
-     "timeout 4 kscreen-doctor -j 2>/dev/null; echo; echo '# xrandr'; "
-     "timeout 4 xrandr --verbose 2>/dev/null | head -120; echo; "
-     "echo '# drm modes'; for m in /sys/class/drm/*/modes; do echo \"$m:\"; cat \"$m\" 2>/dev/null; done; echo; "
-     "echo '# vrr_capable'; grep -rH . /sys/class/drm/*/vrr_capable 2>/dev/null"),
+    ("display.txt", _collect_display_txt),
     ("drm-gpu.txt", "for c in /sys/class/drm/card[0-9]*; do echo \"### $c\"; "
      "cat $c/device/uevent 2>/dev/null; echo \" runtime_status=$(cat $c/device/power/runtime_status 2>/dev/null)\"; "
      "echo; done; echo '=== nvidia-smi -q ==='; timeout 8 nvidia-smi -q 2>/dev/null; echo; "

@@ -52,6 +52,58 @@ def test_classify_unknown_exe_returns_none():
     assert cw._classify("/path/some-random-binary", "") is None
 
 
+def test_coredump_events_parses_json_with_spaces_in_exe(monkeypatch):
+    """Regression: the old whitespace-split text parser corrupted exactly
+    this real-world row (space in the Proton path, no cmdline needed here)."""
+    payload = json.dumps([
+        {"time": 1788626723000000, "pid": 4593, "uid": 1000, "gid": 1001, "sig": 3,
+         "corefile": "present",
+         "exe": "/mnt/Voidstride/SteamLibrary/steamapps/common/Proton - Experimental"
+                "/files/lib/wine/x86_64-unix/wine-preloader",
+         "size": 43724},
+    ])
+
+    class FakeProc:
+        def __init__(self, stdout):
+            self.stdout = stdout
+            self.returncode = 0
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:2] == ["coredumpctl", "list"]:
+            return FakeProc(payload)
+        return FakeProc("Command Line: wine steam.exe\n")
+
+    monkeypatch.setattr(cw.subprocess, "run", fake_run)
+    events = cw._coredump_events(60)
+    assert len(events) == 1
+    assert events[0]["exe"].endswith("wine-preloader")
+    assert "Proton - Experimental" in events[0]["exe"]
+    assert events[0]["pid"] == "4593"
+
+
+def test_coredump_events_handles_null_exe(monkeypatch):
+    """Regression: a row with no resolvable exe ('-' in the text table, null
+    in JSON) must not crash and must not classify as blank-labeled junk."""
+    payload = json.dumps([
+        {"time": 1, "pid": 999, "uid": 0, "gid": 0, "sig": 6,
+         "corefile": "none", "exe": None, "size": None},
+    ])
+
+    class FakeProc:
+        def __init__(self, stdout):
+            self.stdout = stdout
+            self.returncode = 0
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:2] == ["coredumpctl", "list"]:
+            return FakeProc(payload)
+        return FakeProc("")
+
+    monkeypatch.setattr(cw.subprocess, "run", fake_run)
+    events = cw._coredump_events(60)
+    assert events[0]["exe"] == ""
+
+
 def test_scan_dedupes_across_calls(monkeypatch, tmp_path):
     state = tmp_path / "state.json"
     monkeypatch.setattr(cw, "_state_path", lambda user=None: state)
@@ -68,6 +120,18 @@ def test_scan_dedupes_across_calls(monkeypatch, tmp_path):
     second = cw.scan(60)
     assert len(first) == 1
     assert len(second) == 0          # already-seen key is suppressed
+
+
+def test_scan_labels_unclassified_empty_exe_readably(monkeypatch, tmp_path):
+    state = tmp_path / "state.json"
+    monkeypatch.setattr(cw, "_state_path", lambda user=None: state)
+    monkeypatch.setattr(cw, "_journal_events", lambda since: [])
+    monkeypatch.setattr(cw, "_coredump_events", lambda since: [
+        {"key": "core:999:t1", "timestamp": "t1", "pid": "999", "exe": "", "cmdline": ""},
+    ])
+    findings = cw.scan(60)
+    assert findings[0]["label"] == "An unidentified process crashed"
+    assert "- crashed" not in findings[0]["label"]
 
 
 # --------------------------------------------------------------------------- #
