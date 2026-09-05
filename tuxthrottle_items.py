@@ -13,6 +13,7 @@ by the CLI --report/--debug paths without pulling in the GUI toolkit.
 """
 from __future__ import annotations
 
+import glob
 import json
 import os
 import pwd
@@ -22,6 +23,59 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_DIR = BASE_DIR / "config"
+PROJECT_URL = "https://github.com/BeanGreen247/tuxthrottle"
+PROJECT_ISSUES_URL = PROJECT_URL + "/issues"
+
+
+def toolkit_version() -> str:
+    """Human version string — date-based `YY.MM.DD` (Xylonic-style), keyed to
+    the day of the last commit. Priority: the deploy stamp install.sh writes
+    (`.version`, since /opt has no .git) -> the last git commit date when
+    running from a checkout -> the committed `VERSION` file (source tarball,
+    no git) -> "unknown"."""
+    # the deploy stamp wins, but only when this is NOT a git checkout — a stray
+    # .version left in a source tree must never shadow the live commit date.
+    if not (BASE_DIR / ".git").exists():
+        try:
+            v = (BASE_DIR / ".version").read_text().strip()
+            if v:
+                return v
+        except OSError:
+            pass
+    dv = run_cmd3(f"git -C {BASE_DIR} log -1 --format=%cd --date=format:%y.%m.%d "
+                  f"2>/dev/null")[2].strip()
+    if dv:
+        return dv
+    try:
+        v = (BASE_DIR / "VERSION").read_text().strip()
+        if v:
+            return v
+    except OSError:
+        pass
+    return "unknown"
+
+
+def _dnf_metadata_age() -> str:
+    """Human 'as of …' string for the newest dnf repo metadata on disk, so the
+    update count reads as a snapshot, not a live number. '' if not found."""
+    newest = 0.0
+    for pat in ("/var/cache/dnf/*/repodata/repomd.xml",
+                "/var/cache/libdnf5/*/repodata/repomd.xml"):
+        for p in glob.glob(pat):
+            try:
+                newest = max(newest, os.path.getmtime(p))
+            except OSError:
+                pass
+    if not newest:
+        return ""
+    secs = max(0, time.time() - newest)
+    if secs < 90:
+        return "as of just now"
+    if secs < 5400:
+        return f"as of {round(secs / 60)} min ago"
+    if secs < 172800:
+        return f"as of {round(secs / 3600)} h ago"
+    return f"as of {round(secs / 86400)} d ago"
 
 
 def resolve_real_user() -> str:
